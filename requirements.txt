@@ -1,2 +1,4 @@
 flask
-python-binance
+flask-limiter
+pybit
+

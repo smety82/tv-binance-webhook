@@ -1,42 +1,98 @@
+import os, logging
 from flask import Flask, request, jsonify
-from binance.client import Client
-import os
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from pybit.unified_trading import HTTP  # Bybit V5
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("tv-bybit-webhook")
+limiter = Limiter(get_remote_address, app=app, default_limits=["10 per minute"])
 
-API_KEY = os.getenv('BINANCE_API_KEY')
-API_SECRET = os.getenv('BINANCE_API_SECRET')
-client = Client(API_KEY, API_SECRET)
+BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
+BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
+BYBIT_TESTNET = os.getenv("BYBIT_TESTNET", "true").lower() == "true"
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
+CATEGORY = os.getenv("BYBIT_CATEGORY", "spot")  # "spot" vagy "linear"
+ALLOWED_SYMBOLS = {"BTCUSDT", "ETHUSDT"}  # bővítsd
+DEFAULT_QTY = 0.001  # base mennyiség
+MAX_QTY = 1.0
+MAX_QUOTE = 20000  # USDT
 
-@app.route('/webhook', methods=['POST'])
+# Bybit V5 HTTP kliens
+session = HTTP(
+    testnet=BYBIT_TESTNET,
+    api_key=BYBIT_API_KEY,
+    api_secret=BYBIT_API_SECRET,
+)
+
+@app.get("/health")
+def health():
+    return {"ok": True}, 200
+
+@app.post("/webhook")
 def webhook():
-    data = request.json
-    action = data.get('action')
-    symbol = data.get('symbol', 'BTCUSDT')
-    quantity = 0.001
+    data = request.get_json(silent=True) or {}
+    log.info("incoming: %s", data)
+
+    # Secret védelem
+    if WEBHOOK_SECRET and data.get("secret") != WEBHOOK_SECRET:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    action = (data.get("action") or "").lower()
+    if action not in {"buy", "sell"}:
+        return jsonify({"error": "Invalid action"}), 400
+
+    symbol = (data.get("symbol") or "BTCUSDT").upper()
+    if ALLOWED_SYMBOLS and symbol not in ALLOWED_SYMBOLS:
+        return jsonify({"error": f"Symbol {symbol} not allowed"}), 400
+
+    # Mennyiség: vagy base qty (pl. 0.001 BTC), vagy quote (pl. 50 USDT) spot markethez
+    qty = data.get("quantity")
+    quote_qty = data.get("quote_qty")
+
+    # Bybit order paraméterek (V5 /v5/order/create)
+    side = "Buy" if action == "buy" else "Sell"
+    order_type = "Market"
 
     try:
-        if action == "buy":
-            order = client.create_order(
-                symbol=symbol,
-                side='BUY',
-                type='MARKET',
-                quantity=quantity
-            )
-        elif action == "sell":
-            order = client.create_order(
-                symbol=symbol,
-                side='SELL',
-                type='MARKET',
-                quantity=quantity
-            )
-        else:
-            return jsonify({'message': 'Invalid action'}), 400
+        params = {
+            "category": CATEGORY,       # "spot" vagy "linear"
+            "symbol": symbol,
+            "side": side,
+            "orderType": order_type,
+            # Market -> IOC implicit, price nem kell
+        }
 
-        return jsonify({'message': 'order executed', 'order': order}), 200
+        if CATEGORY == "spot" and quote_qty is not None:
+            # UTA spot: Market Buy alapból quote-ban megy; marketUnit-tal szabályozhatod
+            q = float(quote_qty)
+            if q <= 0 or q > MAX_QUOTE:
+                return jsonify({"error": f"Invalid quote_qty (0 < x <= {MAX_QUOTE})"}), 400
+            params.update({
+                "qty": str(q),          # quote összeg
+                "marketUnit": "quoteCoin"
+            })
+        else:
+            # base qty (spot/linear)
+            if qty is None:
+                qty = DEFAULT_QTY
+            q = float(qty)
+            if q <= 0 or q > MAX_QTY:
+                return jsonify({"error": f"Invalid quantity (0 < x <= {MAX_QTY})"}), 400
+            params["qty"] = str(q)
+
+        # --- Opcionális: pontosítás tick/step szerint (qtyStep, minOrderQty stb.) ---
+        # instr = session.get_instruments_info(category=CATEGORY, symbol=symbol)
+        # ... itt kerekíthetsz qtyStep-hez
+
+        res = session.place_order(**params)
+        log.info("order resp: %s", res)
+        return jsonify({"message": "order executed", "params": params, "res": res}), 200
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        log.exception("order failed")
+        return jsonify({"error": "server_error", "detail": str(e)}), 500
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
