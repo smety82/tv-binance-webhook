@@ -87,8 +87,15 @@ def webhook():
         # ... itt kerekíthetsz qtyStep-hez
 
         res = session.place_order(**params)
-        log.info("order resp: %s", res)
-        return jsonify({"message": "order executed", "params": params, "res": res}), 200
+	log.info("order resp: %s", res)
+
+	# Bybit V5 minta válasz: {"retCode":0, "retMsg":"OK", "result":{...}}
+	if res.get("retCode") != 0:
+    	# Adjunk vissza diagnosztikát a kliensnek (Postman), hogy lásd a konkrét hibát
+    	return jsonify({"error":"bybit_error", "retCode": res.get("retCode"), "retMsg": res.get("retMsg"), "res": res}), 502
+
+	return jsonify({"message": "order executed", "params": params, "res": res}), 200
+
 
     except Exception as e:
         log.exception("order failed")
