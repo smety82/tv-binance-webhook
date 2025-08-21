@@ -96,3 +96,30 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
+# ... importok és app létrehozása után ...
+def _mask(s, keep=4):
+    if not s: return "MISSING"
+    return s[:keep] + "..." + s[-keep:]
+
+log.info("BYBIT_TESTNET=%s", os.getenv("BYBIT_TESTNET"))
+log.info("BYBIT_CATEGORY=%s", os.getenv("BYBIT_CATEGORY"))
+log.info("BYBIT_API_KEY(masked)=%s", _mask(os.getenv("BYBIT_API_KEY")))
+log.info("BYBIT_API_SECRET(masked)=%s", _mask(os.getenv("BYBIT_API_SECRET")))
+
+session = HTTP(
+    testnet=BYBIT_TESTNET,
+    api_key=BYBIT_API_KEY,
+    api_secret=BYBIT_API_SECRET,
+)
+
+@app.get("/authcheck")
+def authcheck():
+    try:
+        # UNIFIED a leggyakoribb UTA számlán; ha SPOT/CONTRACT a tiéd, azt add meg.
+        r = session.get_wallet_balance(accountType="UNIFIED")
+        return {"ok": True, "retCode": r.get("retCode"), "retMsg": r.get("retMsg", ""), "resultKeys": list((r.get("result") or {}).keys())}, 200
+    except Exception as e:
+        log.exception("authcheck failed")
+        return {"ok": False, "error": str(e)}, 500
+
