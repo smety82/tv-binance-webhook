@@ -49,6 +49,115 @@ log.info("BYBIT_API_KEY(masked)=%s", _mask(BYBIT_API_KEY))
 log.info("BYBIT_API_SECRET(masked)=%s", _mask(BYBIT_API_SECRET))
 log.info("ALLOWED_SYMBOLS=%s", ",".join(sorted(ALLOWED_SYMBOLS)))
 
+def round_to_step(value: float, step: float) -> float:
+    if step <= 0:
+        return float(value)
+    return math.floor(float(value) / step) * step
+
+def round_price(price: float, tick: float) -> float:
+    return round_to_step(price, tick)
+
+def fetch_filled_base_qty(category: str, symbol: str, order_id: str, order_link_id: str | None = None) -> float:
+    """Lekéri a frissen vett mennyiséget (base). Ha nem sikerül, 0-t ad vissza."""
+    try:
+        r = session.get_order_history(
+            category=category,
+            orderId=order_id
+        )
+        lst = (((r or {}).get("result") or {}).get("list") or [])
+        if lst:
+            cum = lst[0].get("cumExecQty") or "0"
+            return float(cum)
+    except Exception:
+        log.exception("fetch_filled_base_qty failed")
+    return 0.0
+
+def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float, sl: float, portions=(0.5, 0.5)):
+    """Spot TP/SL: 2x TP (limit, tpslOrder) + 1x SL (market, tpslOrder). Visszaadja a létrejött order ID-kat."""
+    filters = get_filters("spot", symbol)
+    qty_step  = filters.get("qtyStep", 0.00000001)
+    min_qty   = filters.get("minOrderQty", 0.0)
+    tick_size = filters.get("tickSize", 0.01)
+
+    # kerekítések
+    tp1_p = round_price(float(tp1), tick_size)
+    tp2_p = round_price(float(tp2), tick_size)
+    sl_p  = round_price(float(sl),  tick_size)
+
+    # darabolás
+    q1_raw = max(0.0, base_filled * float(portions[0]))
+    q2_raw = max(0.0, base_filled - q1_raw)
+
+    q1 = round_to_step(q1_raw, qty_step)
+    q2 = round_to_step(q2_raw, qty_step)
+
+    # ha a darabolt mennyiségek túl kicsik, próbáljuk egy TP-be rakni mindet
+    if min_qty and (q1 < min_qty or q2 < min_qty):
+        q1 = round_to_step(base_filled, qty_step)
+        q2 = 0.0
+
+    created = {"tp1": None, "tp2": None, "sl": None}
+
+    # TP1 (ha van értelmes qty)
+    if q1 > 0 and (not min_qty or q1 >= min_qty):
+        res1 = session.place_order(
+            category="spot",
+            symbol=symbol,
+            side="Sell",
+            orderType="Limit",
+            qty=str(q1),
+            price=str(tp1_p),
+            timeInForce="GTC",
+            triggerPrice=str(tp1_p),          # TP trigger = TP ár
+            triggerDirection=1,               # ár felfelé elérve
+            orderFilter="tpslOrder",          # Spot TP/SL order
+            orderLinkId=f"tp1-{int(time.time()*1000)}"
+        )
+        if res1.get("retCode") == 0:
+            created["tp1"] = res1["result"]["orderId"]
+        else:
+            log.warning("TP1 rejected: %s", res1)
+
+    # TP2
+    if q2 > 0 and (not min_qty or q2 >= min_qty):
+        res2 = session.place_order(
+            category="spot",
+            symbol=symbol,
+            side="Sell",
+            orderType="Limit",
+            qty=str(q2),
+            price=str(tp2_p),
+            timeInForce="GTC",
+            triggerPrice=str(tp2_p),
+            triggerDirection=1,
+            orderFilter="tpslOrder",
+            orderLinkId=f"tp2-{int(time.time()*1000)}"
+        )
+        if res2.get("retCode") == 0:
+            created["tp2"] = res2["result"]["orderId"]
+        else:
+            log.warning("TP2 rejected: %s", res2)
+
+    # SL – stop market (teljes maradék mennyiség). biztonságból a teljes base_filled-re állítjuk.
+    if base_filled > 0 and (not min_qty or base_filled >= min_qty):
+        res3 = session.place_order(
+            category="spot",
+            symbol=symbol,
+            side="Sell",
+            orderType="Market",
+            qty=str(round_to_step(base_filled, qty_step)),
+            triggerPrice=str(sl_p),
+            triggerDirection=2,               # ár lefelé elérve
+            orderFilter="tpslOrder",
+            orderLinkId=f"sl-{int(time.time()*1000)}"
+        )
+        if res3.get("retCode") == 0:
+            created["sl"] = res3["result"]["orderId"]
+        else:
+            log.warning("SL rejected: %s", res3)
+
+    return created
+
 # ── Bybit HTTP kliens ────────────────────────────────────────────────────────
 session = HTTP(
     testnet=BYBIT_TESTNET,
@@ -152,75 +261,66 @@ def webhook():
     data = request.get_json(silent=True) or {}
     log.info("incoming: %s", data)
 
-    # Secret check
+    # Secret
     if WEBHOOK_SECRET and data.get("secret") != WEBHOOK_SECRET:
-        return jsonify({"error":"Unauthorized"}), 403
+        return jsonify({"error": "Unauthorized"}), 403
 
-    # Required fields
     strategy_id = (data.get("strategy_id") or "unknown").lower()
-    signal      = (data.get("signal") or "").lower()  # "buy" | "sell"
+    signal      = (data.get("signal") or "").lower()  # buy / sell
     symbol      = (data.get("symbol") or "BTCUSDT").upper().replace("BYBIT:", "")
     category    = (data.get("category") or CATEGORY).lower()
 
-    if signal not in {"buy","sell"}:
-        return jsonify({"error":"Invalid signal"}), 400
+    if signal not in {"buy", "sell"}:
+        return jsonify({"error": "Invalid signal"}), 400
     if symbol not in ALLOWED_SYMBOLS:
-        return jsonify({"error":f"Symbol {symbol} not allowed"}), 400
-    if category not in {"spot","linear"}:
-        return jsonify({"error":"Invalid category"}), 400
+        return jsonify({"error": f"Symbol {symbol} not allowed"}), 400
+    if category not in {"spot", "linear"}:
+        return jsonify({"error": "Invalid category"}), 400
 
-    # Risk: dedup window
+    # dedup + cooldown + daily lock
     key = (strategy_id, symbol, signal)
     now = time.time()
-    last_ts = _last_signal.get(key, 0)
-    if now - last_ts < DEDUP_WINDOW_S:
-        return jsonify({"skipped":"duplicate_signal_window"}), 200
+    if now - _last_signal.get(key, 0) < DEDUP_WINDOW_S:
+        return jsonify({"skipped": "duplicate_signal_window"}), 200
     _last_signal[key] = now
-
-    # Risk: cooldown per symbol
-    until = _cooldown_until.get(symbol, 0)
-    if now < until:
-        return jsonify({"skipped":"cooldown_active","until": until}), 200
-
-    # Risk: max daily loss lock
+    if now < _cooldown_until.get(symbol, 0):
+        return jsonify({"skipped": "cooldown_active"}), 200
     if _daily["loss"] <= -abs(MAX_DAILY_LOSS):
-        return jsonify({"skipped":"daily_loss_lock","loss": _daily["loss"], "limit": -abs(MAX_DAILY_LOSS)}), 200
+        return jsonify({"skipped": "daily_loss_lock"}), 200
 
-    # Sizing/allocation
-    alloc = ALLOC.get(strategy_id, 0.1)
-    tp_pct  = float(data.get("tp_pct")  or 0)
-    sl_pct  = float(data.get("sl_pct")  or 0)
-    trail_p = float(data.get("trail_pct") or 0)
+    # Sizing / fallback
+    alloc = ALLOC.get(strategy_id, 0.15)
+    tp_mode = data.get("tp_mode") or ""
+    tp1 = data.get("tp1")
+    tp2 = data.get("tp2")
+    sl  = data.get("sl")
 
     params = {
         "category": category,
         "symbol": symbol,
-        "side": "Buy" if signal=="buy" else "Sell",
+        "side": "Buy" if signal == "buy" else "Sell",
         "orderType": "Market",
     }
 
     try:
-        filters = get_filters(category, symbol)
+        filters  = get_filters(category, symbol)
         qtyStep  = filters.get("qtyStep", 0.00000001)
-        minAmt   = filters.get("minOrderAmt", 0.0)  # spot
+        minAmt   = filters.get("minOrderAmt", 0.0)   # spot min notional
         minQty   = filters.get("minOrderQty", 0.0)
 
-        # Balances
         avail_usdt = get_available_usdt("UNIFIED")
+        res = None
+        base_filled = 0.0
 
         if category == "spot":
-            # preferált: quote-ban jövünk (script is így küldi)
+            # marketUnit: quoteCoin (értékben vásárlunk)
             quote_qty = data.get("quote_qty")
             if quote_qty is None:
-                # ha nincs a payloadban, méretezzünk allokációval
-                # max költés: elérhető USDT * alloc * 0.98
                 max_spend = max(0.0, avail_usdt * alloc * 0.98)
                 if max_spend <= 0:
                     return jsonify({"error":"insufficient_balance","available_usdt":avail_usdt}), 400
                 quote_qty = max_spend
             q = float(quote_qty)
-
-            # min notional
             if minAmt and q < minAmt:
                 return jsonify({"error":"min_notional","minOrderAmt":minAmt,"try_at_least":minAmt}), 400
             if q <= 0 or q > MAX_QUOTE:
@@ -229,58 +329,59 @@ def webhook():
             params["qty"] = str(q)
             params["marketUnit"] = "quoteCoin"
 
-        else:  # linear
+            # BUY / SELL (spot)
+            res = session.place_order(**params)
+            if res.get("retCode") != 0:
+                return jsonify({"error":"bybit_error","retCode":res.get("retCode"),"retMsg":res.get("retMsg"),"res":res}), 502
+
+            order_id = (res.get("result") or {}).get("orderId")
+            base_filled = fetch_filled_base_qty("spot", symbol, order_id)
+
+            # Ha nem tudtuk kiolvasni, becslünk:
+            if base_filled <= 0:
+                last = get_last_price("spot", symbol) or 0
+                if last > 0:
+                    base_filled = round_to_step(q / last * 0.995, qtyStep)
+
+            # Spot TP/SL csak BUY jelre értelmes (long irány)
+            brackets = None
+            if signal == "buy" and tp_mode == "fib" and all(x is not None for x in (tp1, tp2, sl)):
+                brackets = place_spot_brackets(symbol, base_filled, float(tp1), float(tp2), float(sl), portions=(0.5, 0.5))
+
+            # cooldown
+            _cooldown_until[symbol] = now + TRADE_COOLDOWN_S
+
+            return jsonify({
+                "message": "spot order executed",
+                "params": params,
+                "filled_base_est": base_filled,
+                "brackets": brackets,
+                "res": res
+            }), 200
+
+        else:
+            # linear (futures) – marad a korábbi logika
             base_qty = data.get("quantity")
             if base_qty is None:
-                # lastPrice alapján méretezzünk allokációval
                 last = get_last_price("linear", symbol) or 0
-                # cél notional = elérhető_usdt * alloc * 0.98
                 target_notional = max(0.0, avail_usdt * alloc * 0.98)
                 est_qty = target_notional/last if last>0 else DEFAULT_QTY
                 base_qty = max(est_qty, DEFAULT_QTY)
-            q = round_step(float(base_qty), qtyStep)
+            q = round_to_step(float(base_qty), qtyStep)
             if minQty and q < minQty:
                 q = max(minQty, q)
-                q = round_step(q, qtyStep)
+                q = round_to_step(q, qtyStep)
             if q <= 0 or q > MAX_QTY:
                 return jsonify({"error":"invalid_quantity","limits":[0,MAX_QTY]}), 400
             params["qty"] = str(q)
 
-        # Cooldown beállítása (sikeres order után frissítjük végleg)
-        _cooldown_until[symbol] = now + TRADE_COOLDOWN_S
+            res = session.place_order(**params)
+            if res.get("retCode") != 0:
+                return jsonify({"error":"bybit_error","retCode":res.get("retCode"),"retMsg":res.get("retMsg"),"res":res}), 502
 
-        # OrderLinkId a deduphoz
-        order_link_id = f"{strategy_id}-{signal}-{int(now*1000)}"
-        params["orderLinkId"] = order_link_id
-
-        # Place order
-        res = session.place_order(**params)
-        log.info("order resp: %s", res)
-        if res.get("retCode") != 0:
-            return jsonify({"error":"bybit_error","retCode":res.get("retCode"),"retMsg":res.get("retMsg"),"res":res}), 502
-
-        # ── TP/SL/trailing ─ only linear (pozícióhoz kötve)
-        ts_resp = None
-        if category == "linear" and (tp_pct>0 or sl_pct>0 or trail_p>0):
-            last = get_last_price("linear", symbol) or 0
-            tp_price = last * (1 + tp_pct/100) if tp_pct>0 else None
-            sl_price = last * (1 - sl_pct/100) if sl_pct>0 else None
-            ts_resp = session.set_trading_stop(
-                category="linear",
-                symbol=symbol,
-                takeProfit=str(tp_price) if tp_price else None,
-                stopLoss=str(sl_price) if sl_price else None,
-                tpTriggerBy="LastPrice",
-                slTriggerBy="LastPrice",
-                trailingStop=str(trail_p) if trail_p>0 else None
-            )
-
-        return jsonify({
-            "message":"order executed",
-            "params": params,
-            "tp_sl_set": bool(ts_resp) if category=="linear" else False,
-            "res": res
-        }), 200
+            # (TP/SL/trailing marad a futures beállítás szerint – ha kell, hozzáigazítjuk)
+            _cooldown_until[symbol] = now + TRADE_COOLDOWN_S
+            return jsonify({"message":"linear order executed","params":params,"res":res}), 200
 
     except Exception as e:
         log.exception("order failed")
