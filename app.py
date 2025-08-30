@@ -211,6 +211,10 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
     base_prec  = filters.get("basePrecision", 8)
     price_prec = filters.get("pricePrecision", 2)
 
+    MIN_SPLIT_BASE = 5e-5  # 0.00005 BTC (~3–4 USD nagyságrendű most)
+    if base_filled < MIN_SPLIT_BASE:
+        portions = (1.0, 0.0)
+
     # Ár kerekítés + formázás (nincs e-notation, max price_prec tizedes)
     tp1_s = format_price(float(tp1), tick_size, price_prec)
     tp2_s = format_price(float(tp2), tick_size, price_prec)
@@ -219,10 +223,6 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
     # Darabolás
     q1_raw = max(0.0, base_filled * float(portions[0]))
     q2_raw = max(0.0, base_filled - q1_raw)
-
-    MIN_SPLIT_BASE = 5e-5  # 0.00005 BTC (~3–4 USD nagyságrendű most)
-    if base_filled < MIN_SPLIT_BASE:
-    portions = (1.0, 0.0)
 
     # Step-re illeszt + max base_prec tizedes
     q1_s = format_qty(q1_raw, qty_step, base_prec)
