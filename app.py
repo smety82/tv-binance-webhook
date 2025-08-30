@@ -39,10 +39,7 @@ ALLOC = {
 }
 
 from decimal import Decimal, ROUND_DOWN, getcontext
-getcontext().prec = 28  # bőven elég kriptohoz
-
-from decimal import Decimal, ROUND_DOWN, getcontext
-getcontext().prec = 28  # bőséges pontosság
+getcontext().prec = 28
 
 def decimals_for_step(step: float) -> int:
     s = f"{step:.16f}".rstrip("0").rstrip(".")
@@ -54,7 +51,6 @@ def quantize_down(value: float, step: float) -> Decimal:
     return (v / st).to_integral_value(rounding=ROUND_DOWN) * st
 
 def format_with_precision(value: float, max_decimals: int) -> str:
-    """Formázás max tizedesre, e-notation nélkül, vágás nélkül."""
     q = Decimal(str(value))
     if max_decimals <= 0:
         return f"{int(q):d}"
@@ -62,17 +58,16 @@ def format_with_precision(value: float, max_decimals: int) -> str:
     return format(q.quantize(Decimal(fmt), rounding=ROUND_DOWN), 'f')
 
 def format_qty(value: float, qty_step: float, base_precision: int) -> str:
-    """Step-re illeszt + a tizedeseket legfeljebb basePrecision-re korlátozza."""
+    """Step-re illeszt + legfeljebb basePrecision tizedes (e-notation NINCS)."""
     q = quantize_down(value, qty_step)
     step_dec = decimals_for_step(qty_step)
-    d = min(step_dec, base_precision)
+    d = min(step_dec, base_precision if base_precision is not None else step_dec)
     return format_with_precision(float(q), d)
 
 def format_price(value: float, tick_size: float, price_precision: int) -> str:
-    """Tick-re illeszt + legfeljebb pricePrecision tizedes."""
     p = quantize_down(value, tick_size)
     tick_dec = decimals_for_step(tick_size)
-    d = min(tick_dec, price_precision)
+    d = min(tick_dec, price_precision if price_precision is not None else tick_dec)
     return format_with_precision(float(p), d)
 
 
@@ -87,6 +82,10 @@ def _safe_float(x, default):
         return float(x)
     except Exception:
         return default
+
+def _decimals_from_step(step: float) -> int:
+    s = f"{step:.16f}".rstrip("0").rstrip(".")
+    return len(s.split(".")[1]) if "." in s else 0
 
 def get_filters(category, symbol):
     info = get_instrument_info(category, symbol)
@@ -103,22 +102,23 @@ def get_filters(category, symbol):
     min_qty    = _safe_float(lot.get("minOrderQty"), 0.0)
     min_amt    = _safe_float(lot.get("minOrderAmt"), 0.0)
 
-    # Precision mezők néha hiányoznak → számoljuk a stepből
-    from decimal import Decimal
-    def _decimals_from_step(step):
-        s = f"{step:.16f}".rstrip("0").rstrip(".")
-        return len(s.split(".")[1]) if "." in s else 0
+    # bybit gyakran ad basePrecision/pricePrecision-t, de néha None
+    base_prec  = lot.get("basePrecision")
+    price_prec = prc.get("pricePrecision")
+    base_prec  = _safe_int(base_prec,  _decimals_from_step(qty_step))
+    price_prec = _safe_int(price_prec, _decimals_from_step(tick_size))
 
-    base_prec  = _safe_int(lot.get("basePrecision"),  _decimals_from_step(qty_step))
-    price_prec = _safe_int(prc.get("pricePrecision"), _decimals_from_step(tick_size))
+    # BTCUSDT spoton konzervatív plafon 6 tizedes (ha nem adtak vissza értelmeset)
+    if category == "spot" and symbol.upper() == "BTCUSDT":
+        base_prec = min(base_prec if base_prec is not None else 6, 6)
 
     return {
-        "minOrderAmt":   min_amt,
-        "minOrderQty":   min_qty,
-        "qtyStep":       qty_step,
-        "tickSize":      tick_size,
-        "basePrecision": base_prec,
-        "pricePrecision":price_prec,
+        "minOrderAmt":    min_amt,
+        "minOrderQty":    min_qty,
+        "qtyStep":        qty_step,
+        "tickSize":       tick_size,
+        "basePrecision":  base_prec,
+        "pricePrecision": price_prec,
     }
 
 
@@ -175,6 +175,32 @@ def fetch_filled_base_qty(category: str, symbol: str, order_id: str, order_link_
         log.exception("fetch_filled_base_qty failed")
     return 0.0
 
+def _place_with_retry(limit_or_market_params, is_qty: bool, qty_or_price_key: str, qty_step: float, base_prec: int, tick_size: float, price_prec: int):
+    """170137 esetén 1 tizedessel kevesebbre vág és újrapróbálja egyszer."""
+    # első próbálkozás
+    res = session.place_order(**limit_or_market_params)
+    if res.get("retCode") == 0:
+        return res
+
+    if str(res.get("retCode")) == "170137":
+        # Túl sok tizedes → vágjunk még egyet
+        if is_qty:
+            cur = Decimal(limit_or_market_params[qty_or_price_key])
+            new = format_with_precision(float(cur), max(0, (base_prec or 6) - 1))
+        else:
+            cur = Decimal(limit_or_market_params[qty_or_price_key])
+            new = format_with_precision(float(cur), max(0, (price_prec or 2) - 1))
+        limit_or_market_params[qty_or_price_key] = new
+        # ha ár is érintett (TP limitnél), a triggerPrice-ot is állítsuk
+        if not is_qty and "triggerPrice" in limit_or_market_params:
+            limit_or_market_params["triggerPrice"] = new
+        # retry egyszer
+        res2 = session.place_order(**limit_or_market_params)
+        return res2
+
+    return res
+
+
 def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float, sl: float, portions=(0.5, 0.5)):
     # ← EZ HIÁNYZOTT
     filters = get_filters("spot", symbol)
@@ -194,6 +220,10 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
     q1_raw = max(0.0, base_filled * float(portions[0]))
     q2_raw = max(0.0, base_filled - q1_raw)
 
+    MIN_SPLIT_BASE = 5e-5  # 0.00005 BTC (~3–4 USD nagyságrendű most)
+    if base_filled < MIN_SPLIT_BASE:
+    portions = (1.0, 0.0)
+
     # Step-re illeszt + max base_prec tizedes
     q1_s = format_qty(q1_raw, qty_step, base_prec)
     q2_s = format_qty(q2_raw, qty_step, base_prec)
@@ -205,45 +235,53 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
 
     created = {"tp1": None, "tp2": None, "sl": None}
 
-    # TP1
+   # TP1
     if float(q1_s) >= max(min_qty, 0.0) and float(q1_s) > 0.0:
-        res1 = session.place_order(
-            category="spot",
-            symbol=symbol,
-            side="Sell",
-            orderType="Limit",
-            qty=q1_s,
-            price=tp1_s,
-            timeInForce="GTC",
-            triggerPrice=tp1_s,
-            triggerDirection=1,
-            orderFilter="tpslOrder",
-            orderLinkId=f"tp1-{int(time.time()*1000)}"
-        )
-        if res1.get("retCode") == 0:
-            created["tp1"] = (res1.get("result") or {}).get("orderId")
-        else:
-            log.warning("TP1 rejected: %s", res1)
+    params1 = dict(
+        category="spot",
+        symbol=symbol,
+        side="Sell",
+        orderType="Limit",
+        qty=q1_s,
+        price=tp1_s,
+        timeInForce="GTC",
+        triggerPrice=tp1_s,
+        triggerDirection=1,
+        orderFilter="tpslOrder",
+        orderLinkId=f"tp1-{int(time.time()*1000)}"
+    )
+    res1 = _place_with_retry(params1, is_qty=True, qty_or_price_key="qty",
+                             qty_step=qty_step, base_prec=base_prec,
+                             tick_size=tick_size, price_prec=price_prec)
+    if res1.get("retCode") == 0:
+        created["tp1"] = (res1.get("result") or {}).get("orderId")
+    else:
+        log.warning("TP1 rejected: %s", res1)
+
 
     # TP2
-    if float(q2_s) >= max(min_qty, 0.0) and float(q2_s) > 0.0:
-        res2 = session.place_order(
-            category="spot",
-            symbol=symbol,
-            side="Sell",
-            orderType="Limit",
-            qty=q2_s,
-            price=tp2_s,
-            timeInForce="GTC",
-            triggerPrice=tp2_s,
-            triggerDirection=1,
-            orderFilter="tpslOrder",
-            orderLinkId=f"tp2-{int(time.time()*1000)}"
-        )
-        if res2.get("retCode") == 0:
-            created["tp2"] = (res2.get("result") or {}).get("orderId")
-        else:
-            log.warning("TP2 rejected: %s", res2)
+    if float(q1_s) >= max(min_qty, 0.0) and float(q1_s) > 0.0:
+    params2 = dict(
+        category="spot",
+        symbol=symbol,
+        side="Sell",
+        orderType="Limit",
+        qty=q1_s,
+        price=tp1_s,
+        timeInForce="GTC",
+        triggerPrice=tp1_s,
+        triggerDirection=1,
+        orderFilter="tpslOrder",
+        orderLinkId=f"tp1-{int(time.time()*1000)}"
+    )
+    res1 = _place_with_retry(params1, is_qty=True, qty_or_price_key="qty",
+                             qty_step=qty_step, base_prec=base_prec,
+                             tick_size=tick_size, price_prec=price_prec)
+    if res1.get("retCode") == 0:
+        created["tp1"] = (res1.get("result") or {}).get("orderId")
+    else:
+        log.warning("TP1 rejected: %s", res1)
+
 
     # SL – teljes mennyiségre, stop-market
     sl_qty_s = format_qty(base_filled, qty_step, base_prec)
