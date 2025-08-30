@@ -41,6 +41,64 @@ ALLOC = {
 from decimal import Decimal, ROUND_DOWN, getcontext
 getcontext().prec = 28  # bőven elég kriptohoz
 
+from decimal import Decimal, ROUND_DOWN, getcontext
+getcontext().prec = 28  # bőséges pontosság
+
+def decimals_for_step(step: float) -> int:
+    s = f"{step:.16f}".rstrip("0").rstrip(".")
+    return len(s.split(".")[1]) if "." in s else 0
+
+def quantize_down(value: float, step: float) -> Decimal:
+    v = Decimal(str(value))
+    st = Decimal(str(step))
+    return (v / st).to_integral_value(rounding=ROUND_DOWN) * st
+
+def format_with_precision(value: float, max_decimals: int) -> str:
+    """Formázás max tizedesre, e-notation nélkül, vágás nélkül."""
+    q = Decimal(str(value))
+    if max_decimals <= 0:
+        return f"{int(q):d}"
+    fmt = "0." + "0"*max_decimals
+    return format(q.quantize(Decimal(fmt), rounding=ROUND_DOWN), 'f')
+
+def format_qty(value: float, qty_step: float, base_precision: int) -> str:
+    """Step-re illeszt + a tizedeseket legfeljebb basePrecision-re korlátozza."""
+    q = quantize_down(value, qty_step)
+    step_dec = decimals_for_step(qty_step)
+    d = min(step_dec, base_precision)
+    return format_with_precision(float(q), d)
+
+def format_price(value: float, tick_size: float, price_precision: int) -> str:
+    """Tick-re illeszt + legfeljebb pricePrecision tizedes."""
+    p = quantize_down(value, tick_size)
+    tick_dec = decimals_for_step(tick_size)
+    d = min(tick_dec, price_precision)
+    return format_with_precision(float(p), d)
+
+
+def get_filters(category, symbol):
+    info = get_instrument_info(category, symbol)
+    lst = (((info or {}).get("result") or {}).get("list") or [])
+    if not lst:
+        return {}
+    item = lst[0]
+    lot = item.get("lotSizeFilter", {}) or {}
+    prc = item.get("priceFilter", {}) or {}
+    # ÚJ: precision mezők is
+    base_prec  = int(lot.get("basePrecision")  or 8)
+    quote_prec = int(lot.get("quotePrecision") or 8)
+    price_prec = int(prc.get("pricePrecision") or 2)
+    return {
+        "minOrderAmt": float(lot.get("minOrderAmt") or 0.0),   # spot
+        "minOrderQty": float(lot.get("minOrderQty") or 0.0),
+        "qtyStep":     float(lot.get("qtyStep")     or 0.00000001),
+        "tickSize":    float(prc.get("tickSize")    or 0.01),
+        "basePrecision":  base_prec,
+        "quotePrecision": quote_prec,
+        "pricePrecision": price_prec,
+    }
+
+
 def decimals_for_step(step: float) -> int:
     """
     Meghatározza, hány tizedesjegy engedélyezett egy step alapján.
@@ -105,41 +163,48 @@ def fetch_filled_base_qty(category: str, symbol: str, order_id: str, order_link_
     return 0.0
 
 def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float, sl: float, portions=(0.5, 0.5)):
-    filters = get_filters("spot", symbol)
-    qty_step  = filters.get("qtyStep", 0.00000001)
-    min_qty   = filters.get("minOrderQty", 0.0)
-    tick_size = filters.get("tickSize", 0.01)
+    f = get_filters("spot", symbol)
+    log.info("Bybit filters %s -> qtyStep=%s basePrec=%s tickSize=%s pricePrec=%s minQty=%s", symbol, f.get("qtyStep"), f.get("basePrecision"), f.get("tickSize"), f.get("pricePrecision"), f.get("minOrderQty"))
+    qty_step   = filters.get("qtyStep", 0.00000001)
+    min_qty    = filters.get("minOrderQty", 0.0)
+    tick_size  = filters.get("tickSize", 0.01)
+    base_prec  = filters.get("basePrecision", 8)
+    price_prec = filters.get("pricePrecision", 2)
 
-    # Ár kerekítés + formázás tick szerint
-    tp1_p = float(format_step(float(tp1), tick_size))
-    tp2_p = float(format_step(float(tp2), tick_size))
-    sl_p  = float(format_step(float(sl),  tick_size))
+    # Ár kerekítés + formázás
+    tp1_s = format_price(float(tp1), tick_size, price_prec)
+    tp2_s = format_price(float(tp2), tick_size, price_prec)
+    sl_s  = format_price(float(sl),  tick_size, price_prec)
 
-    # Mennyiség darabolás, step-re kerekítve
+    # Darabolás + step + precision
     q1_raw = max(0.0, base_filled * float(portions[0]))
     q2_raw = max(0.0, base_filled - q1_raw)
 
-    q1 = float(quantize_down(q1_raw, qty_step))
-    q2 = float(quantize_down(q2_raw, qty_step))
+    q1_s = format_qty(q1_raw, qty_step, base_prec)
+    q2_s = format_qty(q2_raw, qty_step, base_prec)
 
-    # ha túl kicsik, egybe tesszük
-    if (min_qty and q1 < min_qty) or q1 == 0:
-        q1 = float(quantize_down(base_filled, qty_step))
-        q2 = 0.0
+    # Ellenőrzés minQty-re (számmá alakítva hasonlítunk)
+    q1_f = float(q1_s)
+    q2_f = float(q2_s)
+
+    if (min_qty and q1_f < min_qty) or q1_f == 0.0:
+        # mindent egy TP-be
+        q1_s = format_qty(base_filled, qty_step, base_prec)
+        q2_s = "0"
 
     created = {"tp1": None, "tp2": None, "sl": None}
 
     # TP1
-    if q1 > 0 and (not min_qty or q1 >= min_qty):
+    if float(q1_s) > 0.0 and (not min_qty or float(q1_s) >= min_qty):
         res1 = session.place_order(
             category="spot",
             symbol=symbol,
             side="Sell",
             orderType="Limit",
-            qty=format_step(q1, qty_step),         # << itt fontos!
-            price=format_step(tp1_p, tick_size),   # << itt is!
+            qty=q1_s,                  # <<< string, precízen formázva
+            price=tp1_s,               # <<< string
             timeInForce="GTC",
-            triggerPrice=format_step(tp1_p, tick_size),
+            triggerPrice=tp1_s,
             triggerDirection=1,
             orderFilter="tpslOrder",
             orderLinkId=f"tp1-{int(time.time()*1000)}"
@@ -150,16 +215,16 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
             log.warning("TP1 rejected: %s", res1)
 
     # TP2
-    if q2 > 0 and (not min_qty or q2 >= min_qty):
+    if float(q2_s) > 0.0 and (not min_qty or float(q2_s) >= min_qty):
         res2 = session.place_order(
             category="spot",
             symbol=symbol,
             side="Sell",
             orderType="Limit",
-            qty=format_step(q2, qty_step),
-            price=format_step(tp2_p, tick_size),
+            qty=q2_s,
+            price=tp2_s,
             timeInForce="GTC",
-            triggerPrice=format_step(tp2_p, tick_size),
+            triggerPrice=tp2_s,
             triggerDirection=1,
             orderFilter="tpslOrder",
             orderLinkId=f"tp2-{int(time.time()*1000)}"
@@ -169,16 +234,16 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
         else:
             log.warning("TP2 rejected: %s", res2)
 
-    # SL – stop-market a teljes mennyiségre (step + min_qty ellenőrzés)
-    sl_qty = float(quantize_down(base_filled, qty_step))
-    if sl_qty > 0 and (not min_qty or sl_qty >= min_qty):
+    # SL – stop-market a teljes mennyiségre
+    sl_qty_s = format_qty(base_filled, qty_step, base_prec)
+    if float(sl_qty_s) > 0.0 and (not min_qty or float(sl_qty_s) >= min_qty):
         res3 = session.place_order(
             category="spot",
             symbol=symbol,
             side="Sell",
             orderType="Market",
-            qty=format_step(sl_qty, qty_step),
-            triggerPrice=format_step(sl_p, tick_size),
+            qty=sl_qty_s,
+            triggerPrice=sl_s,
             triggerDirection=2,
             orderFilter="tpslOrder",
             orderLinkId=f"sl-{int(time.time()*1000)}"
