@@ -228,6 +228,37 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
     q1_s = format_qty(q1_raw, qty_step, base_prec)
     q2_s = format_qty(q2_raw, qty_step, base_prec)
 
+    # --- Min notional (minOrderAmt) védelem: ha a felezett láb túl kicsi, összevonjuk egy TP-be
+    min_amt = filters.get("minOrderAmt", 0.0)
+    p1f = float(tp1_s)
+    p2f = float(tp2_s)
+    q1f = float(q1_s)
+    q2f = float(q2_s)
+
+    if min_amt and min_amt > 0:
+        # ha az első TP értéke < min_amt → átrakjuk a mennyiséget a másodikba
+        if q1f > 0 and (q1f * p1f) < min_amt:
+            q2f += q1f
+            q1f = 0.0
+        # ha a második TP értéke < min_amt → átrakjuk az elsőbe
+        if q2f > 0 and (q2f * p2f) < min_amt:
+            q1f += q2f
+            q2f = 0.0
+
+        # újraformázás a step/precision szerint
+        q1_s = format_qty(q1f, qty_step, base_prec)
+        q2_s = format_qty(q2f, qty_step, base_prec)
+
+        # ha még így is mindegyik láb túl kicsi (pl. az egész pozíció min_amt alatt van) → ne tegyünk ki TP-t
+        if (float(q1_s) == 0.0 and float(q2_s) == 0.0) or (
+            (float(q1_s) > 0.0 and float(q1_s)*p1f < min_amt) and
+            (float(q2_s) > 0.0 and float(q2_s)*p2f < min_amt)
+        ):
+            log.warning("TP skipped: position notional below minOrderAmt (minAmt=%.6f, base_filled=%.8f, tp1=%.2f, tp2=%.2f)",
+                        min_amt, base_filled, p1f, p2f)
+            q1_s, q2_s = "0", "0"
+
+
     # ha az első rész túl kicsi → mindent egy TP-be
     if float(q1_s) < max(min_qty, 0.0) or float(q1_s) == 0.0:
         q1_s = format_qty(base_filled, qty_step, base_prec)
