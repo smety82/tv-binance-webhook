@@ -348,20 +348,6 @@ def get_instrument_info(category, symbol):
     _instruments_cache[key] = {"ts": now, "data": data}
     return data
 
-def get_filters(category, symbol):
-    info = get_instrument_info(category, symbol)
-    lst = (((info or {}).get("result") or {}).get("list") or [])
-    if not lst:
-        return {}
-    item = lst[0]
-    lot = item.get("lotSizeFilter", {}) or {}
-    prc = item.get("priceFilter", {}) or {}
-    return {
-        "minOrderAmt": float(lot.get("minOrderAmt") or 0),      # spot
-        "minOrderQty": float(lot.get("minOrderQty") or 0),
-        "qtyStep":     float(lot.get("qtyStep") or 0.00000001),
-        "tickSize":    float(prc.get("tickSize") or 0.01),
-    }
 
 def round_step(value, step):
     if step <= 0:
