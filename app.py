@@ -209,13 +209,14 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
     tick_size  = filters.get("tickSize", 0.01)
     base_prec  = filters.get("basePrecision", 8)
     price_prec = filters.get("pricePrecision", 2)
+    min_amt    = filters.get("minOrderAmt", 0.0)
 
     # nagyon kicsi darabnál ne felezzünk – minden menjen TP1-re
     MIN_SPLIT_BASE = 5e-5  # ~0.00005 BTC
     if base_filled < MIN_SPLIT_BASE:
         portions = (1.0, 0.0)
 
-    # árak: tick-re illesztés + max price_prec tizedes, e-notation nélkül
+    # árak: tick-re illesztés + max price_prec tizedes
     tp1_s = format_price(float(tp1), tick_size, price_prec)
     tp2_s = format_price(float(tp2), tick_size, price_prec)
     sl_s  = format_price(float(sl),  tick_size, price_prec)
@@ -228,8 +229,12 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
     q1_s = format_qty(q1_raw, qty_step, base_prec)
     q2_s = format_qty(q2_raw, qty_step, base_prec)
 
-    # --- Elérhető BTC lekérdezés + safety margin (ne allokáljunk 100%-ot se)
-    # Tipp: a buy után 1-2x próbáld újraolvasni, ha 0-t kapsz (latency miatt).
+    # ha az első rész túl kicsi → mindent egy TP-be
+    if float(q1_s) < max(min_qty, 0.0) or float(q1_s) == 0.0:
+        q1_s = format_qty(base_filled, qty_step, base_prec)
+        q2_s = "0"
+
+    # --- elérhető BTC lekérdezés + biztonsági tartalék
     def _get_btc_available():
         try:
             r = session.get_wallet_balance(accountType="UNIFIED")
@@ -244,114 +249,73 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
 
     avail_btc = _get_btc_available()
     if avail_btc <= 0:
-        # próbáljuk még egyszer kicsit várva (buy fill/settlement késleltetés)
-        time.sleep(0.8)
+        time.sleep(0.8)  # esetleges késleltetés fill után
         avail_btc = _get_btc_available()
 
-    # Biztonsági tartalék a lekerekítések/fee miatt
     SAFE = 0.998
     sell_cap = max(0.0, avail_btc * SAFE)
 
-    # TP darabok számmá
+    # számmá a lábak
     q1f = float(q1_s)
     q2f = float(q2_s)
+    p1f = float(tp1_s)
+    p2f = float(tp2_s)
 
-    # --- Min notional szerinti korrekció (ha felezve nem érné el, összevonjuk)
-    min_amt = filters.get("minOrderAmt", 0.0)
-    p1f, p2f = float(tp1_s), float(tp2_s)
+    # --- min notional: ha felezve nem érné el, összevonjuk
     if min_amt and min_amt > 0:
         if q1f > 0 and (q1f * p1f) < min_amt:
-            q2f += q1f; q1f = 0.0
+            q2f += q1f
+            q1f = 0.0
         if q2f > 0 and (q2f * p2f) < min_amt:
-            q1f += q2f; q2f = 0.0
+            q1f += q2f
+            q2f = 0.0
 
-    # --- Ne lépjük túl a rendelkezésre álló mennyiséget
-    # Prioritás: hagyjunk legalább egy SL-t, és ha lehet 1-2 TP-t.
-    # 1) először igazítsuk a TP-k összegét a sell_cap-hez
+    # --- ne lépjük túl az elérhető mennyiséget (TP-k összesen ≤ sell_cap)
     tp_total = q1f + q2f
     if tp_total > sell_cap:
-        # először vágjuk vissza TP2-t
         over = tp_total - sell_cap
-        cut = min(over, q2f)
+        cut = min(over, q2f)   # először TP2-t vágjuk vissza
         q2f -= cut
         tp_total = q1f + q2f
     if tp_total > sell_cap:
-        # ha még mindig sok, vágjuk TP1-et is
         over = tp_total - sell_cap
         q1f = max(0.0, q1f - over)
-        tp_total = q1f + q2f
 
-    # 2) SL mennyisége = ami még marad a cap-ből
-    sl_qty_f = max(0.0, sell_cap - tp_total)
+    # SL mennyiség = ami még marad
+    sl_qty_f = max(0.0, sell_cap - (q1f + q2f))
 
-    # 3) formázzuk vissza step/precision szerint
+    # formázás vissza step/precision szerint
     q1_s = format_qty(q1f, qty_step, base_prec)
     q2_s = format_qty(q2f, qty_step, base_prec)
     sl_qty_s = format_qty(sl_qty_f, qty_step, base_prec)
 
-    # 4) minQty és minNotional utóellenőrzés
+    # utóellenőrzés: minQty és minNotional
     def _valid_leg(q_str, price):
         if float(q_str) <= 0: return False
         if min_qty and float(q_str) < min_qty: return False
         if min_amt and (float(q_str) * price) < min_amt: return False
         return True
 
-    # ha egy láb nem éri el a minimumot, ejtsük
     if not _valid_leg(q2_s, p2f):
         q2_s = "0"
     if not _valid_leg(q1_s, p1f):
-        # ha TP1 sem jó, ejtsük
         q1_s = "0"
     if not _valid_leg(sl_qty_s, float(sl_s)):
         sl_qty_s = "0"
 
-    log.info("alloc after cap: avail_btc=%.8f sell_cap=%.8f | TP1=%s @ %s, TP2=%s @ %s, SL=%s @ %s",
-             avail_btc, sell_cap, q1_s, tp1_s, q2_s, tp2_s, sl_qty_s, sl_s)
-
-
-    # --- Min notional (minOrderAmt) védelem: ha a felezett láb túl kicsi, összevonjuk egy TP-be
-    min_amt = filters.get("minOrderAmt", 0.0)
-    p1f = float(tp1_s)
-    p2f = float(tp2_s)
-    q1f = float(q1_s)
-    q2f = float(q2_s)
-
-    if min_amt and min_amt > 0:
-        # ha az első TP értéke < min_amt → átrakjuk a mennyiséget a másodikba
-        if q1f > 0 and (q1f * p1f) < min_amt:
-            q2f += q1f
-            q1f = 0.0
-        # ha a második TP értéke < min_amt → átrakjuk az elsőbe
-        if q2f > 0 and (q2f * p2f) < min_amt:
-            q1f += q2f
-            q2f = 0.0
-
-        # újraformázás a step/precision szerint
-        q1_s = format_qty(q1f, qty_step, base_prec)
-        q2_s = format_qty(q2f, qty_step, base_prec)
-
-        # ha még így is mindegyik láb túl kicsi (pl. az egész pozíció min_amt alatt van) → ne tegyünk ki TP-t
-        if (float(q1_s) == 0.0 and float(q2_s) == 0.0) or (
-            (float(q1_s) > 0.0 and float(q1_s)*p1f < min_amt) and
-            (float(q2_s) > 0.0 and float(q2_s)*p2f < min_amt)
-        ):
-            log.warning("TP skipped: position notional below minOrderAmt (minAmt=%.6f, base_filled=%.8f, tp1=%.2f, tp2=%.2f)",
-                        min_amt, base_filled, p1f, p2f)
-            q1_s, q2_s = "0", "0"
-
-
-    # ha az első rész túl kicsi → mindent egy TP-be
-    if float(q1_s) < max(min_qty, 0.0) or float(q1_s) == 0.0:
-        q1_s = format_qty(base_filled, qty_step, base_prec)
-        q2_s = "0"
+    log.info(
+        "alloc after cap: avail_btc=%.8f sell_cap=%.8f | TP1=%s @ %s, TP2=%s @ %s, SL=%s @ %s",
+        avail_btc, sell_cap, q1_s, tp1_s, q2_s, tp2_s, sl_qty_s, sl_s
+    )
+    log.info(
+        "legs to place -> TP1 qty=%s @ %s | TP2 qty=%s @ %s | SL qty=%s @ %s",
+        q1_s, tp1_s, q2_s, tp2_s, sl_qty_s, sl_s
+    )
 
     created = {"tp1": None, "tp2": None, "sl": None}
 
-    log.info("legs to place -> TP1 qty=%s @ %s | TP2 qty=%s @ %s | SL qty=%s @ %s", q1_s, tp1_s, q2_s, tp2_s, sl_qty_s, sl_s)
-
-
-    # ── TP1 (Limit + trigger felfelé)
-    if float(q1_s) >= max(min_qty, 0.0) and float(q1_s) > 0.0:
+    # ── TP1
+    if float(q1_s) > 0.0:
         params1 = dict(
             category="spot",
             symbol=symbol,
@@ -379,20 +343,20 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
         else:
             log.warning("TP1 rejected: %s", res1)
 
-  # ── TP2 (Limit + trigger felfelé) – FIGYELEM: q2_s / tp2_s!
+    # ── TP2  (FIGYELEM: q2_s / tp2_s és tp2- linkId)
     if float(q2_s) > 0.0:
-            params2 = dict(
+        params2 = dict(
             category="spot",
             symbol=symbol,
             side="Sell",
             orderType="Limit",
-            qty=q2_s,               # <<< q2_s, NEM q1_s
-            price=tp2_s,            # <<< tp2_s, NEM tp1_s
+            qty=q2_s,
+            price=tp2_s,
             timeInForce="GTC",
-            triggerPrice=tp2_s,     # <<< tp2_s
+            triggerPrice=tp2_s,
             triggerDirection=1,
             orderFilter="tpslOrder",
-            orderLinkId=f"tp2-{int(time.time()*1000)}"   # <<< tp2-… , NEM tp1-…
+            orderLinkId=f"tp2-{int(time.time()*1000)}"
         )
         res2 = _place_with_retry(
             params2,
@@ -407,8 +371,6 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
             created["tp2"] = (res2.get("result") or {}).get("orderId")
         else:
             log.warning("TP2 rejected: %s", res2)
-
-
 
     # ── SL (Stop-Market) – csak ha jutott rá mennyiség
     if float(sl_qty_s) > 0.0:
@@ -429,8 +391,8 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
         else:
             log.warning("SL rejected: %s", res3)
 
-
     return created
+
 
 # ── Bybit HTTP kliens ────────────────────────────────────────────────────────
 session = HTTP(
