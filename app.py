@@ -347,6 +347,9 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
 
     created = {"tp1": None, "tp2": None, "sl": None}
 
+    log.info("legs to place -> TP1 qty=%s @ %s | TP2 qty=%s @ %s | SL qty=%s @ %s", q1_s, tp1_s, q2_s, tp2_s, sl_qty_s, sl_s)
+
+
     # ── TP1 (Limit + trigger felfelé)
     if float(q1_s) >= max(min_qty, 0.0) and float(q1_s) > 0.0:
         params1 = dict(
@@ -376,54 +379,56 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
         else:
             log.warning("TP1 rejected: %s", res1)
 
-    # ── TP2 (Limit + trigger felfelé) – figyelem: q2_s / tp2_s!
-    if float(q2_s) >= max(min_qty, 0.0) and float(q2_s) > 0.0:
-        params2 = dict(
-            category="spot",
-            symbol=symbol,
-            side="Sell",
-            orderType="Limit",
-            qty=q2_s,
-            price=tp2_s,
-            timeInForce="GTC",
-            triggerPrice=tp2_s,
-            triggerDirection=1,
-            orderFilter="tpslOrder",
-            orderLinkId=f"tp2-{int(time.time()*1000)}"
-        )
-        res2 = _place_with_retry(
-            params2,
-            is_qty=True,
-            qty_or_price_key="qty",
-            qty_step=qty_step,
-            base_prec=base_prec,
-            tick_size=tick_size,
-            price_prec=price_prec
-        )
-        if res2.get("retCode") == 0:
-            created["tp2"] = (res2.get("result") or {}).get("orderId")
-        else:
-            log.warning("TP2 rejected: %s", res2)
+  # ── TP2 (Limit + trigger felfelé) – FIGYELEM: q2_s / tp2_s!
+if float(q2_s) > 0.0:
+    params2 = dict(
+        category="spot",
+        symbol=symbol,
+        side="Sell",
+        orderType="Limit",
+        qty=q2_s,               # <<< q2_s, NEM q1_s
+        price=tp2_s,            # <<< tp2_s, NEM tp1_s
+        timeInForce="GTC",
+        triggerPrice=tp2_s,     # <<< tp2_s
+        triggerDirection=1,
+        orderFilter="tpslOrder",
+        orderLinkId=f"tp2-{int(time.time()*1000)}"   # <<< tp2-… , NEM tp1-…
+    )
+    res2 = _place_with_retry(
+        params2,
+        is_qty=True,
+        qty_or_price_key="qty",
+        qty_step=qty_step,
+        base_prec=base_prec,
+        tick_size=tick_size,
+        price_prec=price_prec
+    )
+    if res2.get("retCode") == 0:
+        created["tp2"] = (res2.get("result") or {}).get("orderId")
+    else:
+        log.warning("TP2 rejected: %s", res2)
 
-    # ── SL (Stop-Market + trigger lefelé) – teljes mennyiségre
-    sl_qty_s = format_qty(base_filled, qty_step, base_prec)
-    if float(sl_qty_s) >= max(min_qty, 0.0) and float(sl_qty_s) > 0.0:
-        params3 = dict(
-            category="spot",
-            symbol=symbol,
-            side="Sell",
-            orderType="Market",
-            qty=sl_qty_s,
-            triggerPrice=sl_s,
-            triggerDirection=2,
-            orderFilter="tpslOrder",
-            orderLinkId=f"sl-{int(time.time()*1000)}"
-        )
-        res3 = session.place_order(**params3)
-        if res3.get("retCode") == 0:
-            created["sl"] = (res3.get("result") or {}).get("orderId")
-        else:
-            log.warning("SL rejected: %s", res3)
+
+
+    # ── SL (Stop-Market) – csak ha jutott rá mennyiség
+if float(sl_qty_s) > 0.0:
+    params3 = dict(
+        category="spot",
+        symbol=symbol,
+        side="Sell",
+        orderType="Market",
+        qty=sl_qty_s,
+        triggerPrice=sl_s,
+        triggerDirection=2,
+        orderFilter="tpslOrder",
+        orderLinkId=f"sl-{int(time.time()*1000)}"
+    )
+    res3 = session.place_order(**params3)
+    if res3.get("retCode") == 0:
+        created["sl"] = (res3.get("result") or {}).get("orderId")
+    else:
+        log.warning("SL rejected: %s", res3)
+
 
     return created
 
