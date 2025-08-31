@@ -202,91 +202,101 @@ def _place_with_retry(limit_or_market_params, is_qty: bool, qty_or_price_key: st
 
 
 def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float, sl: float, portions=(0.5, 0.5)):
-    # ← EZ HIÁNYZOTT
+    # pontos szűrők a precíz formázáshoz
     filters = get_filters("spot", symbol)
-
     qty_step   = filters.get("qtyStep", 0.00000001)
     min_qty    = filters.get("minOrderQty", 0.0)
     tick_size  = filters.get("tickSize", 0.01)
     base_prec  = filters.get("basePrecision", 8)
     price_prec = filters.get("pricePrecision", 2)
 
-    MIN_SPLIT_BASE = 5e-5  # 0.00005 BTC (~3–4 USD nagyságrendű most)
+    # nagyon kicsi darabnál ne felezzünk – minden menjen TP1-re
+    MIN_SPLIT_BASE = 5e-5  # ~0.00005 BTC
     if base_filled < MIN_SPLIT_BASE:
         portions = (1.0, 0.0)
 
-    # Ár kerekítés + formázás (nincs e-notation, max price_prec tizedes)
+    # árak: tick-re illesztés + max price_prec tizedes, e-notation nélkül
     tp1_s = format_price(float(tp1), tick_size, price_prec)
     tp2_s = format_price(float(tp2), tick_size, price_prec)
     sl_s  = format_price(float(sl),  tick_size, price_prec)
 
-    # Darabolás
+    # darabolás
     q1_raw = max(0.0, base_filled * float(portions[0]))
     q2_raw = max(0.0, base_filled - q1_raw)
 
-    # Step-re illeszt + max base_prec tizedes
+    # mennyiségek: step-re illesztés + max base_prec tizedes
     q1_s = format_qty(q1_raw, qty_step, base_prec)
     q2_s = format_qty(q2_raw, qty_step, base_prec)
 
-    # Ha túl kicsi a rész, egy TP-be tesszük (Bybit minQty ≈ 1.1e-05 nálad)
+    # ha az első rész túl kicsi → mindent egy TP-be
     if float(q1_s) < max(min_qty, 0.0) or float(q1_s) == 0.0:
         q1_s = format_qty(base_filled, qty_step, base_prec)
         q2_s = "0"
 
     created = {"tp1": None, "tp2": None, "sl": None}
 
-   # TP1
+    # ── TP1 (Limit + trigger felfelé)
     if float(q1_s) >= max(min_qty, 0.0) and float(q1_s) > 0.0:
-    params1 = dict(
-        category="spot",
-        symbol=symbol,
-        side="Sell",
-        orderType="Limit",
-        qty=q1_s,
-        price=tp1_s,
-        timeInForce="GTC",
-        triggerPrice=tp1_s,
-        triggerDirection=1,
-        orderFilter="tpslOrder",
-        orderLinkId=f"tp1-{int(time.time()*1000)}"
-    )
-    res1 = _place_with_retry(params1, is_qty=True, qty_or_price_key="qty",
-                             qty_step=qty_step, base_prec=base_prec,
-                             tick_size=tick_size, price_prec=price_prec)
-    if res1.get("retCode") == 0:
-        created["tp1"] = (res1.get("result") or {}).get("orderId")
-    else:
-        log.warning("TP1 rejected: %s", res1)
+        params1 = dict(
+            category="spot",
+            symbol=symbol,
+            side="Sell",
+            orderType="Limit",
+            qty=q1_s,
+            price=tp1_s,
+            timeInForce="GTC",
+            triggerPrice=tp1_s,
+            triggerDirection=1,
+            orderFilter="tpslOrder",
+            orderLinkId=f"tp1-{int(time.time()*1000)}"
+        )
+        res1 = _place_with_retry(
+            params1,
+            is_qty=True,
+            qty_or_price_key="qty",
+            qty_step=qty_step,
+            base_prec=base_prec,
+            tick_size=tick_size,
+            price_prec=price_prec
+        )
+        if res1.get("retCode") == 0:
+            created["tp1"] = (res1.get("result") or {}).get("orderId")
+        else:
+            log.warning("TP1 rejected: %s", res1)
 
+    # ── TP2 (Limit + trigger felfelé) – figyelem: q2_s / tp2_s!
+    if float(q2_s) >= max(min_qty, 0.0) and float(q2_s) > 0.0:
+        params2 = dict(
+            category="spot",
+            symbol=symbol,
+            side="Sell",
+            orderType="Limit",
+            qty=q2_s,
+            price=tp2_s,
+            timeInForce="GTC",
+            triggerPrice=tp2_s,
+            triggerDirection=1,
+            orderFilter="tpslOrder",
+            orderLinkId=f"tp2-{int(time.time()*1000)}"
+        )
+        res2 = _place_with_retry(
+            params2,
+            is_qty=True,
+            qty_or_price_key="qty",
+            qty_step=qty_step,
+            base_prec=base_prec,
+            tick_size=tick_size,
+            price_prec=price_prec
+        )
+        if res2.get("retCode") == 0:
+            created["tp2"] = (res2.get("result") or {}).get("orderId")
+        else:
+            log.warning("TP2 rejected: %s", res2)
 
-    # TP2
-    if float(q1_s) >= max(min_qty, 0.0) and float(q1_s) > 0.0:
-    params2 = dict(
-        category="spot",
-        symbol=symbol,
-        side="Sell",
-        orderType="Limit",
-        qty=q1_s,
-        price=tp1_s,
-        timeInForce="GTC",
-        triggerPrice=tp1_s,
-        triggerDirection=1,
-        orderFilter="tpslOrder",
-        orderLinkId=f"tp1-{int(time.time()*1000)}"
-    )
-    res1 = _place_with_retry(params1, is_qty=True, qty_or_price_key="qty",
-                             qty_step=qty_step, base_prec=base_prec,
-                             tick_size=tick_size, price_prec=price_prec)
-    if res1.get("retCode") == 0:
-        created["tp1"] = (res1.get("result") or {}).get("orderId")
-    else:
-        log.warning("TP1 rejected: %s", res1)
-
-
-    # SL – teljes mennyiségre, stop-market
+    # ── SL (Stop-Market + trigger lefelé) – teljes mennyiségre
     sl_qty_s = format_qty(base_filled, qty_step, base_prec)
     if float(sl_qty_s) >= max(min_qty, 0.0) and float(sl_qty_s) > 0.0:
-        res3 = session.place_order(
+        params3 = dict(
             category="spot",
             symbol=symbol,
             side="Sell",
@@ -297,14 +307,13 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
             orderFilter="tpslOrder",
             orderLinkId=f"sl-{int(time.time()*1000)}"
         )
+        res3 = session.place_order(**params3)
         if res3.get("retCode") == 0:
             created["sl"] = (res3.get("result") or {}).get("orderId")
         else:
             log.warning("SL rejected: %s", res3)
 
     return created
-
-
 
 # ── Bybit HTTP kliens ────────────────────────────────────────────────────────
 session = HTTP(
