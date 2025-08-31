@@ -228,6 +228,87 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
     q1_s = format_qty(q1_raw, qty_step, base_prec)
     q2_s = format_qty(q2_raw, qty_step, base_prec)
 
+    # --- Elérhető BTC lekérdezés + safety margin (ne allokáljunk 100%-ot se)
+    # Tipp: a buy után 1-2x próbáld újraolvasni, ha 0-t kapsz (latency miatt).
+    def _get_btc_available():
+        try:
+            r = session.get_wallet_balance(accountType="UNIFIED")
+            coins = ((r or {}).get("result") or {}).get("list", [{}])[0].get("coin", [])
+            for c in coins:
+                if c.get("coin") == "BTC":
+                    v = c.get("availableToUse") or c.get("availableToWithdraw") or c.get("walletBalance") or "0"
+                    return float(v)
+        except Exception:
+            log.exception("wallet read failed")
+        return 0.0
+
+    avail_btc = _get_btc_available()
+    if avail_btc <= 0:
+        # próbáljuk még egyszer kicsit várva (buy fill/settlement késleltetés)
+        time.sleep(0.8)
+        avail_btc = _get_btc_available()
+
+    # Biztonsági tartalék a lekerekítések/fee miatt
+    SAFE = 0.998
+    sell_cap = max(0.0, avail_btc * SAFE)
+
+    # TP darabok számmá
+    q1f = float(q1_s)
+    q2f = float(q2_s)
+
+    # --- Min notional szerinti korrekció (ha felezve nem érné el, összevonjuk)
+    min_amt = filters.get("minOrderAmt", 0.0)
+    p1f, p2f = float(tp1_s), float(tp2_s)
+    if min_amt and min_amt > 0:
+        if q1f > 0 and (q1f * p1f) < min_amt:
+            q2f += q1f; q1f = 0.0
+        if q2f > 0 and (q2f * p2f) < min_amt:
+            q1f += q2f; q2f = 0.0
+
+    # --- Ne lépjük túl a rendelkezésre álló mennyiséget
+    # Prioritás: hagyjunk legalább egy SL-t, és ha lehet 1-2 TP-t.
+    # 1) először igazítsuk a TP-k összegét a sell_cap-hez
+    tp_total = q1f + q2f
+    if tp_total > sell_cap:
+        # először vágjuk vissza TP2-t
+        over = tp_total - sell_cap
+        cut = min(over, q2f)
+        q2f -= cut
+        tp_total = q1f + q2f
+    if tp_total > sell_cap:
+        # ha még mindig sok, vágjuk TP1-et is
+        over = tp_total - sell_cap
+        q1f = max(0.0, q1f - over)
+        tp_total = q1f + q2f
+
+    # 2) SL mennyisége = ami még marad a cap-ből
+    sl_qty_f = max(0.0, sell_cap - tp_total)
+
+    # 3) formázzuk vissza step/precision szerint
+    q1_s = format_qty(q1f, qty_step, base_prec)
+    q2_s = format_qty(q2f, qty_step, base_prec)
+    sl_qty_s = format_qty(sl_qty_f, qty_step, base_prec)
+
+    # 4) minQty és minNotional utóellenőrzés
+    def _valid_leg(q_str, price):
+        if float(q_str) <= 0: return False
+        if min_qty and float(q_str) < min_qty: return False
+        if min_amt and (float(q_str) * price) < min_amt: return False
+        return True
+
+    # ha egy láb nem éri el a minimumot, ejtsük
+    if not _valid_leg(q2_s, p2f):
+        q2_s = "0"
+    if not _valid_leg(q1_s, p1f):
+        # ha TP1 sem jó, ejtsük
+        q1_s = "0"
+    if not _valid_leg(sl_qty_s, float(sl_s)):
+        sl_qty_s = "0"
+
+    log.info("alloc after cap: avail_btc=%.8f sell_cap=%.8f | TP1=%s @ %s, TP2=%s @ %s, SL=%s @ %s",
+             avail_btc, sell_cap, q1_s, tp1_s, q2_s, tp2_s, sl_qty_s, sl_s)
+
+
     # --- Min notional (minOrderAmt) védelem: ha a felezett láb túl kicsi, összevonjuk egy TP-be
     min_amt = filters.get("minOrderAmt", 0.0)
     p1f = float(tp1_s)
