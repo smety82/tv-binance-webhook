@@ -202,8 +202,8 @@ def _place_with_retry(limit_or_market_params, is_qty: bool, qty_or_price_key: st
 
 
 def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float, sl: float, portions=(0.5, 0.5)):
-    # pontos szűrők a precíz formázáshoz
-    filters = get_filters("spot", symbol)
+    # ── Szűrők a pontos formázáshoz
+    filters    = get_filters("spot", symbol)
     qty_step   = filters.get("qtyStep", 0.00000001)
     min_qty    = filters.get("minOrderQty", 0.0)
     tick_size  = filters.get("tickSize", 0.01)
@@ -211,57 +211,68 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
     price_prec = filters.get("pricePrecision", 2)
     min_amt    = filters.get("minOrderAmt", 0.0)
 
-    # nagyon kicsi darabnál ne felezzünk – minden menjen TP1-re
-    MIN_SPLIT_BASE = 5e-5  # ~0.00005 BTC
+    # ── Nagyon kicsi fill esetén ne daraboljunk
+    MIN_SPLIT_BASE = 5e-5
     if base_filled < MIN_SPLIT_BASE:
         portions = (1.0, 0.0)
 
-    # árak: tick-re illesztés + max price_prec tizedes
-    tp1_s = format_price(float(tp1), tick_size, price_prec)
-    tp2_s = format_price(float(tp2), tick_size, price_prec)
-    sl_s  = format_price(float(sl),  tick_size, price_prec)
+    # ── Bázis coin meghatározása (pl. ETHUSDT -> ETH)
+    sym = symbol.upper()
+    base_coin = None
+    for q in ("USDT", "USDC", "USD"):
+        if sym.endswith(q):
+            base_coin = sym[: -len(q)]
+            break
+    if not base_coin:
+        base_coin = sym[:3]  # vészmegoldás
 
-    # darabolás
-    q1_raw = max(0.0, base_filled * float(portions[0]))
-    q2_raw = max(0.0, base_filled - q1_raw)
-
-    # mennyiségek: step-re illesztés + max base_prec tizedes
-    q1_s = format_qty(q1_raw, qty_step, base_prec)
-    q2_s = format_qty(q2_raw, qty_step, base_prec)
-
-    # ha az első rész túl kicsi → mindent egy TP-be
-    if float(q1_s) < max(min_qty, 0.0) or float(q1_s) == 0.0:
-        q1_s = format_qty(base_filled, qty_step, base_prec)
-        q2_s = "0"
-
-    # --- elérhető BTC lekérdezés + biztonsági tartalék
-    def _get_btc_available():
+    # ── Elérhető bázis coin lekérdezése
+    def _get_coin_available(coin: str, account_type="UNIFIED") -> float:
+        """Visszaadja az adott coin szabad mennyiségét."""
         try:
-            r = session.get_wallet_balance(accountType="UNIFIED")
+            r = session.get_wallet_balance(accountType=account_type)
             coins = ((r or {}).get("result") or {}).get("list", [{}])[0].get("coin", [])
             for c in coins:
-                if c.get("coin") == "BTC":
+                if (c.get("coin") or "").upper() == coin.upper():
                     v = c.get("availableToUse") or c.get("availableToWithdraw") or c.get("walletBalance") or "0"
                     return float(v)
         except Exception:
             log.exception("wallet read failed")
         return 0.0
 
-    avail_btc = _get_btc_available()
-    if avail_btc <= 0:
-        time.sleep(0.8)  # esetleges késleltetés fill után
-        avail_btc = _get_btc_available()
+    avail_base = _get_coin_available(base_coin)
+    if avail_base <= 0:
+        time.sleep(0.8)  # esetleges settlement késleltetés
+        avail_base = _get_coin_available(base_coin)
 
     SAFE = 0.998
-    sell_cap = max(0.0, avail_btc * SAFE)
+    sell_cap = max(0.0, avail_base * SAFE)
 
-    # számmá a lábak
+    # ── Ár kerekítés
+    tp1_s = format_price(float(tp1), tick_size, price_prec)
+    tp2_s = format_price(float(tp2), tick_size, price_prec)
+    sl_s  = format_price(float(sl),  tick_size, price_prec)
+
+    # ── Darabolás
+    q1_raw = max(0.0, base_filled * float(portions[0]))
+    q2_raw = max(0.0, base_filled - q1_raw)
+
+    # ── Step/precision formázás
+    q1_s = format_qty(q1_raw, qty_step, base_prec)
+    q2_s = format_qty(q2_raw, qty_step, base_prec)
+
+    # Ha az első rész túl kicsi → egy TP-be tesszük
+    if float(q1_s) < max(min_qty, 0.0) or float(q1_s) == 0.0:
+        q1_s = format_qty(base_filled, qty_step, base_prec)
+        q2_s = "0"
+
+    # ── Számossá alakítás
     q1f = float(q1_s)
     q2f = float(q2_s)
     p1f = float(tp1_s)
     p2f = float(tp2_s)
 
-    # --- min notional: ha felezve nem érné el, összevonjuk
+    # ── Min notional ellenőrzés: ha nem éri el, összevonás
     if min_amt and min_amt > 0:
         if q1f > 0 and (q1f * p1f) < min_amt:
             q2f += q1f
@@ -270,26 +281,26 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
             q1f += q2f
             q2f = 0.0
 
-    # --- ne lépjük túl az elérhető mennyiséget (TP-k összesen ≤ sell_cap)
+    # ── Ne lépjük túl a rendelkezésre állót (TP1+TP2 <= sell_cap)
     tp_total = q1f + q2f
     if tp_total > sell_cap:
         over = tp_total - sell_cap
-        cut = min(over, q2f)   # először TP2-t vágjuk vissza
+        cut = min(over, q2f)   # előbb TP2-t vágjuk
         q2f -= cut
         tp_total = q1f + q2f
     if tp_total > sell_cap:
         over = tp_total - sell_cap
         q1f = max(0.0, q1f - over)
 
-    # SL mennyiség = ami még marad
+    # ── SL mennyiség = maradék
     sl_qty_f = max(0.0, sell_cap - (q1f + q2f))
 
-    # formázás vissza step/precision szerint
-    q1_s = format_qty(q1f, qty_step, base_prec)
-    q2_s = format_qty(q2f, qty_step, base_prec)
+    # ── Újratformázás step/precision szerint
+    q1_s     = format_qty(q1f, qty_step, base_prec)
+    q2_s     = format_qty(q2f, qty_step, base_prec)
     sl_qty_s = format_qty(sl_qty_f, qty_step, base_prec)
 
-    # utóellenőrzés: minQty és minNotional
+    # ── MinQty/MinNotional végső validáció
     def _valid_leg(q_str, price):
         if float(q_str) <= 0: return False
         if min_qty and float(q_str) < min_qty: return False
@@ -304,8 +315,8 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
         sl_qty_s = "0"
 
     log.info(
-        "alloc after cap: avail_btc=%.8f sell_cap=%.8f | TP1=%s @ %s, TP2=%s @ %s, SL=%s @ %s",
-        avail_btc, sell_cap, q1_s, tp1_s, q2_s, tp2_s, sl_qty_s, sl_s
+        "alloc after cap: avail_%s=%.8f sell_cap=%.8f | TP1=%s @ %s, TP2=%s @ %s, SL=%s @ %s",
+        base_coin, avail_base, sell_cap, q1_s, tp1_s, q2_s, tp2_s, sl_qty_s, sl_s
     )
     log.info(
         "legs to place -> TP1 qty=%s @ %s | TP2 qty=%s @ %s | SL qty=%s @ %s",
@@ -330,20 +341,15 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
             orderLinkId=f"tp1-{int(time.time()*1000)}"
         )
         res1 = _place_with_retry(
-            params1,
-            is_qty=True,
-            qty_or_price_key="qty",
-            qty_step=qty_step,
-            base_prec=base_prec,
-            tick_size=tick_size,
-            price_prec=price_prec
+            params1, is_qty=True, qty_or_price_key="qty",
+            qty_step=qty_step, base_prec=base_prec, tick_size=tick_size, price_prec=price_prec
         )
         if res1.get("retCode") == 0:
             created["tp1"] = (res1.get("result") or {}).get("orderId")
         else:
             log.warning("TP1 rejected: %s", res1)
 
-    # ── TP2  (FIGYELEM: q2_s / tp2_s és tp2- linkId)
+    # ── TP2
     if float(q2_s) > 0.0:
         params2 = dict(
             category="spot",
@@ -359,13 +365,8 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
             orderLinkId=f"tp2-{int(time.time()*1000)}"
         )
         res2 = _place_with_retry(
-            params2,
-            is_qty=True,
-            qty_or_price_key="qty",
-            qty_step=qty_step,
-            base_prec=base_prec,
-            tick_size=tick_size,
-            price_prec=price_prec
+            params2, is_qty=True, qty_or_price_key="qty",
+            qty_step=qty_step, base_prec=base_prec, tick_size=tick_size, price_prec=price_prec
         )
         if res2.get("retCode") == 0:
             created["tp2"] = (res2.get("result") or {}).get("orderId")
@@ -392,6 +393,7 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
             log.warning("SL rejected: %s", res3)
 
     return created
+
 
 
 # ── Bybit HTTP kliens ────────────────────────────────────────────────────────
