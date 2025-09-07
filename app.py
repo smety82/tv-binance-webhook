@@ -489,7 +489,10 @@ def webhook():
 
     strategy_id = (data.get("strategy_id") or "unknown").lower()
     signal      = (data.get("signal") or "").lower()  # buy / sell
-    symbol      = (data.get("symbol") or "BTCUSDT").upper().replace("BYBIT:", "")
+    symbol = (data.get("symbol") or "BTCUSDT").upper().replace("BYBIT:", "")
+    # USD -> USDT fallback
+    if symbol.endswith("USD") and not symbol.endswith("USDT"):
+    symbol = symbol + "T"
     category    = (data.get("category") or CATEGORY).lower()
 
     if signal not in {"buy", "sell"}:
