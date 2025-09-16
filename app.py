@@ -133,6 +133,13 @@ def _reset_daily_if_newdate():
         _daily["date"] = today
         _daily["loss"] = 0.0
 
+# ── Spot decimális cap szimbólumra ───────────────────────────────────────────
+def _spot_decimal_cap(symbol: str) -> int:
+    s = (symbol or "").upper()
+    if s.startswith("BTC"): return 6
+    if s.startswith("ETH"): return 6
+    return 6  # általános spot default
+
 # ── Bybit helpers ────────────────────────────────────────────────────────────
 def get_instrument_info(category, symbol):
     key = (category, symbol)
@@ -146,18 +153,19 @@ def get_instrument_info(category, symbol):
 
 def get_filters(category, symbol):
     """
-    Visszaadja a formázáshoz szükséges szűrőket (spoton safe defaultokkal).
+    Visszaadja a formázáshoz szükséges szűrőket (spoton safe defaultokkal + hard cap).
     """
     info = get_instrument_info(category, symbol)
     lst = (((info or {}).get("result") or {}).get("list") or [])
     if not lst:
         # safe defaultok, ha valamiért nincs instrument info
+        cap = _spot_decimal_cap(symbol) if category == "spot" else 3
         return {
             "minOrderAmt":    0.0,
             "minOrderQty":    0.0,
-            "qtyStep":        0.0001 if category == "spot" else 0.001,
+            "qtyStep":        float(10**(-cap)) if category == "spot" else 0.001,
             "tickSize":       0.01,
-            "basePrecision":  4 if category == "spot" else 3,
+            "basePrecision":  cap if category == "spot" else 3,
             "pricePrecision": 2,
         }
 
@@ -170,20 +178,18 @@ def get_filters(category, symbol):
     min_qty    = _safe_float(lot.get("minOrderQty"), 0.0)
     min_amt    = _safe_float(lot.get("minOrderAmt"), 0.0)
 
-    # Bybit gyakran ad basePrecision/pricePrecision-t, de néha None
     base_prec_raw  = lot.get("basePrecision")
     price_prec_raw = prc.get("pricePrecision")
     base_prec  = _safe_int(base_prec_raw,  _decimals_from_step(qty_step))
     price_prec = _safe_int(price_prec_raw, _decimals_from_step(tick_size))
 
-    # Konzervatív plafonok spoton (különösen BTC/ETH esetén)
     if category == "spot":
-        # ha nincs értelmes base_prec, származtatjuk/korlátozzuk
+        cap = _spot_decimal_cap(symbol)
         inferred_dec = _decimals_from_step(qty_step)
         if base_prec is None or base_prec <= 0:
-            base_prec = inferred_dec if inferred_dec > 0 else 6
-        # ha a step túl finom, korlátozzuk a base_prec szerint
-        min_allowed_step = 10 ** (-(base_prec))
+            base_prec = inferred_dec if inferred_dec > 0 else cap
+        base_prec = min(base_prec, cap)
+        min_allowed_step = 10 ** (-base_prec)
         if qty_step < min_allowed_step:
             qty_step = float(min_allowed_step)
 
@@ -232,8 +238,8 @@ def _place_with_retry(limit_or_market_params, is_qty: bool, qty_or_price_key: st
                       qty_step: float, base_prec: int | None,
                       tick_size: float, price_prec: int | None):
     """
-    TPI/SL limit rendeléseknél Bybit 170137 esetén (túl sok tizedes) automatikusan vágunk és újrapróbáljuk egyszer.
-    Kezeli a pybit kivételeket IS (InvalidRequestError).
+    Bybit 170137 (túl sok tizedes) esetén automatikus vágás és újrapróba.
+    Kezeli a pybit InvalidRequestError kivételt is.
     """
     def _cut_decimals(val_str: str, max_dec: int) -> str:
         try:
@@ -247,23 +253,25 @@ def _place_with_retry(limit_or_market_params, is_qty: bool, qty_or_price_key: st
     except Exception as e:
         msg = str(e)
         if "170137" not in msg:
-            # más hiba: dobd tovább
             raise
 
-    # 170137 → tizedes vágás + 2. próba
+    # 170137 → tizedes vágás + 2. próba (spot cap figyelembe vétele)
+    cap_dec = _spot_decimal_cap(limit_or_market_params.get("symbol", "")) if limit_or_market_params.get("category") == "spot" else None
+
     if is_qty:
-        allowed_dec = base_prec if base_prec is not None else decimals_for_step(qty_step)
-        cur         = str(limit_or_market_params.get(qty_or_price_key))
+        inferred = decimals_for_step(qty_step)
+        allowed_dec = min(base_prec or inferred, cap_dec) if cap_dec is not None else (base_prec or inferred)
+        cur = str(limit_or_market_params.get(qty_or_price_key))
         limit_or_market_params[qty_or_price_key] = _cut_decimals(cur, allowed_dec)
     else:
-        allowed_dec = price_prec if price_prec is not None else decimals_for_step(tick_size)
-        cur         = str(limit_or_market_params.get(qty_or_price_key))
-        new         = _cut_decimals(cur, allowed_dec)
+        inferred = decimals_for_step(tick_size)
+        allowed_dec = min(price_prec or inferred, 6) if cap_dec is not None else (price_prec or inferred)
+        cur = str(limit_or_market_params.get(qty_or_price_key))
+        new = _cut_decimals(cur, allowed_dec)
         limit_or_market_params[qty_or_price_key] = new
         if "triggerPrice" in limit_or_market_params:
             limit_or_market_params["triggerPrice"] = new
 
-    # 2. próba (ha ez is kivétel, hadd menjen fel)
     return session.place_order(**limit_or_market_params)
 
 # ── Spot TP/SL (brackets) ────────────────────────────────────────────────────
@@ -282,7 +290,7 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
     if base_filled < MIN_SPLIT_BASE:
         portions = (1.0, 0.0)
 
-    # Bázis coin meghatározása (pl. ETHUSDT -> ETH)
+    # Bázis coin (pl. ETHUSDT -> ETH)
     sym = symbol.upper()
     base_coin = None
     for q in ("USDT", "USDC", "USD"):
@@ -290,7 +298,7 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
             base_coin = sym[: -len(q)]
             break
     if not base_coin:
-        base_coin = sym[:3]  # vészmegoldás
+        base_coin = sym[:3]
 
     # Elérhető bázis coin lekérdezése
     def _get_coin_available(coin: str, account_type="UNIFIED") -> float:
@@ -365,11 +373,16 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
     q2_s     = format_qty(q2f, qty_step, base_prec)
     sl_qty_s = format_qty(sl_qty_f, qty_step, base_prec)
 
-    # Végső tizedes clamp a mennyiségekre (nehogy 170137 legyen)
-    allowed_qty_dec = decimals_for_step(qty_step)
-    q1_s     = format_with_precision(float(q1_s), min(allowed_qty_dec, base_prec or allowed_qty_dec))
-    q2_s     = format_with_precision(float(q2_s), min(allowed_qty_dec, base_prec or allowed_qty_dec))
-    sl_qty_s = format_with_precision(float(sl_qty_s), min(allowed_qty_dec, base_prec or allowed_qty_dec))
+    # Hard cap spoton (pl. ETH/BTC max 6 tizedes)
+    cap_dec = _spot_decimal_cap(symbol)
+    allowed_qty_dec = min(decimals_for_step(qty_step), base_prec or cap_dec, cap_dec)
+
+    q1_s     = format_with_precision(float(q1_s),     allowed_qty_dec)
+    q2_s     = format_with_precision(float(q2_s),     allowed_qty_dec)
+    sl_qty_s = format_with_precision(float(sl_qty_s), allowed_qty_dec)
+
+    log.info("Final clamp → qty_step=%s (dec=%d) base_prec=%s cap=%d ⇒ q1=%s q2=%s sl_qty=%s",
+             qty_step, decimals_for_step(qty_step), base_prec, cap_dec, q1_s, q2_s, sl_qty_s)
 
     # MinQty/MinNotional végső validáció
     def _valid_leg(q_str, price):
@@ -598,7 +611,7 @@ def webhook():
             }), 200
 
         else:
-            # linear (futures) – marad a korábbi logika
+            # linear (futures)
             base_qty = data.get("quantity")
             if base_qty is None:
                 last = get_last_price("linear", symbol) or 0
@@ -617,7 +630,6 @@ def webhook():
             if res.get("retCode") != 0:
                 return jsonify({"error":"bybit_error","retCode":res.get("retCode"),"retMsg":res.get("retMsg"),"res":res}), 502
 
-            # (TP/SL/trailing marad a futures beállítás szerint – ha kell, hozzáigazítjuk)
             _cooldown_until[symbol] = now + TRADE_COOLDOWN_S
             return jsonify({"message":"linear order executed","params":params,"res":res}), 200
 
