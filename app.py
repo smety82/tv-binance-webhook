@@ -39,6 +39,13 @@ ALLOC = {
     "ichimoku":     float(os.getenv("ALLOC_ICH", "0.1")),
 }
 
+# ── Server-side TP/SL guard knobs (env-ből hangolható) ───────────────────────
+MIN_TP_PCT      = float(os.getenv("MIN_TP_PCT", "0.25"))  # % az entryből (pl. 0.25 = 0.25%)
+MIN_SL_PCT      = float(os.getenv("MIN_SL_PCT", "0.35"))
+MIN_TP_TICKS    = int(os.getenv("MIN_TP_TICKS", "12"))    # min távolság tickben
+MIN_RR1         = float(os.getenv("MIN_RR1", "1.0"))      # TP1 ≥ RR * R
+MIN_RR2         = float(os.getenv("MIN_RR2", "1.8"))      # TP2 ≥ RR * R
+
 # ── Decimal precízió ─────────────────────────────────────────────────────────
 getcontext().prec = 28
 
@@ -47,9 +54,6 @@ def decimals_for_step(step: float) -> int:
     return len(s.split(".")[1]) if "." in s else 0
 
 def quantize_down(value: float, step: float) -> Decimal:
-    """
-    Lefelé kerekít a megadott step rácsra, Decimal-lel (precíz) – e-notation nélkül.
-    """
     v = Decimal(str(value))
     st = Decimal(str(step))
     return (v / st).to_integral_value(rounding=ROUND_DOWN) * st
@@ -62,9 +66,6 @@ def format_with_precision(value: float, max_decimals: int) -> str:
     return format(q.quantize(Decimal(fmt), rounding=ROUND_DOWN), 'f')
 
 def format_qty(value: float, qty_step: float, base_precision: int | None) -> str:
-    """
-    Step-re illeszt + legfeljebb basePrecision tizedes (e-notation NINCS).
-    """
     q = quantize_down(value, qty_step)
     step_dec = decimals_for_step(qty_step)
     d = min(step_dec, base_precision if base_precision is not None else step_dec)
@@ -118,7 +119,7 @@ session = HTTP(
     api_secret=BYBIT_API_SECRET,
 )
 
-# ── Cache / state (in-memory; ha újraindul a dyno, nullázódik) ───────────────
+# ── Cache / state ────────────────────────────────────────────────────────────
 _instruments_cache = {}
 _last_signal = {}       # key: (strategy_id, symbol, signal) -> ts
 _cooldown_until = {}    # symbol -> ts
@@ -158,7 +159,6 @@ def get_filters(category, symbol):
     info = get_instrument_info(category, symbol)
     lst = (((info or {}).get("result") or {}).get("list") or [])
     if not lst:
-        # safe defaultok, ha valamiért nincs instrument info
         cap = _spot_decimal_cap(symbol) if category == "spot" else 3
         return {
             "minOrderAmt":    0.0,
@@ -203,7 +203,6 @@ def get_filters(category, symbol):
     }
 
 def fetch_filled_base_qty(category: str, symbol: str, order_id: str, order_link_id: str | None = None) -> float:
-    """Lekéri a frissen vett mennyiséget (base). Ha nem sikerül, 0-t ad vissza."""
     try:
         r = session.get_order_history(category=category, orderId=order_id)
         lst = (((r or {}).get("result") or {}).get("list") or [])
@@ -233,6 +232,65 @@ def get_last_price(category, symbol):
     if not lst: return None
     return float(lst[0].get("lastPrice"))
 
+# ── Server-side TP/SL clamp ──────────────────────────────────────────────────
+def clamp_levels_for_spot(side: str, entry: float,
+                          tp1: float, tp2: float, sl: float,
+                          tick_size: float, price_prec: int | None) -> tuple[float, float, float]:
+    """
+    Min. távolság TP/SL felé: max(entry*% , N*tick).
+    Min. R/R: TP1 ≥ MIN_RR1*R, TP2 ≥ MIN_RR2*R (long esetén).
+    Visszaadja (tp1, tp2, sl), Bybit tick-re formázva.
+    """
+    tp_pct = abs(MIN_TP_PCT) / 100.0
+    sl_pct = abs(MIN_SL_PCT) / 100.0
+
+    def _round_up_price(p: float) -> float:   # Sell limit célok: felfelé
+        return float(format_price(p, tick_size, price_prec))
+    def _round_dn_price(p: float) -> float:   # Long SL trigger: lefelé
+        return float(format_price(p, tick_size, price_prec))
+
+    min_tp_abs = max(entry * tp_pct, tick_size * max(1, MIN_TP_TICKS))
+    min_sl_abs = max(entry * sl_pct, tick_size * max(1, MIN_TP_TICKS))
+
+    if side == "buy":
+        sl = min(sl, entry - min_sl_abs)
+        sl = _round_dn_price(sl)
+        if (entry - sl) < min_sl_abs:
+            sl = _round_dn_price(entry - min_sl_abs)
+
+        R = max(1e-9, entry - sl)
+
+        tp1_min = max(entry + min_tp_abs, entry + MIN_RR1 * R)
+        tp2_min = max(tp1_min + min_tp_abs, entry + MIN_RR2 * R)
+
+        tp1 = max(tp1, tp1_min)
+        tp2 = max(tp2, tp2_min)
+
+        tp1 = _round_up_price(tp1)
+        tp2 = _round_up_price(tp2)
+
+        if tp2 - tp1 < tick_size * max(1, MIN_TP_TICKS):
+            tp1 = 0.0
+
+        return (tp1, tp2, sl)
+
+    else:
+        # Short tükör (spotnál nem használjuk most)
+        sl = max(sl, entry + min_sl_abs)
+        sl = float(format_price(sl, tick_size, price_prec))
+        R = max(1e-9, sl - entry)
+        tp1_min = min(entry - min_tp_abs, entry - MIN_RR1 * R)
+        tp2_min = min(tp1_min - min_tp_abs, entry - MIN_RR2 * R)
+
+        tp1 = min(tp1, tp1_min)
+        tp2 = min(tp2, tp2_min)
+
+        tp1 = float(format_price(tp1, tick_size, price_prec))
+        tp2 = float(format_price(tp2, tick_size, price_prec))
+        if tp1 - tp2 < tick_size * max(1, MIN_TP_TICKS):
+            tp1 = 0.0
+        return (tp1, tp2, sl)
+
 # ── Retry wrapper: 170137 tizedes hibára automatikus javítás ────────────────
 def _place_with_retry(limit_or_market_params, is_qty: bool, qty_or_price_key: str,
                       qty_step: float, base_prec: int | None,
@@ -245,7 +303,7 @@ def _place_with_retry(limit_or_market_params, is_qty: bool, qty_or_price_key: st
         try:
             return format_with_precision(float(Decimal(val_str)), max(0, max_dec))
         except Exception:
-            return val_str  # végső fallback
+            return val_str
 
     # 1. próba
     try:
@@ -276,7 +334,6 @@ def _place_with_retry(limit_or_market_params, is_qty: bool, qty_or_price_key: st
 
 # ── Spot TP/SL (brackets) ────────────────────────────────────────────────────
 def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float, sl: float, portions=(0.5, 0.5)):
-    # Szűrők a pontos formázáshoz
     filters    = get_filters("spot", symbol)
     qty_step   = filters.get("qtyStep", 0.0001)
     min_qty    = filters.get("minOrderQty", 0.0)
@@ -285,12 +342,10 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
     price_prec = filters.get("pricePrecision", 2)
     min_amt    = filters.get("minOrderAmt", 0.0)
 
-    # Nagyon kicsi fill esetén ne daraboljunk
-    MIN_SPLIT_BASE = 5e-5  # ~0.00005
+    MIN_SPLIT_BASE = 5e-5
     if base_filled < MIN_SPLIT_BASE:
         portions = (1.0, 0.0)
 
-    # Bázis coin (pl. ETHUSDT -> ETH)
     sym = symbol.upper()
     base_coin = None
     for q in ("USDT", "USDC", "USD"):
@@ -300,7 +355,6 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
     if not base_coin:
         base_coin = sym[:3]
 
-    # Elérhető bázis coin lekérdezése
     def _get_coin_available(coin: str, account_type="UNIFIED") -> float:
         try:
             r = session.get_wallet_balance(accountType=account_type)
@@ -315,37 +369,31 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
 
     avail_base = _get_coin_available(base_coin)
     if avail_base <= 0:
-        time.sleep(0.8)  # esetleges settlement késleltetés
+        time.sleep(0.8)
         avail_base = _get_coin_available(base_coin)
 
     SAFE = 0.998
     sell_cap = max(0.0, avail_base * SAFE)
 
-    # Ár kerekítés
     tp1_s = format_price(float(tp1), tick_size, price_prec)
     tp2_s = format_price(float(tp2), tick_size, price_prec)
     sl_s  = format_price(float(sl),  tick_size, price_prec)
 
-    # Darabolás
     q1_raw = max(0.0, base_filled * float(portions[0]))
     q2_raw = max(0.0, base_filled - q1_raw)
 
-    # Step/precision formázás
     q1_s = format_qty(q1_raw, qty_step, base_prec)
     q2_s = format_qty(q2_raw, qty_step, base_prec)
 
-    # Ha az első rész túl kicsi → egy TP-be tesszük
     if float(q1_s) < max(min_qty, 0.0) or float(q1_s) == 0.0:
         q1_s = format_qty(base_filled, qty_step, base_prec)
         q2_s = "0"
 
-    # Számossá alakítás
     q1f = float(q1_s)
     q2f = float(q2_s)
     p1f = float(tp1_s)
     p2f = float(tp2_s)
 
-    # Min notional ellenőrzés: ha nem éri el, összevonás
     if min_amt and min_amt > 0:
         if q1f > 0 and (q1f * p1f) < min_amt:
             q2f += q1f
@@ -354,26 +402,22 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
             q1f += q2f
             q2f = 0.0
 
-    # Ne lépjük túl a rendelkezésre állót (TP1+TP2 <= sell_cap)
     tp_total = q1f + q2f
     if tp_total > sell_cap:
         over = tp_total - sell_cap
-        cut = min(over, q2f)   # előbb TP2-t vágjuk
+        cut = min(over, q2f)
         q2f -= cut
         tp_total = q1f + q2f
     if tp_total > sell_cap:
         over = tp_total - sell_cap
         q1f = max(0.0, q1f - over)
 
-    # SL mennyiség = maradék
     sl_qty_f = max(0.0, sell_cap - (q1f + q2f))
 
-    # Újrraformázás step/precision szerint
     q1_s     = format_qty(q1f, qty_step, base_prec)
     q2_s     = format_qty(q2f, qty_step, base_prec)
     sl_qty_s = format_qty(sl_qty_f, qty_step, base_prec)
 
-    # Hard cap spoton (pl. ETH/BTC max 6 tizedes)
     cap_dec = _spot_decimal_cap(symbol)
     allowed_qty_dec = min(decimals_for_step(qty_step), base_prec or cap_dec, cap_dec)
 
@@ -384,7 +428,6 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
     log.info("Final clamp → qty_step=%s (dec=%d) base_prec=%s cap=%d ⇒ q1=%s q2=%s sl_qty=%s",
              qty_step, decimals_for_step(qty_step), base_prec, cap_dec, q1_s, q2_s, sl_qty_s)
 
-    # MinQty/MinNotional végső validáció
     def _valid_leg(q_str, price):
         if float(q_str) <= 0: return False
         if min_qty and float(q_str) < min_qty: return False
@@ -409,7 +452,6 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
 
     created = {"tp1": None, "tp2": None, "sl": None}
 
-    # TP1
     if float(q1_s) > 0.0:
         params1 = dict(
             category="spot",
@@ -433,7 +475,6 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
         else:
             log.warning("TP1 rejected: %s", res1)
 
-    # TP2
     if float(q2_s) > 0.0:
         params2 = dict(
             category="spot",
@@ -457,7 +498,6 @@ def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float,
         else:
             log.warning("TP2 rejected: %s", res2)
 
-    # SL (Stop-Market) – csak ha jutott rá mennyiség
     if float(sl_qty_s) > 0.0:
         params3 = dict(
             category="spot",
@@ -509,14 +549,12 @@ def webhook():
     data = request.get_json(silent=True) or {}
     log.info("incoming: %s", data)
 
-    # Secret
     if WEBHOOK_SECRET and data.get("secret") != WEBHOOK_SECRET:
         return jsonify({"error": "Unauthorized"}), 403
 
     strategy_id = (data.get("strategy_id") or "unknown").lower()
     signal      = (data.get("signal") or "").lower()  # buy / sell
     symbol      = (data.get("symbol") or "BTCUSDT").upper().replace("BYBIT:", "")
-    # USD -> USDT fallback
     if symbol.endswith("USD") and not symbol.endswith("USDT"):
         symbol = symbol + "T"
     category    = (data.get("category") or CATEGORY).lower()
@@ -528,7 +566,6 @@ def webhook():
     if category not in {"spot", "linear"}:
         return jsonify({"error": "Invalid category"}), 400
 
-    # dedup + cooldown + daily lock
     key = (strategy_id, symbol, signal)
     now = time.time()
     if now - _last_signal.get(key, 0) < DEDUP_WINDOW_S:
@@ -539,7 +576,6 @@ def webhook():
     if _daily["loss"] <= -abs(MAX_DAILY_LOSS):
         return jsonify({"skipped": "daily_loss_lock"}), 200
 
-    # Sizing / fallback
     alloc   = ALLOC.get(strategy_id, 0.15)
     tp_mode = data.get("tp_mode") or ""
     tp1     = data.get("tp1")
@@ -556,7 +592,7 @@ def webhook():
     try:
         filters  = get_filters(category, symbol)
         qtyStep  = filters.get("qtyStep", 0.0001)
-        minAmt   = filters.get("minOrderAmt", 0.0)   # spot min notional
+        minAmt   = filters.get("minOrderAmt", 0.0)
         minQty   = filters.get("minOrderQty", 0.0)
 
         avail_usdt = get_available_usdt("UNIFIED")
@@ -564,7 +600,6 @@ def webhook():
         base_filled = 0.0
 
         if category == "spot":
-            # marketUnit: quoteCoin (értékben vásárlunk)
             quote_qty = data.get("quote_qty")
             if quote_qty is None:
                 max_spend = max(0.0, avail_usdt * alloc * 0.98)
@@ -580,7 +615,6 @@ def webhook():
             params["qty"] = str(q)
             params["marketUnit"] = "quoteCoin"
 
-            # BUY / SELL (spot)
             res = session.place_order(**params)
             if res.get("retCode") != 0:
                 return jsonify({"error":"bybit_error","retCode":res.get("retCode"),"retMsg":res.get("retMsg"),"res":res}), 502
@@ -588,18 +622,37 @@ def webhook():
             order_id = (res.get("result") or {}).get("orderId")
             base_filled = fetch_filled_base_qty("spot", symbol, order_id)
 
-            # Ha nem tudtuk kiolvasni, becslünk:
             if base_filled <= 0:
                 last = get_last_price("spot", symbol) or 0
                 if last > 0:
                     base_filled = round_to_step(q / last * 0.995, qtyStep)
 
-            # Spot TP/SL csak BUY jelre értelmes (long irány)
             brackets = None
             if signal == "buy" and tp_mode == "fib" and all(x is not None for x in (tp1, tp2, sl)):
-                brackets = place_spot_brackets(symbol, base_filled, float(tp1), float(tp2), float(sl), portions=(0.5, 0.5))
+                # Szintek szerveroldali clamp-je (min%/ticks/RR)
+                f = get_filters("spot", symbol)
+                tick_size  = f.get("tickSize", 0.01)
+                price_prec = f.get("pricePrecision", None)
 
-            # cooldown
+                entry_price = get_last_price("spot", symbol) or 0.0
+                if entry_price <= 0:
+                    entry_price = float(tp1)
+
+                tp1_adj, tp2_adj, sl_adj = clamp_levels_for_spot(
+                    side="buy",
+                    entry=float(entry_price),
+                    tp1=float(tp1),
+                    tp2=float(tp2),
+                    sl=float(sl),
+                    tick_size=float(tick_size),
+                    price_prec=price_prec
+                )
+
+                if tp1_adj <= 0.0:
+                    brackets = place_spot_brackets(symbol, base_filled, tp2_adj, tp2_adj, sl_adj, portions=(1.0, 0.0))
+                else:
+                    brackets = place_spot_brackets(symbol, base_filled, tp1_adj, tp2_adj, sl_adj, portions=(0.5, 0.5))
+
             _cooldown_until[symbol] = now + TRADE_COOLDOWN_S
 
             return jsonify({
@@ -611,7 +664,6 @@ def webhook():
             }), 200
 
         else:
-            # linear (futures)
             base_qty = data.get("quantity")
             if base_qty is None:
                 last = get_last_price("linear", symbol) or 0
