@@ -1,694 +1,109 @@
-import os, time, math, logging
-from datetime import datetime, timezone
-from flask import Flask, request, jsonify, redirect
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-from pybit.unified_trading import HTTP
-from decimal import Decimal, ROUND_DOWN, getcontext
+# bybit_v5_router.py
+import os, time, hmac, hashlib, json, math
+import requests
+from fastapi import FastAPI, Request, HTTPException
 
-# ── App+log ───────────────────────────────────────────────────────────────────
-app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("tv-bybit-webhook")
+API_KEY     = os.getenv("BYBIT_KEY")
+API_SECRET  = os.getenv("BYBIT_SECRET").encode()
+BASE_URL    = os.getenv("BYBIT_BASE", "https://api-testnet.bybit.com")
+RECV_WINDOW = os.getenv("RECV_WINDOW", "5000")
+SHARED      = os.getenv("SHARED_SECRET", "change-me")
 
-limiter = Limiter(key_func=get_remote_address, app=app, default_limits=["10 per minute"])
+app = FastAPI()
 
-# ── Env ──────────────────────────────────────────────────────────────────────
-BYBIT_API_KEY     = os.getenv("BYBIT_API_KEY")
-BYBIT_API_SECRET  = os.getenv("BYBIT_API_SECRET")
-BYBIT_TESTNET     = os.getenv("BYBIT_TESTNET", "true").lower() == "true"
-CATEGORY          = os.getenv("BYBIT_CATEGORY", "spot")   # "spot" | "linear"
-WEBHOOK_SECRET    = os.getenv("WEBHOOK_SECRET")
-ALLOWED_SYMBOLS   = set((os.getenv("ALLOWED_SYMBOLS") or "BTCUSDT,ETHUSDT").replace(" ", "").split(","))
+def _sign(body_str: str) -> dict:
+    ts = str(int(time.time() * 1000))
+    payload = f"{ts}{API_KEY}{RECV_WINDOW}{body_str}"
+    sign = hmac.new(API_SECRET, payload.encode(), hashlib.sha256).hexdigest()
+    return {
+        "X-BAPI-API-KEY": API_KEY,
+        "X-BAPI-TIMESTAMP": ts,
+        "X-BAPI-RECV-WINDOW": RECV_WINDOW,
+        "X-BAPI-SIGN": sign,
+        "X-BAPI-SIGN-TYPE": "2",
+        "Content-Type": "application/json",
+    }
 
-# Risk knobs (állítható env-ből)
-MAX_QUOTE         = float(os.getenv("MAX_QUOTE", "20000"))     # spot quote cap
-DEFAULT_QTY       = float(os.getenv("DEFAULT_QTY", "0.001"))   # linear alap qty
-MAX_QTY           = float(os.getenv("MAX_QTY", "1.0"))         # linear cap
-MAX_DAILY_LOSS    = float(os.getenv("MAX_DAILY_LOSS_USDT", "100"))  # net PnL lock
-TRADE_COOLDOWN_S  = int(os.getenv("TRADE_COOLDOWN_SEC", "30"))
-DEDUP_WINDOW_S    = int(os.getenv("DEDUP_WINDOW_SEC", "15"))
-
-# Per-stratégia allokáció (összesen 1.0 körül)
-ALLOC = {
-    "ema_cross":    float(os.getenv("ALLOC_EMA", "0.2")),
-    "supertrend":   float(os.getenv("ALLOC_ST", "0.2")),
-    "donchian_brk": float(os.getenv("ALLOC_DON", "0.2")),
-    "bb_revert":    float(os.getenv("ALLOC_BB", "0.15")),
-    "rsi_macd":     float(os.getenv("ALLOC_RM", "0.15")),
-    "ichimoku":     float(os.getenv("ALLOC_ICH", "0.1")),
-}
-
-# ── Server-side TP/SL guard knobs (env-ből hangolható) ───────────────────────
-MIN_TP_PCT      = float(os.getenv("MIN_TP_PCT", "0.25"))  # % az entryből (pl. 0.25 = 0.25%)
-MIN_SL_PCT      = float(os.getenv("MIN_SL_PCT", "0.35"))
-MIN_TP_TICKS    = int(os.getenv("MIN_TP_TICKS", "12"))    # min távolság tickben
-MIN_RR1         = float(os.getenv("MIN_RR1", "1.0"))      # TP1 ≥ RR * R
-MIN_RR2         = float(os.getenv("MIN_RR2", "1.8"))      # TP2 ≥ RR * R
-
-# ── Decimal precízió ─────────────────────────────────────────────────────────
-getcontext().prec = 28
-
-def decimals_for_step(step: float) -> int:
-    s = f"{step:.16f}".rstrip("0").rstrip(".")
-    return len(s.split(".")[1]) if "." in s else 0
-
-def quantize_down(value: float, step: float) -> Decimal:
-    v = Decimal(str(value))
-    st = Decimal(str(step))
-    return (v / st).to_integral_value(rounding=ROUND_DOWN) * st
-
-def format_with_precision(value: float, max_decimals: int) -> str:
-    q = Decimal(str(value))
-    if max_decimals <= 0:
-        return f"{int(q):d}"
-    fmt = "0." + "0"*max_decimals
-    return format(q.quantize(Decimal(fmt), rounding=ROUND_DOWN), 'f')
-
-def format_qty(value: float, qty_step: float, base_precision: int | None) -> str:
-    q = quantize_down(value, qty_step)
-    step_dec = decimals_for_step(qty_step)
-    d = min(step_dec, base_precision if base_precision is not None else step_dec)
-    return format_with_precision(float(q), d)
-
-def format_price(value: float, tick_size: float, price_precision: int | None) -> str:
-    p = quantize_down(value, tick_size)
-    tick_dec = decimals_for_step(tick_size)
-    d = min(tick_dec, price_precision if price_precision is not None else tick_dec)
-    return format_with_precision(float(p), d)
-
-def _safe_int(x, default):
-    try:
-        return int(x)
-    except Exception:
-        return default
-
-def _safe_float(x, default):
-    try:
-        return float(x)
-    except Exception:
-        return default
-
-def _decimals_from_step(step: float) -> int:
-    s = f"{step:.16f}".rstrip("0").rstrip(".")
-    return len(s.split(".")[1]) if "." in s else 0
-
-def _mask(s, keep=4):
-    if not s: return "MISSING"
-    s = str(s)
-    return s[:keep] + "..." + s[-keep:] if len(s) > keep*2 else "***"
-
-log.info("BYBIT_TESTNET=%s", os.getenv("BYBIT_TESTNET"))
-log.info("BYBIT_CATEGORY=%s", os.getenv("BYBIT_CATEGORY"))
-log.info("BYBIT_API_KEY(masked)=%s", _mask(BYBIT_API_KEY))
-log.info("BYBIT_API_SECRET(masked)=%s", _mask(BYBIT_API_SECRET))
-log.info("ALLOWED_SYMBOLS=%s", ",".join(sorted(ALLOWED_SYMBOLS)))
-
-def round_to_step(value: float, step: float) -> float:
-    if step <= 0:
-        return float(value)
-    return math.floor(float(value) / step) * step
-
-def round_price(price: float, tick: float) -> float:
-    return round_to_step(price, tick)
-
-# ── Bybit HTTP kliens ────────────────────────────────────────────────────────
-session = HTTP(
-    testnet=BYBIT_TESTNET,
-    api_key=BYBIT_API_KEY,
-    api_secret=BYBIT_API_SECRET,
-)
-
-# ── Cache / state ────────────────────────────────────────────────────────────
-_instruments_cache = {}
-_last_signal = {}       # key: (strategy_id, symbol, signal) -> ts
-_cooldown_until = {}    # symbol -> ts
-_daily = {"date": None, "loss": 0.0}
-
-def _utc_date_today():
-    return datetime.now(timezone.utc).date()
-
-def _reset_daily_if_newdate():
-    today = _utc_date_today()
-    if _daily["date"] != today:
-        _daily["date"] = today
-        _daily["loss"] = 0.0
-
-# ── Spot decimális cap szimbólumra ───────────────────────────────────────────
-def _spot_decimal_cap(symbol: str) -> int:
-    s = (symbol or "").upper()
-    if s.startswith("BTC"): return 6
-    if s.startswith("ETH"): return 6
-    return 6  # általános spot default
-
-# ── Bybit helpers ────────────────────────────────────────────────────────────
-def get_instrument_info(category, symbol):
-    key = (category, symbol)
-    now = time.time()
-    cached = _instruments_cache.get(key)
-    if cached and now - cached["ts"] < 300:
-        return cached["data"]
-    data = session.get_instruments_info(category=category, symbol=symbol)
-    _instruments_cache[key] = {"ts": now, "data": data}
+def _post(path: str, body: dict):
+    body_str = json.dumps(body, separators=(",", ":"))
+    headers  = _sign(body_str)
+    r = requests.post(BASE_URL + path, headers=headers, data=body_str, timeout=10)
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, r.text)
+    data = r.json()
+    if data.get("retCode", 0) != 0:
+        raise HTTPException(400, f"{data.get('retCode')} {data.get('retMsg')}: {data}")
     return data
 
-def get_filters(category, symbol):
-    """
-    Visszaadja a formázáshoz szükséges szűrőket (spoton safe defaultokkal + hard cap).
-    """
-    info = get_instrument_info(category, symbol)
-    lst = (((info or {}).get("result") or {}).get("list") or [])
-    if not lst:
-        cap = _spot_decimal_cap(symbol) if category == "spot" else 3
-        return {
-            "minOrderAmt":    0.0,
-            "minOrderQty":    0.0,
-            "qtyStep":        float(10**(-cap)) if category == "spot" else 0.001,
-            "tickSize":       0.01,
-            "basePrecision":  cap if category == "spot" else 3,
-            "pricePrecision": 2,
-        }
+def _get(path: str, params: dict):
+    # GET-ekhez Bybitnél a sign alapja: timestamp+apiKey+recvWindow+queryString (v5 guide)
+    # Egyszerűség kedvéért itt csak publikus GET-et hívunk (instruments-info)
+    r = requests.get(BASE_URL + path, params=params, timeout=10)
+    r.raise_for_status()
+    return r.json()
 
-    item = lst[0] or {}
-    lot = item.get("lotSizeFilter")  or {}
-    prc = item.get("priceFilter")    or {}
+def get_sym_info(symbol: str):
+    j = _get("/v5/market/instruments-info", {"category":"linear","symbol":symbol})
+    info = j["result"]["list"][0]
+    tick = float(info["priceFilter"]["tickSize"])
+    lot  = float(info["lotSizeFilter"]["qtyStep"])
+    min_qty = float(info["lotSizeFilter"]["minOrderQty"])
+    return tick, lot, min_qty
 
-    qty_step   = _safe_float(lot.get("qtyStep"),     0.00000001)
-    tick_size  = _safe_float(prc.get("tickSize"),    0.01)
-    min_qty    = _safe_float(lot.get("minOrderQty"), 0.0)
-    min_amt    = _safe_float(lot.get("minOrderAmt"), 0.0)
+def round_to(x, step):
+    return math.floor(x / step) * step
 
-    base_prec_raw  = lot.get("basePrecision")
-    price_prec_raw = prc.get("pricePrecision")
-    base_prec  = _safe_int(base_prec_raw,  _decimals_from_step(qty_step))
-    price_prec = _safe_int(price_prec_raw, _decimals_from_step(tick_size))
+@app.post("/tv")
+async def tv_webhook(req: Request):
+    body = await req.json()
+    if body.get("secret") != SHARED:
+        raise HTTPException(401, "bad secret")
 
-    if category == "spot":
-        cap = _spot_decimal_cap(symbol)
-        inferred_dec = _decimals_from_step(qty_step)
-        if base_prec is None or base_prec <= 0:
-            base_prec = inferred_dec if inferred_dec > 0 else cap
-        base_prec = min(base_prec, cap)
-        min_allowed_step = 10 ** (-base_prec)
-        if qty_step < min_allowed_step:
-            qty_step = float(min_allowed_step)
+    symbol = body["symbol"]
+    side   = body["side"].upper()            # LONG/SHORT
+    qty    = float(body["qty"])
+    tp1    = float(body["tp1"])
+    tp2    = float(body["tp2"])
+    sl     = float(body["sl"])
 
-    return {
-        "minOrderAmt":    min_amt,
-        "minOrderQty":    min_qty,
-        "qtyStep":        qty_step,
-        "tickSize":       tick_size,
-        "basePrecision":  base_prec,
-        "pricePrecision": price_prec,
+    tick, lot, min_qty = get_sym_info(symbol)
+    qty_rounded = max(round_to(qty, lot), min_qty)
+
+    # 1) (opcionális) Leverage beállítás egyszer (szimbólumonként)
+    # _post("/v5/position/set-leverage", {"category":"linear","symbol":symbol,"buyLeverage":"3","sellLeverage":"3"})
+
+    # 2) Market belépő (One-Way módban nem kell positionIdx)
+    by_side = "Buy" if side == "LONG" else "Sell"
+    entry = {
+        "category":"linear","symbol":symbol,
+        "side":by_side,"orderType":"Market",
+        "qty": str(qty_rounded), "timeInForce":"IOC", "reduceOnly": False
     }
-
-def fetch_filled_base_qty(category: str, symbol: str, order_id: str, order_link_id: str | None = None) -> float:
-    try:
-        r = session.get_order_history(category=category, orderId=order_id)
-        lst = (((r or {}).get("result") or {}).get("list") or [])
-        if lst:
-            cum = lst[0].get("cumExecQty") or "0"
-            return float(cum)
-    except Exception:
-        log.exception("fetch_filled_base_qty failed")
-    return 0.0
-
-def get_available_usdt(account_type="UNIFIED"):
-    r = session.get_wallet_balance(accountType=account_type)
-    result = (r or {}).get("result") or {}
-    lst = (result.get("list") or [])
-    if not lst: return 0.0
-    coins = lst[0].get("coin") or []
-    for c in coins:
-        if (c.get("coin") or "").upper() == "USDT":
-            avail = c.get("availableToUse") or c.get("availableToWithdraw") or c.get("walletBalance") or "0"
-            try: return float(avail)
-            except: return 0.0
-    return 0.0
-
-def get_last_price(category, symbol):
-    r = session.get_tickers(category=category, symbol=symbol)
-    lst = (((r or {}).get("result") or {}).get("list") or [])
-    if not lst: return None
-    return float(lst[0].get("lastPrice"))
-
-# ── Server-side TP/SL clamp ──────────────────────────────────────────────────
-def clamp_levels_for_spot(side: str, entry: float,
-                          tp1: float, tp2: float, sl: float,
-                          tick_size: float, price_prec: int | None) -> tuple[float, float, float]:
-    """
-    Min. távolság TP/SL felé: max(entry*% , N*tick).
-    Min. R/R: TP1 ≥ MIN_RR1*R, TP2 ≥ MIN_RR2*R (long esetén).
-    Visszaadja (tp1, tp2, sl), Bybit tick-re formázva.
-    """
-    tp_pct = abs(MIN_TP_PCT) / 100.0
-    sl_pct = abs(MIN_SL_PCT) / 100.0
-
-    def _round_up_price(p: float) -> float:   # Sell limit célok: felfelé
-        return float(format_price(p, tick_size, price_prec))
-    def _round_dn_price(p: float) -> float:   # Long SL trigger: lefelé
-        return float(format_price(p, tick_size, price_prec))
-
-    min_tp_abs = max(entry * tp_pct, tick_size * max(1, MIN_TP_TICKS))
-    min_sl_abs = max(entry * sl_pct, tick_size * max(1, MIN_TP_TICKS))
-
-    if side == "buy":
-        sl = min(sl, entry - min_sl_abs)
-        sl = _round_dn_price(sl)
-        if (entry - sl) < min_sl_abs:
-            sl = _round_dn_price(entry - min_sl_abs)
-
-        R = max(1e-9, entry - sl)
-
-        tp1_min = max(entry + min_tp_abs, entry + MIN_RR1 * R)
-        tp2_min = max(tp1_min + min_tp_abs, entry + MIN_RR2 * R)
-
-        tp1 = max(tp1, tp1_min)
-        tp2 = max(tp2, tp2_min)
-
-        tp1 = _round_up_price(tp1)
-        tp2 = _round_up_price(tp2)
-
-        if tp2 - tp1 < tick_size * max(1, MIN_TP_TICKS):
-            tp1 = 0.0
-
-        return (tp1, tp2, sl)
-
-    else:
-        # Short tükör (spotnál nem használjuk most)
-        sl = max(sl, entry + min_sl_abs)
-        sl = float(format_price(sl, tick_size, price_prec))
-        R = max(1e-9, sl - entry)
-        tp1_min = min(entry - min_tp_abs, entry - MIN_RR1 * R)
-        tp2_min = min(tp1_min - min_tp_abs, entry - MIN_RR2 * R)
-
-        tp1 = min(tp1, tp1_min)
-        tp2 = min(tp2, tp2_min)
-
-        tp1 = float(format_price(tp1, tick_size, price_prec))
-        tp2 = float(format_price(tp2, tick_size, price_prec))
-        if tp1 - tp2 < tick_size * max(1, MIN_TP_TICKS):
-            tp1 = 0.0
-        return (tp1, tp2, sl)
-
-# ── Retry wrapper: 170137 tizedes hibára automatikus javítás ────────────────
-def _place_with_retry(limit_or_market_params, is_qty: bool, qty_or_price_key: str,
-                      qty_step: float, base_prec: int | None,
-                      tick_size: float, price_prec: int | None):
-    """
-    Bybit 170137 (túl sok tizedes) esetén automatikus vágás és újrapróba.
-    Kezeli a pybit InvalidRequestError kivételt is.
-    """
-    def _cut_decimals(val_str: str, max_dec: int) -> str:
-        try:
-            return format_with_precision(float(Decimal(val_str)), max(0, max_dec))
-        except Exception:
-            return val_str
-
-    # 1. próba
-    try:
-        return session.place_order(**limit_or_market_params)
-    except Exception as e:
-        msg = str(e)
-        if "170137" not in msg:
-            raise
-
-    # 170137 → tizedes vágás + 2. próba (spot cap figyelembe vétele)
-    cap_dec = _spot_decimal_cap(limit_or_market_params.get("symbol", "")) if limit_or_market_params.get("category") == "spot" else None
-
-    if is_qty:
-        inferred = decimals_for_step(qty_step)
-        allowed_dec = min(base_prec or inferred, cap_dec) if cap_dec is not None else (base_prec or inferred)
-        cur = str(limit_or_market_params.get(qty_or_price_key))
-        limit_or_market_params[qty_or_price_key] = _cut_decimals(cur, allowed_dec)
-    else:
-        inferred = decimals_for_step(tick_size)
-        allowed_dec = min(price_prec or inferred, 6) if cap_dec is not None else (price_prec or inferred)
-        cur = str(limit_or_market_params.get(qty_or_price_key))
-        new = _cut_decimals(cur, allowed_dec)
-        limit_or_market_params[qty_or_price_key] = new
-        if "triggerPrice" in limit_or_market_params:
-            limit_or_market_params["triggerPrice"] = new
-
-    return session.place_order(**limit_or_market_params)
-
-# ── Spot TP/SL (brackets) ────────────────────────────────────────────────────
-def place_spot_brackets(symbol: str, base_filled: float, tp1: float, tp2: float, sl: float, portions=(0.5, 0.5)):
-    filters    = get_filters("spot", symbol)
-    qty_step   = filters.get("qtyStep", 0.0001)
-    min_qty    = filters.get("minOrderQty", 0.0)
-    tick_size  = filters.get("tickSize", 0.01)
-    base_prec  = filters.get("basePrecision", 4)
-    price_prec = filters.get("pricePrecision", 2)
-    min_amt    = filters.get("minOrderAmt", 0.0)
-
-    MIN_SPLIT_BASE = 5e-5
-    if base_filled < MIN_SPLIT_BASE:
-        portions = (1.0, 0.0)
-
-    sym = symbol.upper()
-    base_coin = None
-    for q in ("USDT", "USDC", "USD"):
-        if sym.endswith(q):
-            base_coin = sym[: -len(q)]
-            break
-    if not base_coin:
-        base_coin = sym[:3]
-
-    def _get_coin_available(coin: str, account_type="UNIFIED") -> float:
-        try:
-            r = session.get_wallet_balance(accountType=account_type)
-            coins = ((r or {}).get("result") or {}).get("list", [{}])[0].get("coin", [])
-            for c in coins:
-                if (c.get("coin") or "").upper() == coin.upper():
-                    v = c.get("availableToUse") or c.get("availableToWithdraw") or c.get("walletBalance") or "0"
-                    return float(v)
-        except Exception:
-            log.exception("wallet read failed")
-        return 0.0
-
-    avail_base = _get_coin_available(base_coin)
-    if avail_base <= 0:
-        time.sleep(0.8)
-        avail_base = _get_coin_available(base_coin)
-
-    SAFE = 0.998
-    sell_cap = max(0.0, avail_base * SAFE)
-
-    tp1_s = format_price(float(tp1), tick_size, price_prec)
-    tp2_s = format_price(float(tp2), tick_size, price_prec)
-    sl_s  = format_price(float(sl),  tick_size, price_prec)
-
-    q1_raw = max(0.0, base_filled * float(portions[0]))
-    q2_raw = max(0.0, base_filled - q1_raw)
-
-    q1_s = format_qty(q1_raw, qty_step, base_prec)
-    q2_s = format_qty(q2_raw, qty_step, base_prec)
-
-    if float(q1_s) < max(min_qty, 0.0) or float(q1_s) == 0.0:
-        q1_s = format_qty(base_filled, qty_step, base_prec)
-        q2_s = "0"
-
-    q1f = float(q1_s)
-    q2f = float(q2_s)
-    p1f = float(tp1_s)
-    p2f = float(tp2_s)
-
-    if min_amt and min_amt > 0:
-        if q1f > 0 and (q1f * p1f) < min_amt:
-            q2f += q1f
-            q1f = 0.0
-        if q2f > 0 and (q2f * p2f) < min_amt:
-            q1f += q2f
-            q2f = 0.0
-
-    tp_total = q1f + q2f
-    if tp_total > sell_cap:
-        over = tp_total - sell_cap
-        cut = min(over, q2f)
-        q2f -= cut
-        tp_total = q1f + q2f
-    if tp_total > sell_cap:
-        over = tp_total - sell_cap
-        q1f = max(0.0, q1f - over)
-
-    sl_qty_f = max(0.0, sell_cap - (q1f + q2f))
-
-    q1_s     = format_qty(q1f, qty_step, base_prec)
-    q2_s     = format_qty(q2f, qty_step, base_prec)
-    sl_qty_s = format_qty(sl_qty_f, qty_step, base_prec)
-
-    cap_dec = _spot_decimal_cap(symbol)
-    allowed_qty_dec = min(decimals_for_step(qty_step), base_prec or cap_dec, cap_dec)
-
-    q1_s     = format_with_precision(float(q1_s),     allowed_qty_dec)
-    q2_s     = format_with_precision(float(q2_s),     allowed_qty_dec)
-    sl_qty_s = format_with_precision(float(sl_qty_s), allowed_qty_dec)
-
-    log.info("Final clamp → qty_step=%s (dec=%d) base_prec=%s cap=%d ⇒ q1=%s q2=%s sl_qty=%s",
-             qty_step, decimals_for_step(qty_step), base_prec, cap_dec, q1_s, q2_s, sl_qty_s)
-
-    def _valid_leg(q_str, price):
-        if float(q_str) <= 0: return False
-        if min_qty and float(q_str) < min_qty: return False
-        if min_amt and (float(q_str) * price) < min_amt: return False
-        return True
-
-    if not _valid_leg(q2_s, p2f):
-        q2_s = "0"
-    if not _valid_leg(q1_s, p1f):
-        q1_s = "0"
-    if not _valid_leg(sl_qty_s, float(sl_s)):
-        sl_qty_s = "0"
-
-    log.info(
-        "alloc after cap: avail_%s=%.8f sell_cap=%.8f | TP1=%s @ %s, TP2=%s @ %s, SL=%s @ %s",
-        base_coin, avail_base, sell_cap, q1_s, tp1_s, q2_s, tp2_s, sl_qty_s, sl_s
-    )
-    log.info(
-        "legs to place -> TP1 qty=%s @ %s | TP2 qty=%s @ %s | SL qty=%s @ %s",
-        q1_s, tp1_s, q2_s, tp2_s, sl_qty_s, sl_s
-    )
-
-    created = {"tp1": None, "tp2": None, "sl": None}
-
-    if float(q1_s) > 0.0:
-        params1 = dict(
-            category="spot",
-            symbol=symbol,
-            side="Sell",
-            orderType="Limit",
-            qty=q1_s,
-            price=tp1_s,
-            timeInForce="GTC",
-            triggerPrice=tp1_s,
-            triggerDirection=1,
-            orderFilter="tpslOrder",
-            orderLinkId=f"tp1-{int(time.time()*1000)}"
-        )
-        res1 = _place_with_retry(
-            params1, is_qty=True, qty_or_price_key="qty",
-            qty_step=qty_step, base_prec=base_prec, tick_size=tick_size, price_prec=price_prec
-        )
-        if res1.get("retCode") == 0:
-            created["tp1"] = (res1.get("result") or {}).get("orderId")
-        else:
-            log.warning("TP1 rejected: %s", res1)
-
-    if float(q2_s) > 0.0:
-        params2 = dict(
-            category="spot",
-            symbol=symbol,
-            side="Sell",
-            orderType="Limit",
-            qty=q2_s,
-            price=tp2_s,
-            timeInForce="GTC",
-            triggerPrice=tp2_s,
-            triggerDirection=1,
-            orderFilter="tpslOrder",
-            orderLinkId=f"tp2-{int(time.time()*1000)}"
-        )
-        res2 = _place_with_retry(
-            params2, is_qty=True, qty_or_price_key="qty",
-            qty_step=qty_step, base_prec=base_prec, tick_size=tick_size, price_prec=price_prec
-        )
-        if res2.get("retCode") == 0:
-            created["tp2"] = (res2.get("result") or {}).get("orderId")
-        else:
-            log.warning("TP2 rejected: %s", res2)
-
-    if float(sl_qty_s) > 0.0:
-        params3 = dict(
-            category="spot",
-            symbol=symbol,
-            side="Sell",
-            orderType="Market",
-            qty=sl_qty_s,
-            triggerPrice=sl_s,
-            triggerDirection=2,
-            orderFilter="tpslOrder",
-            orderLinkId=f"sl-{int(time.time()*1000)}"
-        )
-        res3 = session.place_order(**params3)
-        if res3.get("retCode") == 0:
-            created["sl"] = (res3.get("result") or {}).get("orderId")
-        else:
-            log.warning("SL rejected: %s", res3)
-
-    return created
-
-# ── Routes ───────────────────────────────────────────────────────────────────
-@app.get("/")
-def index():
-    return {"service": "tv-bybit-webhook-v2", "endpoints": ["/health", "/authcheck", "/webhook"]}, 200
-
-@app.post("/")
-def root_post():
-    return redirect("/webhook", code=307)
-
-@app.get("/health")
-def health():
-    return {"ok": True}, 200
-
-@app.get("/authcheck")
-def authcheck():
-    try:
-        r = session.get_wallet_balance(accountType="UNIFIED")
-        return {"ok": True, "retCode": r.get("retCode"), "retMsg": r.get("retMsg",""), "resultKeys": list((r.get("result") or {}).keys())}, 200
-    except Exception as e:
-        log.exception("authcheck failed")
-        return {"ok": False, "error": str(e)}, 500
-
-# ── Core webhook ─────────────────────────────────────────────────────────────
-@app.route("/webhook", methods=["POST"])
-@limiter.limit("10 per minute")
-def webhook():
-    _reset_daily_if_newdate()
-
-    data = request.get_json(silent=True) or {}
-    log.info("incoming: %s", data)
-
-    if WEBHOOK_SECRET and data.get("secret") != WEBHOOK_SECRET:
-        return jsonify({"error": "Unauthorized"}), 403
-
-    strategy_id = (data.get("strategy_id") or "unknown").lower()
-    signal      = (data.get("signal") or "").lower()  # buy / sell
-    symbol      = (data.get("symbol") or "BTCUSDT").upper().replace("BYBIT:", "")
-    if symbol.endswith("USD") and not symbol.endswith("USDT"):
-        symbol = symbol + "T"
-    category    = (data.get("category") or CATEGORY).lower()
-
-    if signal not in {"buy", "sell"}:
-        return jsonify({"error": "Invalid signal"}), 400
-    if symbol not in ALLOWED_SYMBOLS:
-        return jsonify({"error": f"Symbol {symbol} not allowed"}), 400
-    if category not in {"spot", "linear"}:
-        return jsonify({"error": "Invalid category"}), 400
-
-    key = (strategy_id, symbol, signal)
-    now = time.time()
-    if now - _last_signal.get(key, 0) < DEDUP_WINDOW_S:
-        return jsonify({"skipped": "duplicate_signal_window"}), 200
-    _last_signal[key] = now
-    if now < _cooldown_until.get(symbol, 0):
-        return jsonify({"skipped": "cooldown_active"}), 200
-    if _daily["loss"] <= -abs(MAX_DAILY_LOSS):
-        return jsonify({"skipped": "daily_loss_lock"}), 200
-
-    alloc   = ALLOC.get(strategy_id, 0.15)
-    tp_mode = data.get("tp_mode") or ""
-    tp1     = data.get("tp1")
-    tp2     = data.get("tp2")
-    sl      = data.get("sl")
-
-    params = {
-        "category": category,
-        "symbol": symbol,
-        "side": "Buy" if signal == "buy" else "Sell",
-        "orderType": "Market",
-    }
-
-    try:
-        filters  = get_filters(category, symbol)
-        qtyStep  = filters.get("qtyStep", 0.0001)
-        minAmt   = filters.get("minOrderAmt", 0.0)
-        minQty   = filters.get("minOrderQty", 0.0)
-
-        avail_usdt = get_available_usdt("UNIFIED")
-        res = None
-        base_filled = 0.0
-
-        if category == "spot":
-            quote_qty = data.get("quote_qty")
-            if quote_qty is None:
-                max_spend = max(0.0, avail_usdt * alloc * 0.98)
-                if max_spend <= 0:
-                    return jsonify({"error":"insufficient_balance","available_usdt":avail_usdt}), 400
-                quote_qty = max_spend
-            q = float(quote_qty)
-            if minAmt and q < minAmt:
-                return jsonify({"error":"min_notional","minOrderAmt":minAmt,"try_at_least":minAmt}), 400
-            if q <= 0 or q > MAX_QUOTE:
-                return jsonify({"error":"invalid_quote","limits":[0,MAX_QUOTE]}), 400
-
-            params["qty"] = str(q)
-            params["marketUnit"] = "quoteCoin"
-
-            res = session.place_order(**params)
-            if res.get("retCode") != 0:
-                return jsonify({"error":"bybit_error","retCode":res.get("retCode"),"retMsg":res.get("retMsg"),"res":res}), 502
-
-            order_id = (res.get("result") or {}).get("orderId")
-            base_filled = fetch_filled_base_qty("spot", symbol, order_id)
-
-            if base_filled <= 0:
-                last = get_last_price("spot", symbol) or 0
-                if last > 0:
-                    base_filled = round_to_step(q / last * 0.995, qtyStep)
-
-            brackets = None
-            if signal == "buy" and tp_mode == "fib" and all(x is not None for x in (tp1, tp2, sl)):
-                # Szintek szerveroldali clamp-je (min%/ticks/RR)
-                f = get_filters("spot", symbol)
-                tick_size  = f.get("tickSize", 0.01)
-                price_prec = f.get("pricePrecision", None)
-
-                entry_price = get_last_price("spot", symbol) or 0.0
-                if entry_price <= 0:
-                    entry_price = float(tp1)
-
-                tp1_adj, tp2_adj, sl_adj = clamp_levels_for_spot(
-                    side="buy",
-                    entry=float(entry_price),
-                    tp1=float(tp1),
-                    tp2=float(tp2),
-                    sl=float(sl),
-                    tick_size=float(tick_size),
-                    price_prec=price_prec
-                )
-
-                if tp1_adj <= 0.0:
-                    brackets = place_spot_brackets(symbol, base_filled, tp2_adj, tp2_adj, sl_adj, portions=(1.0, 0.0))
-                else:
-                    brackets = place_spot_brackets(symbol, base_filled, tp1_adj, tp2_adj, sl_adj, portions=(0.5, 0.5))
-
-            _cooldown_until[symbol] = now + TRADE_COOLDOWN_S
-
-            return jsonify({
-                "message": "spot order executed",
-                "params": params,
-                "filled_base_est": base_filled,
-                "brackets": brackets,
-                "res": res
-            }), 200
-
-        else:
-            base_qty = data.get("quantity")
-            if base_qty is None:
-                last = get_last_price("linear", symbol) or 0
-                target_notional = max(0.0, avail_usdt * alloc * 0.98)
-                est_qty = target_notional/last if last>0 else DEFAULT_QTY
-                base_qty = max(est_qty, DEFAULT_QTY)
-            q = round_to_step(float(base_qty), qtyStep)
-            if minQty and q < minQty:
-                q = max(minQty, q)
-                q = round_to_step(q, qtyStep)
-            if q <= 0 or q > MAX_QTY:
-                return jsonify({"error":"invalid_quantity","limits":[0,MAX_QTY]}), 400
-            params["qty"] = str(q)
-
-            res = session.place_order(**params)
-            if res.get("retCode") != 0:
-                return jsonify({"error":"bybit_error","retCode":res.get("retCode"),"retMsg":res.get("retMsg"),"res":res}), 502
-
-            _cooldown_until[symbol] = now + TRADE_COOLDOWN_S
-            return jsonify({"message":"linear order executed","params":params,"res":res}), 200
-
-    except Exception as e:
-        log.exception("order failed")
-        return jsonify({"error":"server_error","detail":str(e)}), 500
-
-# ── main ─────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    entry_resp = _post("/v5/order/create", entry)
+
+    # 3) Két reduceOnly TP limit
+    tp1_qty = str(round_to(qty_rounded * 0.30, lot))
+    tp2_qty = str(round_to(qty_rounded - float(tp1_qty), lot))
+    # Ha a kerekítés miatt 0 lenne valamelyik, toljuk a másikra:
+    if float(tp1_qty) <= 0: tp1_qty = "0"
+    if float(tp2_qty) <= 0: tp2_qty = str(qty_rounded)
+
+    def place_tp(px, q):
+        if float(q) <= 0: return
+        return _post("/v5/order/create", {
+            "category":"linear","symbol":symbol,
+            "side":"Sell" if side=="LONG" else "Buy",
+            "orderType":"Limit","price": str(round_to(px, tick)),
+            "qty": q, "timeInForce":"GoodTillCancel","reduceOnly": True
+        })
+
+    place_tp(tp1, tp1_qty)
+    place_tp(tp2, tp2_qty)
+
+    # 4) Pozíció SL (position trading-stop) – ár iránytól függően
+    _post("/v5/position/trading-stop", {
+        "category":"linear","symbol":symbol,
+        "stopLoss": str(round_to(sl, tick))
+    })
+
+    return {"ok": True, "entry": entry_resp["result"]["orderId"]}
