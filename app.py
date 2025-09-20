@@ -3,13 +3,25 @@ import os, time, hmac, hashlib, json, math
 import requests
 from fastapi import FastAPI, Request, HTTPException
 
-API_KEY     = os.getenv("BYBIT_KEY")
-API_SECRET  = os.getenv("BYBIT_SECRET").encode()
-BASE_URL    = os.getenv("BYBIT_BASE", "https://api-testnet.bybit.com")
-RECV_WINDOW = os.getenv("RECV_WINDOW", "5000")
-SHARED      = os.getenv("SHARED_SECRET", "change-me")
+def require_env(name: str, default: str | None = None):
+    v = os.getenv(name, default)
+    if v is None or v == "":
+        raise RuntimeError(f"Missing environment variable: {name}")
+    return v
+
+API_KEY      = require_env("BYBIT_KEY")
+API_SECRET   = require_env("BYBIT_SECRET").encode()
+BASE_URL     = require_env("BYBIT_BASE", "https://api-testnet.bybit.com")
+RECV_WINDOW  = require_env("RECV_WINDOW", "5000")
+SHARED       = require_env("SHARED_SECRET")
 
 app = FastAPI()
+
+@app.get("/")
+def health():
+    mode = "mainnet" if "api.bybit.com" in BASE_URL else "testnet"
+    return {"ok": True, "mode": mode}
+
 
 def _sign(body_str: str) -> dict:
     ts = str(int(time.time() * 1000))
