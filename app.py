@@ -59,7 +59,6 @@ def _get_public(path: str, params: dict):
     return r.json()
 
 def _get_private(path: str, params: dict):
-    # v5 GET sign: timestamp + apiKey + recvWindow + queryString (ABC szerint rendezve)
     ts = str(int(time.time() * 1000))
     qs = urllib.parse.urlencode(sorted(params.items()), doseq=True)
     payload = f"{ts}{API_KEY}{RECV_WINDOW}{qs}"
@@ -327,16 +326,6 @@ async def tv_webhook(req: Request):
 
 @app.post("/set_leverage")
 async def set_leverage(req: Request):
-    """
-    Body: {
-      "symbol":"ETHUSDT",
-      "leverage": 5,                # ha megadod, mindkét oldalra ugyanazt állítja
-      "buyLeverage": 5,             # opcionális (felülírhatja a leverage-t)
-      "sellLeverage": 5,            # opcionális (felülírhatja a leverage-t)
-      "category":"linear"           # default: linear
-      "secret":"..."
-    }
-    """
     body = await req.json()
     if not _check_secret(req, body):
         return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
@@ -347,13 +336,7 @@ async def set_leverage(req: Request):
     sellL = body.get("sellLeverage", lev if buyL is None else buyL)
     if buyL is None or sellL is None:
         return JSONResponse({"ok": False, "error": "missing leverage/buyLeverage"}, status_code=400)
-
-    payload = {
-        "category": cat,
-        "symbol": symbol,
-        "buyLeverage": str(buyL),
-        "sellLeverage": str(sellL),
-    }
+    payload = {"category": cat, "symbol": symbol, "buyLeverage": str(buyL), "sellLeverage": str(sellL)}
     print("[REQ] set-leverage:", payload)
     resp = _post("/v5/position/set-leverage", payload)
     print("[RESP] set-leverage:", resp)
@@ -361,15 +344,6 @@ async def set_leverage(req: Request):
 
 @app.post("/set_margin_mode")
 async def set_margin_mode(req: Request):
-    """
-    Body: {
-      "symbol":"ETHUSDT",
-      "mode":"isolated" | "cross",
-      "leverage": 5,                 # kötelező a by/sell lev pár miatt
-      "category":"linear",
-      "secret":"..."
-    }
-    """
     body = await req.json()
     if not _check_secret(req, body):
         return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
@@ -380,11 +354,10 @@ async def set_margin_mode(req: Request):
     lev = body.get("leverage")
     if lev is None:
         return JSONResponse({"ok": False, "error": "missing leverage"}, status_code=400)
-
     payload = {
         "category": cat,
         "symbol": symbol,
-        "tradeMode": tmode,                 # 0=cross, 1=isolated
+        "tradeMode": tmode,  # 0=cross, 1=isolated
         "buyLeverage": str(lev),
         "sellLeverage": str(lev),
     }
@@ -395,14 +368,6 @@ async def set_margin_mode(req: Request):
 
 @app.post("/set_position_mode")
 async def set_position_mode(req: Request):
-    """
-    Body: {
-      "symbol":"ETHUSDT",            # vagy helyette "coin":"USDT"
-      "mode":"oneway" | "hedge",
-      "category":"linear",
-      "secret":"..."
-    }
-    """
     body = await req.json()
     if not _check_secret(req, body):
         return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
@@ -412,12 +377,10 @@ async def set_position_mode(req: Request):
     if not symbol and not coin:
         return JSONResponse({"ok": False, "error": "need symbol or coin"}, status_code=400)
     mode = str(body["mode"]).lower()
-    m = 3 if mode in ("hedge", "both", "both_sides") else 0  # 0=one-way, 3=both sides (hedge)
-
+    m = 3 if mode in ("hedge", "both", "both_sides") else 0  # 0=one-way, 3=hedge
     payload = {"category": cat, "mode": m}
     if symbol: payload["symbol"] = symbol
     if coin:   payload["coin"]   = coin
-
     print("[REQ] switch-mode:", payload)
     resp = _post("/v5/position/switch-mode", payload)
     print("[RESP] switch-mode:", resp)
@@ -436,45 +399,35 @@ async def read_position(symbol: str, secret: str):
 @app.post("/adjust")
 async def adjust(req: Request):
     """
-    Testreszabott SL/TS állítások:
     Body példák:
-    - BE (breakeven) 10 bázispont bufferral:
       {"symbol":"ETHUSDT","action":"be","be_offset_bp":10,"secret":"..."}
-    - Fix SL ár beállítása:
       {"symbol":"ETHUSDT","action":"set_sl","sl":4480.0,"secret":"..."}
-    - Trailing stop 5 dollár távolsággal:
       {"symbol":"ETHUSDT","action":"trail","trail_dist":5.0,"secret":"..."}
-    - Trailing törlése:
       {"symbol":"ETHUSDT","action":"cancel_trail","secret":"..."}
-    Megadható opcionálisan:
-      "positionIdx": 0|1|2 (ha nem adod meg, autodetekció),
-      "side":"LONG|SHORT" (BE-hez segít eldönteni a buffert),
-      "triggerBy":"MarkPrice|LastPrice|IndexPrice" (default MarkPrice)
+    Opcionális:
+      "positionIdx": 0|1|2, "side":"LONG|SHORT", "triggerBy":"MarkPrice|LastPrice|IndexPrice"
     """
     body = await req.json()
     if not _check_secret(req, body):
         return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
 
     symbol = body["symbol"]
-    action = str(body["action"]).lower()
+    act = str(body["action"]).lower()
     triggerBy = body.get("triggerBy", "MarkPrice")
     positionIdx = autodetect_position_idx(symbol, body.get("positionIdx"))
 
-    # Tick a kerekítéshez és pozíció az átlagárhoz
     tick, lot, _ = get_symbol_filters(symbol)
     pos = get_position(symbol)
 
-    if action == "be":
-        # BE ár: entry +- buffer (bázispont)
+    if act == "be":
         if not pos:
             return JSONResponse({"ok": False, "error": "no position"}, status_code=400)
         entry = float(pos.get("avgPrice") or 0)
         side  = (body.get("side") or pos.get("side") or "").upper()
-        bp = float(body.get("be_offset_bp", 10.0))  # 10 bp = 0.10%
-        factor = 1 + (bp / 10000.0) if side == "BUY" or side == "LONG" else 1 - (bp / 10000.0)
+        bp = float(body.get("be_offset_bp", 10.0))
+        factor = 1 + (bp / 10000.0) if side in ("BUY", "LONG") else 1 - (bp / 10000.0)
         be_price = entry * factor
         sl_px = round_price(be_price, tick)
-
         payload = {
             "category": "linear",
             "symbol": symbol,
@@ -488,4 +441,69 @@ async def adjust(req: Request):
         print("[RESP] trading-stop BE:", resp)
         return {"ok": True, "mode": "BE", "sl": sl_px}
 
-    elif act
+    elif act == "set_sl":
+        sl = float(body["sl"])
+        sl_px = round_price(sl, tick)
+        payload = {
+            "category": "linear",
+            "symbol": symbol,
+            "tpslMode": "Full",
+            "stopLoss": sl_px,
+            "slTriggerBy": triggerBy,
+            "positionIdx": positionIdx
+        }
+        print("[REQ] trading-stop set_sl:", payload)
+        resp = _post("/v5/position/trading-stop", payload)
+        print("[RESP] trading-stop set_sl:", resp)
+        return {"ok": True, "mode": "SL", "sl": sl_px}
+
+    elif act == "cancel_sl":
+        payload = {
+            "category": "linear",
+            "symbol": symbol,
+            "tpslMode": "Full",
+            "stopLoss": "0",
+            "positionIdx": positionIdx
+        }
+        print("[REQ] trading-stop cancel_sl:", payload)
+        resp = _post("/v5/position/trading-stop", payload)
+        print("[RESP] trading-stop cancel_sl:", resp)
+        return {"ok": True, "mode": "SL_CANCELLED"}
+
+    elif act == "trail":
+        dist = float(body["trail_dist"])
+        ts = fmt_num(dist)
+        payload = {
+            "category": "linear",
+            "symbol": symbol,
+            "tpslMode": "Full",
+            "trailingStop": ts,
+            "positionIdx": positionIdx
+        }
+        if body.get("activePrice") is not None:
+            payload["activePrice"] = fmt_num(float(body["activePrice"]))
+        print("[REQ] trading-stop trail:", payload)
+        resp = _post("/v5/position/trading-stop", payload)
+        print("[RESP] trading-stop trail:", resp)
+        return {"ok": True, "mode": "TRAIL", "distance": ts}
+
+    elif act == "cancel_trail":
+        payload = {
+            "category": "linear",
+            "symbol": symbol,
+            "tpslMode": "Full",
+            "trailingStop": "0",
+            "positionIdx": positionIdx
+        }
+        print("[REQ] trading-stop cancel_trail:", payload)
+        resp = _post("/v5/position/trading-stop", payload)
+        print("[RESP] trading-stop cancel_trail:", resp)
+        return {"ok": True, "mode": "TRAIL_CANCELLED"}
+
+    else:
+        return JSONResponse({"ok": False, "error": f"unknown action: {act}"}, status_code=400)
+
+# -------- Local run --------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
