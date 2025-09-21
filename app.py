@@ -50,7 +50,7 @@ def _post(path: str, body: dict):
     except Exception:
         raise HTTPException(r.status_code, r.text)
     if data.get("retCode", -1) != 0:
-        # Logoljuk a teljes választ
+        # teljes válasz logolása
         raise HTTPException(400, f"POST {path} failed: {data}")
     return data
 
@@ -60,9 +60,8 @@ def _get_public(path: str, params: dict):
     return r.json()
 
 def _get_private(path: str, params: dict):
-    # v5 GET sign: timestamp + apiKey + recvWindow + queryString (kulcsok szerint rendezett)
+    # v5 GET sign: timestamp + apiKey + recvWindow + queryString (ABC szerint rendezve)
     ts = str(int(time.time() * 1000))
-    # Bybit a kulcsokat ABC szerint várja az aláírásnál
     qs = urllib.parse.urlencode(sorted(params.items()), doseq=True)
     payload = f"{ts}{API_KEY}{RECV_WINDOW}{qs}"
     headers = _sign_headers(ts, payload)
@@ -188,6 +187,18 @@ async def tv_webhook(req: Request):
 
     _ = wait_position(symbol)
 
+    # --- Auto-detect positionIdx (Hedge módhoz)
+    try:
+        cur = _get_private("/v5/position/list", {"category": "linear", "symbol": symbol})
+        lst = cur.get("result", {}).get("list", []) or []
+        if lst:
+            idx = int(lst[0].get("positionIdx") or 0)
+            if idx in (1, 2):
+                positionIdx = idx
+                print(f"[INFO] auto positionIdx={positionIdx} (hedge mode detected)")
+    except Exception as e:
+        print("[WARN] could not auto-detect positionIdx:", repr(e))
+
     # --- TP-k qty: sose legyen 0
     tp1_ratio = 0.30
     tp1_qty_f = round_to_step(qty_rounded_f * tp1_ratio, lot)
@@ -201,6 +212,7 @@ async def tv_webhook(req: Request):
             tp2_qty_f = qty_rounded_f
     print(f"[INFO] tp1_qty={tp1_qty_f} tp2_qty={tp2_qty_f}")
 
+    # --- TP rendelők (nem-halálos)
     def place_tp(px: float, qf: float, suffix: str):
         if qf <= 0:
             print(f"[SKIP] {suffix} qty=0"); return None
@@ -217,14 +229,19 @@ async def tv_webhook(req: Request):
         if positionIdx != 0:
             body_tp["positionIdx"] = positionIdx
         print(f"[REQ] order/create {suffix}:", body_tp)
-        r = _post("/v5/order/create", body_tp)
-        print(f"[RESP] order/create {suffix}:", r)
-        return r
+        try:
+            r = _post("/v5/order/create", body_tp)
+            print(f"[RESP] order/create {suffix}:", r)
+            return r
+        except HTTPException as e:
+            # ne álljon meg a folyamat – log és tovább
+            print(f"[ERR] order/create {suffix} failed:", e.detail)
+            return None
 
     tp1_resp = place_tp(tp1, tp1_qty_f, "TP1")
     tp2_resp = place_tp(tp2, tp2_qty_f, "TP2")
 
-    # --- Position-level SL
+    # --- Position-level SL (mindig fusson)
     ts_body = {"category": "linear", "symbol": symbol, "stopLoss": round_price(sl, tick)}
     if positionIdx != 0:
         ts_body["positionIdx"] = positionIdx
