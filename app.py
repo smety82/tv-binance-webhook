@@ -50,7 +50,6 @@ def _post(path: str, body: dict):
     except Exception:
         raise HTTPException(r.status_code, r.text)
     if data.get("retCode", -1) != 0:
-        # teljes válasz logolása
         raise HTTPException(400, f"POST {path} failed: {data}")
     return data
 
@@ -222,7 +221,7 @@ async def tv_webhook(req: Request):
             "orderType": "Limit",
             "price": round_price(px, tick),
             "qty": round_qty(qf, lot, min_qty),
-            "timeInForce": "GoodTillCancel",
+            "timeInForce": "GTC",               # <-- FIX: GTC
             "reduceOnly": True,
             "orderLinkId": f"{oid_base}-{suffix}"
         }
