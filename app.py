@@ -1,4 +1,4 @@
-import os, time, hmac, hashlib, json, math, urllib.parse
+import os, time, hmac, hashlib, json, math, urllib.parse, datetime
 import requests
 from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.responses import JSONResponse
@@ -44,7 +44,7 @@ def _post(path: str, body: dict):
     ts = str(int(time.time() * 1000))
     payload = f"{ts}{API_KEY}{RECV_WINDOW}{body_str}"
     headers = _sign_headers(ts, payload)
-    r = requests.post(BASE_URL + path, headers=headers, data=body_str, timeout=15)
+    r = requests.post(BASE_URL + path, headers=headers, data=body_str, timeout=20)
     try:
         data = r.json()
     except Exception:
@@ -54,17 +54,18 @@ def _post(path: str, body: dict):
     return data
 
 def _get_public(path: str, params: dict):
-    r = requests.get(BASE_URL + path, params=params, timeout=15)
+    r = requests.get(BASE_URL + path, params=params, timeout=20)
     r.raise_for_status()
     return r.json()
 
 def _get_private(path: str, params: dict):
+    # v5 GET sign: timestamp + apiKey + recvWindow + queryString (abc-sort)
     ts = str(int(time.time() * 1000))
     qs = urllib.parse.urlencode(sorted(params.items()), doseq=True)
     payload = f"{ts}{API_KEY}{RECV_WINDOW}{qs}"
     headers = _sign_headers(ts, payload)
     url = BASE_URL + path + ("?" + qs if qs else "")
-    r = requests.get(url, headers=headers, timeout=15)
+    r = requests.get(url, headers=headers, timeout=20)
     try:
         data = r.json()
     except Exception:
@@ -105,10 +106,13 @@ def _check_secret(req: Request, body: dict) -> bool:
             or req.query_params.get("secret")
             or req.headers.get("x-alert-secret")) == SHARED
 
-# -------- Position helpers --------
-def get_position(symbol: str):
+# -------- Position & orders helpers --------
+def get_position_list(symbol: str):
     pos = _get_private("/v5/position/list", {"category": "linear", "symbol": symbol})
-    lst = pos.get("result", {}).get("list", []) or []
+    return pos.get("result", {}).get("list", []) or []
+
+def get_position(symbol: str):
+    lst = get_position_list(symbol)
     return lst[0] if lst else None
 
 def autodetect_position_idx(symbol: str, explicit_idx: int | None = None) -> int:
@@ -122,6 +126,149 @@ def autodetect_position_idx(symbol: str, explicit_idx: int | None = None) -> int
         return idx if idx in (0, 1, 2) else 0
     except Exception:
         return 0
+
+def list_open_orders(symbol: str, category: str = "linear"):
+    j = _get_private("/v5/order/realtime", {"category": category, "symbol": symbol})
+    return j.get("result", {}).get("list", []) or []
+
+# -------- Equity helper for guard --------
+def get_total_equity() -> float:
+    # próbáljuk UNIFIED-et, majd CONTRACT-ot
+    try:
+        j = _get_private("/v5/account/wallet-balance", {"accountType": "UNIFIED"})
+        lst = j.get("result", {}).get("list", []) or []
+        if lst:
+            te = lst[0].get("totalEquity")
+            if te is not None:
+                return float(te)
+    except Exception:
+        pass
+    try:
+        j = _get_private("/v5/account/wallet-balance", {"accountType": "CONTRACT"})
+        lst = j.get("result", {}).get("list", []) or []
+        if lst:
+            # CONTRACT alatt lehet "equity" vagy "walletBalance"
+            te = lst[0].get("equity") or lst[0].get("walletBalance")
+            if te is not None:
+                return float(te)
+    except Exception:
+        pass
+    return 0.0
+
+# ======================================================
+# ===============  DAILY LOSS GUARD ====================
+# ======================================================
+GUARD = {
+    "enabled": False,
+    "limit_pct": None,     # pl. 1.5 (%)
+    "limit_usd": None,     # pl. 150.0
+    "baseline": None,      # baseline equity
+    "block": False,        # ha igaz, új belépő tiltva
+    "start_date": None,    # "YYYY-MM-DD" UTC
+}
+
+def _today_utc() -> str:
+    return datetime.datetime.utcnow().strftime("%Y-%m-%d")
+
+def _guard_status_now():
+    eq = get_total_equity()
+    base = GUARD["baseline"] or eq
+    dd_usd = max(0.0, base - eq)
+    dd_pct = (dd_usd / base * 100.0) if base > 0 else 0.0
+    return {
+        "enabled": GUARD["enabled"],
+        "limit_pct": GUARD["limit_pct"],
+        "limit_usd": GUARD["limit_usd"],
+        "baseline": base,
+        "equity_now": eq,
+        "drawdown_usd": dd_usd,
+        "drawdown_pct": dd_pct,
+        "block": GUARD["block"],
+        "start_date": GUARD["start_date"],
+    }
+
+def guard_reset_baseline():
+    eq = get_total_equity()
+    GUARD["baseline"] = eq
+    GUARD["block"] = False
+    GUARD["start_date"] = _today_utc()
+    return _guard_status_now()
+
+def guard_check_and_update_block() -> dict:
+    # ha nincs bekapcsolva → ok
+    if not GUARD["enabled"]:
+        return {"ok": True, "blocked": False, "reason": None, "status": _guard_status_now()}
+
+    # napváltásra baseline reset
+    if GUARD["start_date"] != _today_utc():
+        guard_reset_baseline()
+
+    st = _guard_status_now()
+    lim_pct = GUARD["limit_pct"]
+    lim_usd = GUARD["limit_usd"]
+
+    should_block = False
+    reasons = []
+    if lim_pct is not None and st["drawdown_pct"] >= float(lim_pct):
+        should_block = True
+        reasons.append(f"drawdown_pct {st['drawdown_pct']:.2f}% >= limit_pct {float(lim_pct):.2f}%")
+    if lim_usd is not None and st["drawdown_usd"] >= float(lim_usd):
+        should_block = True
+        reasons.append(f"drawdown_usd {st['drawdown_usd']:.2f} >= limit_usd {float(lim_usd):.2f}")
+
+    GUARD["block"] = should_block
+    return {
+        "ok": not should_block,
+        "blocked": should_block,
+        "reason": "; ".join(reasons) if reasons else None,
+        "status": _guard_status_now()
+    }
+
+@app.post("/guard")
+async def guard_set(req: Request):
+    """
+    Body példák:
+      {"enable":true, "limit_pct":1.5, "secret":"..."}      # %-os napi limit
+      {"enable":true, "limit_usd":100, "secret":"..."}      # $-os napi limit
+      {"enable":true, "limit_pct":1.0, "limit_usd":150}     # kombinálható
+      {"reset":true, "secret":"..."}                        # baseline reset mostani equity-re
+      {"enable":false, "secret":"..."}                      # kikapcsol
+    """
+    body = await req.json()
+    if not _check_secret(req, body):
+        return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
+
+    if body.get("reset"):
+        st = guard_reset_baseline()
+        return {"ok": True, "action": "reset", "status": st}
+
+    if "enable" in body:
+        GUARD["enabled"] = bool(body["enable"])
+        if GUARD["enabled"]:
+            guard_reset_baseline()
+        else:
+            GUARD["block"] = False
+
+    if "limit_pct" in body and body["limit_pct"] is not None:
+        GUARD["limit_pct"] = float(body["limit_pct"])
+    if "limit_usd" in body and body["limit_usd"] is not None:
+        GUARD["limit_usd"] = float(body["limit_usd"])
+
+    return {"ok": True, "status": _guard_status_now()}
+
+@app.get("/guard_status")
+async def guard_status(secret: str):
+    if secret != SHARED:
+        return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
+    return {"ok": True, "status": _guard_status_now()}
+
+@app.post("/guard_reset")
+async def guard_reset(req: Request):
+    body = await req.json()
+    if not _check_secret(req, body):
+        return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
+    st = guard_reset_baseline()
+    return {"ok": True, "status": st}
 
 # ======================================================
 # ===============  TradingView webhook  ================
@@ -147,6 +294,12 @@ async def tv_webhook(req: Request):
     missing = [k for k in required if k not in body]
     if missing:
         return JSONResponse({"ok": False, "error": f"missing fields: {missing}"}, status_code=400)
+
+    # GUARD: új belépő tiltása napi DD alapján
+    g = guard_check_and_update_block()
+    if g["blocked"]:
+        print("[GUARD] BLOCKED:", g["reason"])
+        return JSONResponse({"ok": False, "blocked": True, "reason": g["reason"], "guard": g["status"]}, status_code=200)
 
     symbol = str(body["symbol"])
     side = str(body["side"]).upper()  # LONG/SHORT
@@ -357,7 +510,7 @@ async def set_margin_mode(req: Request):
     payload = {
         "category": cat,
         "symbol": symbol,
-        "tradeMode": tmode,  # 0=cross, 1=isolated
+        "tradeMode": tmode,  # 0=cross, 1=isolated (UTA alatt Bybit korlátozhatja)
         "buyLeverage": str(lev),
         "sellLeverage": str(lev),
     }
@@ -402,6 +555,7 @@ async def adjust(req: Request):
     Body példák:
       {"symbol":"ETHUSDT","action":"be","be_offset_bp":10,"secret":"..."}
       {"symbol":"ETHUSDT","action":"set_sl","sl":4480.0,"secret":"..."}
+      {"symbol":"ETHUSDT","action":"cancel_sl","secret":"..."}
       {"symbol":"ETHUSDT","action":"trail","trail_dist":5.0,"secret":"..."}
       {"symbol":"ETHUSDT","action":"cancel_trail","secret":"..."}
     Opcionális:
@@ -419,9 +573,16 @@ async def adjust(req: Request):
     tick, lot, _ = get_symbol_filters(symbol)
     pos = get_position(symbol)
 
+    # ---- NO POSITION EARLY EXIT ----
+    size = 0.0
+    try:
+        size = float((pos or {}).get("size") or 0)
+    except Exception:
+        size = 0.0
+    if size <= 0:
+        return JSONResponse({"ok": False, "error": "no position"}, status_code=400)
+
     if act == "be":
-        if not pos:
-            return JSONResponse({"ok": False, "error": "no position"}, status_code=400)
         entry = float(pos.get("avgPrice") or 0)
         side  = (body.get("side") or pos.get("side") or "").upper()
         bp = float(body.get("be_offset_bp", 10.0))
@@ -502,6 +663,143 @@ async def adjust(req: Request):
 
     else:
         return JSONResponse({"ok": False, "error": f"unknown action: {act}"}, status_code=400)
+
+# ======================================================
+# ===============  Order management utils  =============
+# ======================================================
+@app.post("/cancel_all")
+async def cancel_all(req: Request):
+    """
+    Töröl MINDEN nyitott ordert az adott szimbólumon (TP-ket is).
+    Body: {"symbol":"ETHUSDT","secret":"..."}
+    """
+    body = await req.json()
+    if not _check_secret(req, body):
+        return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
+    symbol = body["symbol"]
+    cat = body.get("category", "linear")
+    payload = {"category": cat, "symbol": symbol}
+    print("[REQ] order/cancel-all:", payload)
+    resp = _post("/v5/order/cancel-all", payload)
+    print("[RESP] order/cancel-all:", resp)
+    return {"ok": True, "result": resp}
+
+@app.post("/cancel_orders")
+async def cancel_orders(req: Request):
+    """
+    Szelektív törlés: reduceOnly-only és/vagy oldal szerint.
+    Body példák:
+      {"symbol":"ETHUSDT","reduceOnlyOnly":true,"secret":"..."}           # csak reduceOnly TP-k
+      {"symbol":"ETHUSDT","side":"Sell","secret":"..."}                    # csak Sell oldali orderek
+      {"symbol":"ETHUSDT","side":"LONG","reduceOnlyOnly":true,"secret":"..."}  # long TP-k (Sell reduceOnly)
+    """
+    body = await req.json()
+    if not _check_secret(req, body):
+        return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
+
+    symbol = body["symbol"]
+    cat = body.get("category", "linear")
+    reduce_only_only = bool(body.get("reduceOnlyOnly", False))
+    side_in = body.get("side")  # "Buy"/"Sell" vagy "LONG"/"SHORT" is lehet
+    if side_in:
+        s = str(side_in).upper()
+        if s in ("LONG", "SHORT"):
+            side = "Sell" if s == "LONG" else "Buy"
+        else:
+            side = "Buy" if s.startswith("B") else "Sell"
+    else:
+        side = None
+
+    if not reduce_only_only and side is None:
+        payload = {"category": cat, "symbol": symbol}
+        print("[REQ] order/cancel-all:", payload)
+        resp = _post("/v5/order/cancel-all", payload)
+        print("[RESP] order/cancel-all:", resp)
+        return {"ok": True, "result": resp, "mode": "all"}
+
+    lst = list_open_orders(symbol, cat)
+    to_cancel = []
+    for o in lst:
+        if side and o.get("side") != side:
+            continue
+        if reduce_only_only and not bool(o.get("reduceOnly", False)):
+            continue
+        to_cancel.append(o)
+
+    results = []
+    for o in to_cancel:
+        payload = {"category": cat, "symbol": symbol, "orderId": o["orderId"]}
+        print("[REQ] order/cancel:", payload)
+        try:
+            r = _post("/v5/order/cancel", payload)
+            print("[RESP] order/cancel:", r)
+            results.append({"orderId": o["orderId"], "ok": True})
+        except HTTPException as e:
+            print("[ERR] order/cancel failed:", e.detail)
+            results.append({"orderId": o["orderId"], "ok": False, "err": str(e.detail)})
+
+    return {"ok": True, "cancelled": results, "total": len(results), "listed": len(lst)}
+
+@app.post("/close_position")
+async def close_position(req: Request):
+    """
+    Pozíció zárása market reduceOnly megbízásokkal.
+    Body:
+      {"symbol":"ETHUSDT","which":"both|long|short","secret":"..."}
+    - Hedge módban "both" mindkét oldalt zárja, külön-külön reduceOnly Market orderrel.
+    - One-way módban az egyetlen pozíciót zárja.
+    """
+    body = await req.json()
+    if not _check_secret(req, body):
+        return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
+
+    symbol = body["symbol"]
+    cat = body.get("category", "linear")
+    which = (body.get("which") or "both").lower()
+
+    tick, lot, min_qty = get_symbol_filters(symbol)
+    plist = get_position_list(symbol)
+    if not plist:
+        return JSONResponse({"ok": False, "error": "no position"}, status_code=400)
+
+    actions = []
+    for p in plist:
+        size = float(p.get("size") or 0)
+        if size <= 0:
+            continue
+        pos_side = (p.get("side") or "").upper()  # "Buy" / "Sell"
+        idx = int(p.get("positionIdx") or 0)
+
+        if which == "long" and pos_side != "Buy":
+            continue
+        if which == "short" and pos_side != "Sell":
+            continue
+
+        close_side = "Sell" if pos_side == "Buy" else "Buy"
+        qty_str = round_qty(size, lot, min_qty)
+        payload = {
+            "category": cat,
+            "symbol": symbol,
+            "side": close_side,
+            "orderType": "Market",
+            "timeInForce": "IOC",
+            "reduceOnly": True,
+            "qty": qty_str,
+            "orderLinkId": f"CLOSE-{symbol}-{int(time.time()*1000)}"
+        }
+        if idx in (1, 2):
+            payload["positionIdx"] = idx
+
+        print("[REQ] order/create CLOSE:", payload)
+        try:
+            resp = _post("/v5/order/create", payload)
+            print("[RESP] order/create CLOSE:", resp)
+            actions.append({"positionIdx": idx, "side": pos_side, "qty": qty_str, "ok": True})
+        except HTTPException as e:
+            print("[ERR] close failed:", e.detail)
+            actions.append({"positionIdx": idx, "side": pos_side, "qty": qty_str, "ok": False, "err": str(e.detail)})
+
+    return {"ok": True, "actions": actions}
 
 # -------- Local run --------
 if __name__ == "__main__":
