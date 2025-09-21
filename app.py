@@ -221,7 +221,7 @@ async def tv_webhook(req: Request):
             "orderType": "Limit",
             "price": round_price(px, tick),
             "qty": round_qty(qf, lot, min_qty),
-            "timeInForce": "GTC",               # <-- FIX: GTC
+            "timeInForce": "GTC",               # GTC a Bybit v5-nél
             "reduceOnly": True,
             "orderLinkId": f"{oid_base}-{suffix}"
         }
@@ -240,20 +240,75 @@ async def tv_webhook(req: Request):
     tp1_resp = place_tp(tp1, tp1_qty_f, "TP1")
     tp2_resp = place_tp(tp2, tp2_qty_f, "TP2")
 
-    # --- Position-level SL (mindig fusson)
-    ts_body = {"category": "linear", "symbol": symbol, "stopLoss": round_price(sl, tick)}
+    # --- Position-level SL (robosztus, fallback-kel)
+    sl_px = round_price(sl, tick)
+
+    ts_body = {
+        "category": "linear",
+        "symbol": symbol,
+        "stopLoss": sl_px,
+        "slTriggerBy": "MarkPrice",   # explicit trigger forrás
+        "tpslMode": "Full"            # pozíció-szintű (nem részleges) TP/SL
+    }
     if positionIdx != 0:
         ts_body["positionIdx"] = positionIdx
-    print("[REQ] position/trading-stop SL:", ts_body)
-    ts_resp = _post("/v5/position/trading-stop", ts_body)
-    print("[RESP] position/trading-stop SL:", ts_resp)
+
+    print("[REQ] position/trading-stop SL (MarkPrice):", ts_body)
+
+    sl_set = False
+    sl_mode = "position"
+
+    try:
+        ts_resp = _post("/v5/position/trading-stop", ts_body)
+        print("[RESP] position/trading-stop SL:", ts_resp)
+        sl_set = True
+    except HTTPException as e1:
+        print("[WARN] trading-stop (MarkPrice) failed:", e1.detail)
+        # próbáljuk LastPrice triggerrel
+        ts_body["slTriggerBy"] = "LastPrice"
+        print("[REQ] position/trading-stop SL (LastPrice):", ts_body)
+        try:
+            ts_resp = _post("/v5/position/trading-stop", ts_body)
+            print("[RESP] position/trading-stop SL:", ts_resp)
+            sl_set = True
+        except HTTPException as e2:
+            print("[ERR] trading-stop failed both triggers:", e2.detail)
+            # --- Fallback: reduceOnly Stop-Market (feltételes) order ---
+            # triggerDirection: LONG stopnál lefelé törés -> 2, SHORT stopnál felfelé -> 1
+            trig_dir = 2 if side == "LONG" else 1
+            fallback = {
+                "category": "linear",
+                "symbol": symbol,
+                "side": "Sell" if side == "LONG" else "Buy",
+                "orderType": "Market",
+                "timeInForce": "IOC",
+                "reduceOnly": True,
+                "qty": qty_str,
+                "triggerPrice": sl_px,
+                "triggerBy": "MarkPrice",
+                "triggerDirection": trig_dir,
+                "orderLinkId": f"{oid_base}-SLB"
+            }
+            if positionIdx != 0:
+                fallback["positionIdx"] = positionIdx
+            print("[REQ] order/create FALLBACK stop-market:", fallback)
+            try:
+                fb_resp = _post("/v5/order/create", fallback)
+                print("[RESP] order/create FALLBACK stop-market:", fb_resp)
+                sl_set = True
+                sl_mode = "stopMarket"
+            except HTTPException as e3:
+                print("[ERR] fallback stop-market failed:", e3.detail)
+                sl_set = False
+                sl_mode = "none"
 
     return {
         "ok": True,
         "entryId": entry_resp["result"]["orderId"],
         "tp1Id": tp1_resp["result"]["orderId"] if tp1_resp else None,
         "tp2Id": tp2_resp["result"]["orderId"] if tp2_resp else None,
-        "sl_set": True
+        "sl_set": sl_set,
+        "sl_mode": sl_mode
     }
 
 # -------- Local run --------
