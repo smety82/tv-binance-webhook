@@ -100,30 +100,50 @@ def round_qty(q: float, lot: float, min_qty: float) -> str:
         q_ = min_qty
     return fmt_num(q_)
 
-# -------- TV webhook --------
+# -------- Secret helper --------
+def _check_secret(req: Request, body: dict) -> bool:
+    return (body.get("secret")
+            or req.query_params.get("secret")
+            or req.headers.get("x-alert-secret")) == SHARED
+
+# -------- Position helpers --------
+def get_position(symbol: str):
+    pos = _get_private("/v5/position/list", {"category": "linear", "symbol": symbol})
+    lst = pos.get("result", {}).get("list", []) or []
+    return lst[0] if lst else None
+
+def autodetect_position_idx(symbol: str, explicit_idx: int | None = None) -> int:
+    if explicit_idx in (0, 1, 2):
+        return explicit_idx
+    try:
+        p = get_position(symbol)
+        if not p:
+            return 0
+        idx = int(p.get("positionIdx") or 0)
+        return idx if idx in (0, 1, 2) else 0
+    except Exception:
+        return 0
+
+# ======================================================
+# ===============  TradingView webhook  ================
+# ======================================================
 @app.post("/tv")
 async def tv_webhook(req: Request):
-    # Nyers log
     raw_bytes = await req.body()
     raw_text = raw_bytes.decode("utf-8", "ignore")
     print("INCOMING /tv RAW:", raw_text)
 
-    # JSON parse
     try:
         body = json.loads(raw_text) if raw_text else {}
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"invalid json: {e}"}, status_code=400)
 
-    # Secret (body/query/header)
-    secret = body.get("secret") or req.query_params.get("secret") or req.headers.get("x-alert-secret")
-    if secret != SHARED:
+    if not _check_secret(req, body):
         return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
 
-    # PING kezelés
     if body.get("type") == "ping":
         return JSONResponse({"ok": True, "kind": "ping"}, status_code=200)
 
-    # Kötelező mezők
     required = ["symbol", "side", "qty", "sl", "tp1", "tp2"]
     missing = [k for k in required if k not in body]
     if missing:
@@ -136,14 +156,13 @@ async def tv_webhook(req: Request):
     tp1 = float(body["tp1"])
     tp2 = float(body["tp2"])
 
-    # Hedge mód pozíció index (opcionális)
     positionIdx = 0
     if body.get("positionIdx") in (0, 1, 2):
         positionIdx = int(body["positionIdx"])
     elif body.get("hedge", False):
         positionIdx = 1 if side == "LONG" else 2
 
-    # Szimbólum szűrők
+    # Szűrők
     try:
         tick, lot, min_qty = get_symbol_filters(symbol)
         print(f"[INFO] {symbol} tick={tick} lot={lot} min_qty={min_qty}")
@@ -151,12 +170,11 @@ async def tv_webhook(req: Request):
         print("[ERR] instruments-info:", repr(e))
         return JSONResponse({"ok": False, "error": f"instruments-info failed: {e}"}, status_code=400)
 
-    # Qty kerekítés
     qty_rounded_f = max(round_to_step(qty_in, lot), min_qty)
     qty_str = fmt_num(qty_rounded_f)
     print(f"[INFO] qty_in={qty_in}, qty_rounded={qty_rounded_f}")
 
-    # --- Market ENTRY
+    # ENTRY
     by_side = "Buy" if side == "LONG" else "Sell"
     oid_base = f"TV-{symbol}-{int(time.time()*1000)}"
     entry = {
@@ -171,7 +189,7 @@ async def tv_webhook(req: Request):
     entry_resp = _post("/v5/order/create", entry)
     print("[RESP] order/create ENTRY:", entry_resp)
 
-    # --- Várunk, míg pozíció látszik (reduceOnly miatt)
+    # Poll position (reduceOnly miatt)
     def wait_position(symbol_: str, tries=12, sleep_s=0.35) -> float:
         for i in range(tries):
             pos = _get_private("/v5/position/list", {"category": "linear", "symbol": symbol_})
@@ -186,19 +204,18 @@ async def tv_webhook(req: Request):
 
     _ = wait_position(symbol)
 
-    # --- Auto-detect positionIdx (Hedge módhoz)
+    # Autodetect hedge idx
     try:
-        cur = _get_private("/v5/position/list", {"category": "linear", "symbol": symbol})
-        lst = cur.get("result", {}).get("list", []) or []
-        if lst:
-            idx = int(lst[0].get("positionIdx") or 0)
+        p = get_position(symbol)
+        if p:
+            idx = int(p.get("positionIdx") or 0)
             if idx in (1, 2):
                 positionIdx = idx
                 print(f"[INFO] auto positionIdx={positionIdx} (hedge mode detected)")
     except Exception as e:
         print("[WARN] could not auto-detect positionIdx:", repr(e))
 
-    # --- TP-k qty: sose legyen 0
+    # TP qty split
     tp1_ratio = 0.30
     tp1_qty_f = round_to_step(qty_rounded_f * tp1_ratio, lot)
     tp2_qty_f = round_to_step(qty_rounded_f - tp1_qty_f, lot)
@@ -211,7 +228,7 @@ async def tv_webhook(req: Request):
             tp2_qty_f = qty_rounded_f
     print(f"[INFO] tp1_qty={tp1_qty_f} tp2_qty={tp2_qty_f}")
 
-    # --- TP rendelők (nem-halálos)
+    # TP place (non-fatal)
     def place_tp(px: float, qf: float, suffix: str):
         if qf <= 0:
             print(f"[SKIP] {suffix} qty=0"); return None
@@ -221,7 +238,7 @@ async def tv_webhook(req: Request):
             "orderType": "Limit",
             "price": round_price(px, tick),
             "qty": round_qty(qf, lot, min_qty),
-            "timeInForce": "GTC",               # GTC a Bybit v5-nél
+            "timeInForce": "GTC",
             "reduceOnly": True,
             "orderLinkId": f"{oid_base}-{suffix}"
         }
@@ -233,30 +250,26 @@ async def tv_webhook(req: Request):
             print(f"[RESP] order/create {suffix}:", r)
             return r
         except HTTPException as e:
-            # ne álljon meg a folyamat – log és tovább
             print(f"[ERR] order/create {suffix} failed:", e.detail)
             return None
 
     tp1_resp = place_tp(tp1, tp1_qty_f, "TP1")
     tp2_resp = place_tp(tp2, tp2_qty_f, "TP2")
 
-    # --- Position-level SL (robosztus, fallback-kel)
+    # Robust SL via trading-stop + fallback
     sl_px = round_price(sl, tick)
-
     ts_body = {
         "category": "linear",
         "symbol": symbol,
         "stopLoss": sl_px,
-        "slTriggerBy": "MarkPrice",   # explicit trigger forrás
-        "tpslMode": "Full"            # pozíció-szintű (nem részleges) TP/SL
+        "slTriggerBy": "MarkPrice",
+        "tpslMode": "Full"
     }
     if positionIdx != 0:
         ts_body["positionIdx"] = positionIdx
 
     print("[REQ] position/trading-stop SL (MarkPrice):", ts_body)
-
-    sl_set = False
-    sl_mode = "position"
+    sl_set, sl_mode = False, "position"
 
     try:
         ts_resp = _post("/v5/position/trading-stop", ts_body)
@@ -264,7 +277,6 @@ async def tv_webhook(req: Request):
         sl_set = True
     except HTTPException as e1:
         print("[WARN] trading-stop (MarkPrice) failed:", e1.detail)
-        # próbáljuk LastPrice triggerrel
         ts_body["slTriggerBy"] = "LastPrice"
         print("[REQ] position/trading-stop SL (LastPrice):", ts_body)
         try:
@@ -273,8 +285,6 @@ async def tv_webhook(req: Request):
             sl_set = True
         except HTTPException as e2:
             print("[ERR] trading-stop failed both triggers:", e2.detail)
-            # --- Fallback: reduceOnly Stop-Market (feltételes) order ---
-            # triggerDirection: LONG stopnál lefelé törés -> 2, SHORT stopnál felfelé -> 1
             trig_dir = 2 if side == "LONG" else 1
             fallback = {
                 "category": "linear",
@@ -311,7 +321,171 @@ async def tv_webhook(req: Request):
         "sl_mode": sl_mode
     }
 
-# -------- Local run --------
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+# ======================================================
+# ==========  Admin endpoints (secured by secret) ======
+# ======================================================
+
+@app.post("/set_leverage")
+async def set_leverage(req: Request):
+    """
+    Body: {
+      "symbol":"ETHUSDT",
+      "leverage": 5,                # ha megadod, mindkét oldalra ugyanazt állítja
+      "buyLeverage": 5,             # opcionális (felülírhatja a leverage-t)
+      "sellLeverage": 5,            # opcionális (felülírhatja a leverage-t)
+      "category":"linear"           # default: linear
+      "secret":"..."
+    }
+    """
+    body = await req.json()
+    if not _check_secret(req, body):
+        return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
+    cat = body.get("category", "linear")
+    symbol = body["symbol"]
+    lev = body.get("leverage")
+    buyL = body.get("buyLeverage", lev)
+    sellL = body.get("sellLeverage", lev if buyL is None else buyL)
+    if buyL is None or sellL is None:
+        return JSONResponse({"ok": False, "error": "missing leverage/buyLeverage"}, status_code=400)
+
+    payload = {
+        "category": cat,
+        "symbol": symbol,
+        "buyLeverage": str(buyL),
+        "sellLeverage": str(sellL),
+    }
+    print("[REQ] set-leverage:", payload)
+    resp = _post("/v5/position/set-leverage", payload)
+    print("[RESP] set-leverage:", resp)
+    return {"ok": True, "result": resp}
+
+@app.post("/set_margin_mode")
+async def set_margin_mode(req: Request):
+    """
+    Body: {
+      "symbol":"ETHUSDT",
+      "mode":"isolated" | "cross",
+      "leverage": 5,                 # kötelező a by/sell lev pár miatt
+      "category":"linear",
+      "secret":"..."
+    }
+    """
+    body = await req.json()
+    if not _check_secret(req, body):
+        return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
+    cat = body.get("category", "linear")
+    symbol = body["symbol"]
+    mode = str(body["mode"]).lower()
+    tmode = 1 if mode in ("isolated", "iso") else 0
+    lev = body.get("leverage")
+    if lev is None:
+        return JSONResponse({"ok": False, "error": "missing leverage"}, status_code=400)
+
+    payload = {
+        "category": cat,
+        "symbol": symbol,
+        "tradeMode": tmode,                 # 0=cross, 1=isolated
+        "buyLeverage": str(lev),
+        "sellLeverage": str(lev),
+    }
+    print("[REQ] switch-isolated:", payload)
+    resp = _post("/v5/position/switch-isolated", payload)
+    print("[RESP] switch-isolated:", resp)
+    return {"ok": True, "result": resp}
+
+@app.post("/set_position_mode")
+async def set_position_mode(req: Request):
+    """
+    Body: {
+      "symbol":"ETHUSDT",            # vagy helyette "coin":"USDT"
+      "mode":"oneway" | "hedge",
+      "category":"linear",
+      "secret":"..."
+    }
+    """
+    body = await req.json()
+    if not _check_secret(req, body):
+        return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
+    cat = body.get("category", "linear")
+    symbol = body.get("symbol")
+    coin = body.get("coin")
+    if not symbol and not coin:
+        return JSONResponse({"ok": False, "error": "need symbol or coin"}, status_code=400)
+    mode = str(body["mode"]).lower()
+    m = 3 if mode in ("hedge", "both", "both_sides") else 0  # 0=one-way, 3=both sides (hedge)
+
+    payload = {"category": cat, "mode": m}
+    if symbol: payload["symbol"] = symbol
+    if coin:   payload["coin"]   = coin
+
+    print("[REQ] switch-mode:", payload)
+    resp = _post("/v5/position/switch-mode", payload)
+    print("[RESP] switch-mode:", resp)
+    return {"ok": True, "result": resp}
+
+@app.get("/position")
+async def read_position(symbol: str, secret: str):
+    if secret != SHARED:
+        return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
+    p = get_position(symbol)
+    return {"ok": True, "position": p}
+
+# ======================================================
+# ===============  Adjust endpoint (BE / TS) ===========
+# ======================================================
+@app.post("/adjust")
+async def adjust(req: Request):
+    """
+    Testreszabott SL/TS állítások:
+    Body példák:
+    - BE (breakeven) 10 bázispont bufferral:
+      {"symbol":"ETHUSDT","action":"be","be_offset_bp":10,"secret":"..."}
+    - Fix SL ár beállítása:
+      {"symbol":"ETHUSDT","action":"set_sl","sl":4480.0,"secret":"..."}
+    - Trailing stop 5 dollár távolsággal:
+      {"symbol":"ETHUSDT","action":"trail","trail_dist":5.0,"secret":"..."}
+    - Trailing törlése:
+      {"symbol":"ETHUSDT","action":"cancel_trail","secret":"..."}
+    Megadható opcionálisan:
+      "positionIdx": 0|1|2 (ha nem adod meg, autodetekció),
+      "side":"LONG|SHORT" (BE-hez segít eldönteni a buffert),
+      "triggerBy":"MarkPrice|LastPrice|IndexPrice" (default MarkPrice)
+    """
+    body = await req.json()
+    if not _check_secret(req, body):
+        return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
+
+    symbol = body["symbol"]
+    action = str(body["action"]).lower()
+    triggerBy = body.get("triggerBy", "MarkPrice")
+    positionIdx = autodetect_position_idx(symbol, body.get("positionIdx"))
+
+    # Tick a kerekítéshez és pozíció az átlagárhoz
+    tick, lot, _ = get_symbol_filters(symbol)
+    pos = get_position(symbol)
+
+    if action == "be":
+        # BE ár: entry +- buffer (bázispont)
+        if not pos:
+            return JSONResponse({"ok": False, "error": "no position"}, status_code=400)
+        entry = float(pos.get("avgPrice") or 0)
+        side  = (body.get("side") or pos.get("side") or "").upper()
+        bp = float(body.get("be_offset_bp", 10.0))  # 10 bp = 0.10%
+        factor = 1 + (bp / 10000.0) if side == "BUY" or side == "LONG" else 1 - (bp / 10000.0)
+        be_price = entry * factor
+        sl_px = round_price(be_price, tick)
+
+        payload = {
+            "category": "linear",
+            "symbol": symbol,
+            "tpslMode": "Full",
+            "stopLoss": sl_px,
+            "slTriggerBy": triggerBy,
+            "positionIdx": positionIdx
+        }
+        print("[REQ] trading-stop BE:", payload)
+        resp = _post("/v5/position/trading-stop", payload)
+        print("[RESP] trading-stop BE:", resp)
+        return {"ok": True, "mode": "BE", "sl": sl_px}
+
+    elif act
