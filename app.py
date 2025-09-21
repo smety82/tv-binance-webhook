@@ -67,22 +67,22 @@ def round_to(x, step):
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
-import json, time
+import json, time, math
 
 @app.post("/tv")
 async def tv_webhook(req: Request):
-    # --- nyers log a könnyebb hibakereséshez
+    # --- nyers log
     raw_bytes = await req.body()
     raw_text  = raw_bytes.decode("utf-8", "ignore")
     print("INCOMING /tv RAW:", raw_text)
 
-    # --- próbáljuk JSON-ná alakítani
+    # --- JSON parse
     try:
         body = json.loads(raw_text) if raw_text else {}
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"invalid json: {e}"}, status_code=400)
 
-    # --- secret több helyről (body / query / header)
+    # --- secret több helyről
     body_secret = body.get("secret")
     qp_secret   = req.query_params.get("secret")
     hdr_secret  = req.headers.get("x-alert-secret")
@@ -90,30 +90,61 @@ async def tv_webhook(req: Request):
     if secret != SHARED:
         return JSONResponse({"ok": False, "error": "bad secret"}, status_code=401)
 
-    # --- PING kezelése (debugPing a Pine-ban)
+    # --- PING
     if body.get("type") == "ping":
         return JSONResponse({"ok": True, "kind": "ping"}, status_code=200)
 
-    # --- kötelező mezők ellenőrzése (entry jelhez)
+    # --- kötelező mezők
     required = ["symbol", "side", "qty", "sl", "tp1", "tp2"]
-    missing  = [k for k in required if k not in body]
-    if missing:
-        return JSONResponse({"ok": False, "error": f"missing fields: {missing}"}, status_code=400)
+    miss = [k for k in required if k not in body]
+    if miss:
+        return JSONResponse({"ok": False, "error": f"missing fields: {miss}"}, status_code=400)
 
-    symbol = body["symbol"]
-    side   = str(body["side"]).upper()           # LONG / SHORT
+    symbol = str(body["symbol"])
+    side   = str(body["side"]).upper()          # LONG / SHORT
     qty    = float(body["qty"])
     tp1    = float(body["tp1"])
     tp2    = float(body["tp2"])
     sl     = float(body["sl"])
 
-    # --- szimbólum meta (tick/lot)
-    tick, lot, min_qty = get_sym_info(symbol)
-    def round_to(x, step):  # helyi shadow, ha külön is van definiálva, törölhető
-        import math
-        return max(math.floor(x / step) * step, step)
+    # --- szimbólum meta
+    try:
+        info = _get("/v5/market/instruments-info", {"category":"linear","symbol":symbol})
+        sym = info["result"]["list"][0]
+        tick = float(sym["priceFilter"]["tickSize"])
+        lot  = float(sym["lotSizeFilter"]["qtyStep"])
+        min_qty = float(sym["lotSizeFilter"]["minOrderQty"])
+        print(f"[INFO] {symbol} tick={tick} lot={lot} min_qty={min_qty}")
+    except Exception as e:
+        print("[ERR] instruments-info:", repr(e))
+        return JSONResponse({"ok": False, "error": f"instruments-info failed: {e}"}, status_code=400)
 
-    qty_rounded = max(round_to(qty, lot), min_qty)
+    def round_to(x, step):
+        return math.floor(x / step) * step
+
+    def round_price(p):
+        # tickre kerekítés, fix decimális formátum
+        return f"{round_to(p, tick):.8f}".rstrip("0").rstrip(".")
+
+    def round_qty(q):
+        # qtyStep-re lefelé kerekítés, majd min_qty biztosítása
+        q_ = round_to(q, lot)
+        if q_ < min_qty:
+            q_ = min_qty
+        # formázás
+        return f"{q_:.8f}".rstrip("0").rstrip(".")
+
+    # --- qty előkészítés
+    qty_rounded = float(round_qty(qty))
+    print(f"[INFO] qty_in={qty}, qty_rounded={qty_rounded}")
+
+    # --- hedge mód kezelése (ha kell)
+    # One-Way-ben 0 vagy elhagyható; Hedge-ben 1=Long, 2=Short
+    positionIdx = 0
+    if body.get("positionIdx") in (0,1,2):
+        positionIdx = int(body["positionIdx"])
+    elif body.get("hedge", False):
+        positionIdx = 1 if side=="LONG" else 2
 
     # --- Market belépő
     by_side = "Buy" if side == "LONG" else "Sell"
@@ -121,37 +152,64 @@ async def tv_webhook(req: Request):
     entry = {
         "category":"linear","symbol":symbol,
         "side":by_side,"orderType":"Market",
-        "qty": str(qty_rounded),
+        "qty": round_qty(qty_rounded),
         "timeInForce":"IOC","reduceOnly":False,
         "orderLinkId": oid_base
     }
-    entry_resp = _post("/v5/order/create", entry)
+    if positionIdx != 0:
+        entry["positionIdx"] = positionIdx
 
-    # --- TP-k reduceOnly Limittel (30% / 70%)
-    tp1_qty = max(round_to(qty_rounded * 0.30, lot), 0.0)
-    tp2_qty = max(round_to(qty_rounded - tp1_qty, lot), 0.0)
-    if tp1_qty == 0.0 and tp2_qty == 0.0:
-        tp2_qty = qty_rounded
+    print("[REQ] order/create ENTRY:", entry)
+    entry_resp = _post("/v5/order/create", entry)
+    print("[RESP] order/create ENTRY:", entry_resp)
+
+    # --- TP-k reduceOnly Limittel (30% / 70%) – sose legyen 0
+    tp1_qty_val = round_to(qty_rounded * 0.30, lot)
+    tp2_qty_val = round_to(qty_rounded - tp1_qty_val, lot)
+    if tp1_qty_val <= 0 and tp2_qty_val <= 0:
+        tp2_qty_val = qty_rounded
 
     def place_tp(px, q, suffix):
-        if q <= 0: return
-        _post("/v5/order/create", {
+        if q <= 0: 
+            print(f"[SKIP] {suffix} qty=0")
+            return None
+        body_tp = {
             "category":"linear","symbol":symbol,
             "side":"Sell" if side=="LONG" else "Buy",
-            "orderType":"Limit","price": str(round_to(px, tick)),
-            "qty": str(q),
-            "timeInForce":"GoodTillCancel","reduceOnly": True,
+            "orderType":"Limit",
+            "price": round_price(px),
+            "qty":   round_qty(q),
+            "timeInForce":"GoodTillCancel",
+            "reduceOnly": True,
             "orderLinkId": f"{oid_base}-{suffix}"
-        })
+        }
+        if positionIdx != 0:
+            body_tp["positionIdx"] = positionIdx
+        print(f"[REQ] order/create {suffix}:", body_tp)
+        r = _post("/v5/order/create", body_tp)
+        print(f"[RESP] order/create {suffix}:", r)
+        return r
 
-    place_tp(tp1, tp1_qty, "TP1")
-    place_tp(tp2, tp2_qty, "TP2")
+    tp1_resp = place_tp(tp1, tp1_qty_val, "TP1")
+    tp2_resp = place_tp(tp2, tp2_qty_val, "TP2")
 
-    # --- Pozíció szintű SL
-    _post("/v5/position/trading-stop", {
+    # --- Pozíció-szintű SL (és opcionálisan backup TP a teljes mennyiségre)
+    ts_body = {
         "category":"linear","symbol":symbol,
-        "stopLoss": str(round_to(sl, tick))
-    })
+        "stopLoss": round_price(sl)
+    }
+    if positionIdx != 0:
+        ts_body["positionIdx"] = positionIdx
 
-    return {"ok": True, "orderId": entry_resp["result"]["orderId"]}
+    print("[REQ] position/trading-stop SL:", ts_body)
+    ts_resp = _post("/v5/position/trading-stop", ts_body)
+    print("[RESP] position/trading-stop SL:", ts_resp)
+
+    return {
+        "ok": True,
+        "orderId": entry_resp["result"]["orderId"],
+        "tp1": tp1_resp["result"]["orderId"] if tp1_resp else None,
+        "tp2": tp2_resp["result"]["orderId"] if tp2_resp else None,
+        "sl_set": True
+    }
 
