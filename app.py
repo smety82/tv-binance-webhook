@@ -146,70 +146,95 @@ async def tv_webhook(req: Request):
     elif body.get("hedge", False):
         positionIdx = 1 if side=="LONG" else 2
 
-    # --- Market belépő
-    by_side = "Buy" if side == "LONG" else "Sell"
-    oid_base = f"TV-{symbol}-{int(time.time()*1000)}"
-    entry = {
-        "category":"linear","symbol":symbol,
-        "side":by_side,"orderType":"Market",
-        "qty": round_qty(qty_rounded),
-        "timeInForce":"IOC","reduceOnly":False,
-        "orderLinkId": oid_base
-    }
-    if positionIdx != 0:
-        entry["positionIdx"] = positionIdx
+   # --- Market belépő (meglévő kódod maradhat)
+print("[REQ] order/create ENTRY:", entry)
+entry_resp = _post("/v5/order/create", entry)
+print("[RESP] order/create ENTRY:", entry_resp)
 
-    print("[REQ] order/create ENTRY:", entry)
-    entry_resp = _post("/v5/order/create", entry)
-    print("[RESP] order/create ENTRY:", entry_resp)
+# === ÚJ: várunk, míg a pozíció tényleg látszik, hogy a reduceOnly TP-ket ne dobja vissza
+def wait_position_filled(symbol: str, want_side: str, tries=10, sleep_s=0.25) -> float:
+    # want_side: "LONG"/"SHORT"
+    import time as _t
+    for i in range(tries):
+        pos = _get("/v5/position/list", {"category":"linear", "symbol": symbol})
+        lst = pos.get("result", {}).get("list", []) or []
+        # one-way módban 1 sor van; méret string
+        size = 0.0
+        side_str = ""
+        if lst:
+            size = float(lst[0].get("size") or 0)
+            side_str = lst[0].get("side") or ""
+        print(f"[INFO] poll pos {i+1}/{tries}: side={side_str} size={size}")
+        if size > 0:
+            return size
+        _t.sleep(sleep_s)
+    return 0.0
 
-    # --- TP-k reduceOnly Limittel (30% / 70%) – sose legyen 0
-    tp1_qty_val = round_to(qty_rounded * 0.30, lot)
-    tp2_qty_val = round_to(qty_rounded - tp1_qty_val, lot)
-    if tp1_qty_val <= 0 and tp2_qty_val <= 0:
+filled_size = wait_position_filled(symbol, side)
+
+# === ÚJ: TP darabok – sose legyen 0. lot/min_qty figyelembevétele
+tp1_ratio = 0.30
+tp1_qty_val = round_to(qty_rounded * tp1_ratio, lot)
+tp2_qty_val = round_to(qty_rounded - tp1_qty_val, lot)
+
+# ha TP1 0-ra kerekedne, osszuk  a min lot szerint:
+if tp1_qty_val < min_qty:
+    if qty_rounded >= 2 * min_qty:
+        tp1_qty_val = round_to(min_qty, lot)
+        tp2_qty_val = round_to(qty_rounded - tp1_qty_val, lot)
+    else:
+        # túl kicsi az össz-mennyiség – mindent egy TP-re rakunk
+        tp1_qty_val = 0.0
         tp2_qty_val = qty_rounded
 
-    def place_tp(px, q, suffix):
-        if q <= 0: 
-            print(f"[SKIP] {suffix} qty=0")
-            return None
-        body_tp = {
-            "category":"linear","symbol":symbol,
-            "side":"Sell" if side=="LONG" else "Buy",
-            "orderType":"Limit",
-            "price": round_price(px),
-            "qty":   round_qty(q),
-            "timeInForce":"GoodTillCancel",
-            "reduceOnly": True,
-            "orderLinkId": f"{oid_base}-{suffix}"
-        }
-        if positionIdx != 0:
-            body_tp["positionIdx"] = positionIdx
-        print(f"[REQ] order/create {suffix}:", body_tp)
+print(f"[INFO] tp1_qty={tp1_qty_val} tp2_qty={tp2_qty_val} (lot={lot}, min_qty={min_qty})")
+
+# === ÚJ: reduceOnly TP-k lerakása – csak ha tényleg van nyitott pozíció
+def place_tp(px, q, suffix):
+    if q <= 0:
+        print(f"[SKIP] {suffix} qty=0"); return None
+    body_tp = {
+        "category":"linear","symbol":symbol,
+        "side":"Sell" if side=="LONG" else "Buy",
+        "orderType":"Limit",
+        "price": round_price(px),
+        "qty":   round_qty(q),
+        "timeInForce":"GoodTillCancel",
+        "reduceOnly": True,
+        "orderLinkId": f"{oid_base}-{suffix}"
+    }
+    if positionIdx != 0:
+        body_tp["positionIdx"] = positionIdx
+    print(f"[REQ] order/create {suffix}:", body_tp)
+    try:
         r = _post("/v5/order/create", body_tp)
         print(f"[RESP] order/create {suffix}:", r)
         return r
+    except Exception as e:
+        # több log, ha Bybit 400-al tér vissza (pl. "Reduce-only rule not satisfied")
+        print(f"[ERR] TP {suffix} create failed:", repr(e))
+        raise
 
-    tp1_resp = place_tp(tp1, tp1_qty_val, "TP1")
-    tp2_resp = place_tp(tp2, tp2_qty_val, "TP2")
+# TP-k
+tp1_resp = place_tp(tp1, tp1_qty_val, "TP1")
+tp2_resp = place_tp(tp2, tp2_qty_val, "TP2")
 
-    # --- Pozíció-szintű SL (és opcionálisan backup TP a teljes mennyiségre)
-    ts_body = {
-        "category":"linear","symbol":symbol,
-        "stopLoss": round_price(sl)
-    }
-    if positionIdx != 0:
-        ts_body["positionIdx"] = positionIdx
+# SL (pozíció szintű) – ezt korábban is hívtuk, hagyd meg:
+ts_body = {
+    "category":"linear","symbol":symbol,
+    "stopLoss": round_price(sl)
+}
+if positionIdx != 0:
+    ts_body["positionIdx"] = positionIdx
+print("[REQ] position/trading-stop SL:", ts_body)
+ts_resp = _post("/v5/position/trading-stop", ts_body)
+print("[RESP] position/trading-stop SL:", ts_resp)
 
-    print("[REQ] position/trading-stop SL:", ts_body)
-    ts_resp = _post("/v5/position/trading-stop", ts_body)
-    print("[RESP] position/trading-stop SL:", ts_resp)
-
-    return {
-        "ok": True,
-        "orderId": entry_resp["result"]["orderId"],
-        "tp1": tp1_resp["result"]["orderId"] if tp1_resp else None,
-        "tp2": tp2_resp["result"]["orderId"] if tp2_resp else None,
-        "sl_set": True
-    }
+return {
+    "ok": True,
+    "orderId": entry_resp["result"]["orderId"],
+    "tp1": tp1_resp["result"]["orderId"] if tp1_resp else None,
+    "tp2": tp2_resp["result"]["orderId"] if tp2_resp else None,
+    "sl_set": True
+}
 
