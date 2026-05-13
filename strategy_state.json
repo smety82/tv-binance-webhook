@@ -1,12 +1,14 @@
 {
   "global": {
-    "enabled": true,
-    "default_mode": "OFF",
-    "max_open_positions": 1,
-    "daily_loss_limit_usdt": 10.0,
-    "weekly_loss_limit_usdt": 30.0,
-    "allow_unknown_symbols": false
-  },
+  "enabled": true,
+  "default_mode": "OFF",
+  "max_open_positions": 1,
+  "daily_loss_limit_usdt": 10.0,
+  "weekly_loss_limit_usdt": 30.0,
+  "open_unrealized_loss_limit_usdt": 5.0,
+  "symbol_unrealized_loss_limit_usdt": 5.0,
+  "allow_unknown_symbols": false
+},
   "strategies": {
     "structure_swing_v134": {
       "enabled": true,
