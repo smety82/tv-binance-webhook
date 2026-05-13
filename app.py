@@ -40,7 +40,7 @@ APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="1.3.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="1.3.1")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -166,6 +166,29 @@ def ensure_trade_log() -> None:
         writer.writerow(headers)
 
 
+def sanitize_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Masks sensitive values before writing payload to logs.
+    """
+    sanitized = dict(payload)
+
+    sensitive_keys = [
+        "secret",
+        "api_key",
+        "api_secret",
+        "bybit_key",
+        "bybit_secret",
+        "password",
+        "token",
+    ]
+
+    for key in sensitive_keys:
+        if key in sanitized:
+            sanitized[key] = "***"
+
+    return sanitized
+
+
 def write_trade_log(
     body: Dict[str, Any],
     mode: str,
@@ -197,7 +220,7 @@ def write_trade_log(
         decision_reason,
         order_id,
         status,
-        json.dumps(body, ensure_ascii=False),
+        json.dumps(sanitize_payload(body), ensure_ascii=False),
     ]
 
     with TRADE_LOG_FILE.open("a", newline="", encoding="utf-8") as file:
@@ -662,7 +685,7 @@ def guard_check_block() -> bool:
 def root():
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 1.3.0</p>
+    <p>version: 1.3.1</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>time: {now_iso()}</p>
     """
@@ -987,10 +1010,15 @@ async def tv_webhook(request: Request):
         raise HTTPException(400, "Invalid JSON")
 
     if isinstance(body, dict) and body.get("type") == "ping":
-        log(f"INCOMING /tv RAW: {json.dumps(body)}")
+        log(f"INCOMING /tv RAW: {json.dumps(sanitize_payload(body))}")
         return ok({"msg": "pong"})
 
-    log(f"INCOMING /tv RAW: {raw.decode('utf-8')}")
+    try:
+        safe_raw_for_log = json.dumps(sanitize_payload(json.loads(raw)), ensure_ascii=False)
+    except Exception:
+        safe_raw_for_log = "<unparseable payload>"
+
+    log(f"INCOMING /tv RAW: {safe_raw_for_log}")
 
     verify_secret(request, body)
 
