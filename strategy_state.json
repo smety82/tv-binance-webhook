@@ -12,15 +12,15 @@
       "enabled": true,
       "symbols": {
         "SOLUSDT": {
-          "LONG": {
-            "mode": "PAPER",
-            "risk_pct": 0.10
-          },
-          "SHORT": {
-            "mode": "PAPER",
-            "risk_pct": 0.10
-          }
-        },
+  "LONG": {
+    "mode": "MICRO",
+    "risk_pct": 0.10
+  },
+  "SHORT": {
+    "mode": "MICRO",
+    "risk_pct": 0.10
+  }
+},
         "MANAUSDT": {
           "LONG": {
             "mode": "PAPER",
