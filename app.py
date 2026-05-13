@@ -31,7 +31,7 @@ BYBIT_BASE = os.getenv("BYBIT_BASE", "https://api.bybit.com").rstrip("/")
 SHARED_SECRET = os.getenv("SHARED_SECRET", "CHANGE_ME")
 RECV_WINDOW = os.getenv("RECV_WINDOW", "5000")
 
-# Safety master switch. Keep false until paper logging is verified.
+# Safety master switch. Keep false until paper/micro logging is verified.
 ENABLE_REAL_ORDERS = os.getenv("ENABLE_REAL_ORDERS", "false").lower() == "true"
 
 HTTP_TIMEOUT = 15.0
@@ -40,7 +40,7 @@ APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="1.1.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="1.2.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -267,69 +267,6 @@ def get_strategy_side_config(
     }
 
 
-def risk_engine_decision(body: Dict[str, Any]) -> Dict[str, Any]:
-    state = load_state()
-
-    strategy = body.get("strategy")
-    if not strategy:
-        return {
-            "allow_order": False,
-            "mode": "OFF",
-            "risk_pct_used": 0.0,
-            "decision": "REJECTED",
-            "reason": "MISSING_STRATEGY",
-        }
-
-    symbol = normalize_symbol(body.get("symbol", ""))
-    side = normalize_side(body.get("side", ""))
-
-    cfg = get_strategy_side_config(
-        state=state,
-        strategy=strategy,
-        symbol=symbol,
-        side=side,
-    )
-
-    mode = cfg["mode"]
-    risk_pct_used = float(cfg["risk_pct"])
-    reason = cfg["reason"]
-
-    if mode == "OFF":
-        return {
-            "allow_order": False,
-            "mode": "OFF",
-            "risk_pct_used": 0.0,
-            "decision": "REJECTED",
-            "reason": reason,
-        }
-
-    if mode == "PAPER":
-        return {
-            "allow_order": False,
-            "mode": "PAPER",
-            "risk_pct_used": 0.0,
-            "decision": "PAPER_LOGGED",
-            "reason": "PAPER_MODE",
-        }
-
-    if mode in {"MICRO", "LIVE"}:
-        return {
-            "allow_order": True,
-            "mode": mode,
-            "risk_pct_used": risk_pct_used,
-            "decision": f"ACCEPTED_{mode}",
-            "reason": "RISK_ENGINE_APPROVED",
-        }
-
-    return {
-        "allow_order": False,
-        "mode": mode,
-        "risk_pct_used": 0.0,
-        "decision": "REJECTED",
-        "reason": f"UNKNOWN_MODE_{mode}",
-    }
-
-
 # ============================================================
 # BYBIT CORE CALL
 # ============================================================
@@ -466,6 +403,40 @@ def get_position_linear(symbol: str) -> Dict[str, Any]:
     return best or positions[0]
 
 
+def get_open_positions_count() -> int:
+    """
+    Counts all open USDT linear positions.
+    Used for global max_open_positions protection.
+    """
+    resp = bybit(
+        "GET",
+        "/v5/position/list",
+        {
+            "category": "linear",
+            "settleCoin": "USDT",
+        },
+    )
+
+    positions = (resp.get("result") or {}).get("list") or []
+
+    count = 0
+    for position in positions:
+        size = abs(float(position.get("size", "0") or 0.0))
+        if size > 0:
+            count += 1
+
+    return count
+
+
+def has_open_position(symbol: str) -> bool:
+    """
+    Checks whether the specific symbol already has an open position.
+    """
+    pos = get_position_linear(symbol)
+    size = abs(float(pos.get("size", "0") or 0.0))
+    return size > 0
+
+
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
     req = {
         "category": "linear",
@@ -477,6 +448,109 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
     resp = bybit("POST", "/v5/position/set-leverage", req)
     log(f"[RESP] set-leverage: {resp}")
     return resp
+
+
+# ============================================================
+# POSITION LIMIT CHECKS
+# ============================================================
+
+def check_position_limits(state: Dict[str, Any], symbol: str) -> Optional[str]:
+    """
+    Enforces:
+    - max_open_positions from strategy_state.json
+    - no duplicate open position on the same symbol
+    """
+    global_cfg = state.get("global", {})
+    max_open_positions = int(global_cfg.get("max_open_positions", 1))
+
+    try:
+        if has_open_position(symbol):
+            return "SYMBOL_ALREADY_OPEN"
+    except Exception as exc:
+        return f"SYMBOL_POSITION_CHECK_ERROR: {exc}"
+
+    try:
+        open_count = get_open_positions_count()
+    except Exception as exc:
+        return f"OPEN_POSITION_CHECK_ERROR: {exc}"
+
+    if open_count >= max_open_positions:
+        return "MAX_OPEN_POSITIONS_REACHED"
+
+    return None
+
+
+def risk_engine_decision(body: Dict[str, Any]) -> Dict[str, Any]:
+    state = load_state()
+
+    strategy = body.get("strategy")
+    if not strategy:
+        return {
+            "allow_order": False,
+            "mode": "OFF",
+            "risk_pct_used": 0.0,
+            "decision": "REJECTED",
+            "reason": "MISSING_STRATEGY",
+        }
+
+    symbol = normalize_symbol(body.get("symbol", ""))
+    side = normalize_side(body.get("side", ""))
+
+    cfg = get_strategy_side_config(
+        state=state,
+        strategy=strategy,
+        symbol=symbol,
+        side=side,
+    )
+
+    mode = cfg["mode"]
+    risk_pct_used = float(cfg["risk_pct"])
+    reason = cfg["reason"]
+
+    if mode == "OFF":
+        return {
+            "allow_order": False,
+            "mode": "OFF",
+            "risk_pct_used": 0.0,
+            "decision": "REJECTED",
+            "reason": reason,
+        }
+
+    if mode == "PAPER":
+        return {
+            "allow_order": False,
+            "mode": "PAPER",
+            "risk_pct_used": 0.0,
+            "decision": "PAPER_LOGGED",
+            "reason": "PAPER_MODE",
+        }
+
+    if mode in {"MICRO", "LIVE"}:
+        position_limit_reason = check_position_limits(state, symbol)
+        if position_limit_reason:
+            return {
+                "allow_order": False,
+                "mode": mode,
+                "risk_pct_used": 0.0,
+                "decision": "REJECTED",
+                "reason": position_limit_reason,
+            }
+
+        return {
+            "allow_order": True,
+            "mode": mode,
+            "risk_pct_used": risk_pct_used,
+            "decision": f"ACCEPTED_{mode}",
+            "reason": "RISK_ENGINE_APPROVED",
+        }
+
+    return {
+        "allow_order": False,
+        "mode": mode,
+        "risk_pct_used": 0.0,
+        "decision": "REJECTED",
+        "reason": f"UNKNOWN_MODE_{mode}",
+    }
 
 
 # ============================================================
@@ -534,6 +608,7 @@ def guard_check_block() -> bool:
 def root():
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
+    <p>version: 1.2.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>time: {now_iso()}</p>
     """
@@ -574,6 +649,16 @@ def position(symbol: str, secret: str):
     pos = get_position_linear(symbol)
 
     return {"ok": True, "position": pos}
+
+
+@app.get("/open_positions_count")
+def open_positions_count(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    count = get_open_positions_count()
+
+    return {"ok": True, "open_positions_count": count}
 
 
 @app.post("/set_leverage")
