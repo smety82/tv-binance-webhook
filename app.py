@@ -40,7 +40,7 @@ APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="1.2.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="1.3.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -128,7 +128,7 @@ def opposite_bybit_side(bybit_side: str) -> str:
 
 
 # ============================================================
-# STRATEGY STATE / RISK ENGINE
+# STRATEGY STATE / TRADE LOG
 # ============================================================
 
 def load_state() -> Dict[str, Any]:
@@ -204,6 +204,56 @@ def write_trade_log(
         writer = csv.writer(file)
         writer.writerow(row)
 
+
+def read_trade_log_rows(limit: int = 100) -> list[Dict[str, Any]]:
+    ensure_trade_log()
+
+    with TRADE_LOG_FILE.open("r", newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
+        rows = list(reader)
+
+    if limit <= 0:
+        return rows
+
+    return rows[-limit:]
+
+
+def summarize_trade_log() -> Dict[str, Any]:
+    rows = read_trade_log_rows(limit=0)
+
+    summary: Dict[str, Any] = {
+        "total_rows": len(rows),
+        "by_decision": {},
+        "by_status": {},
+        "by_mode": {},
+        "by_symbol": {},
+        "by_strategy": {},
+        "last_timestamp": None,
+    }
+
+    for row in rows:
+        decision = row.get("decision", "UNKNOWN")
+        status = row.get("status", "UNKNOWN")
+        mode = row.get("mode", "UNKNOWN")
+        symbol = row.get("symbol", "UNKNOWN")
+        strategy = row.get("strategy", "UNKNOWN")
+
+        summary["by_decision"][decision] = summary["by_decision"].get(decision, 0) + 1
+        summary["by_status"][status] = summary["by_status"].get(status, 0) + 1
+        summary["by_mode"][mode] = summary["by_mode"].get(mode, 0) + 1
+        summary["by_symbol"][symbol] = summary["by_symbol"].get(symbol, 0) + 1
+        summary["by_strategy"][strategy] = summary["by_strategy"].get(strategy, 0) + 1
+
+        ts = row.get("timestamp")
+        if ts:
+            summary["last_timestamp"] = ts
+
+    return summary
+
+
+# ============================================================
+# STRATEGY CONFIG
+# ============================================================
 
 def get_strategy_side_config(
     state: Dict[str, Any],
@@ -480,6 +530,10 @@ def check_position_limits(state: Dict[str, Any], symbol: str) -> Optional[str]:
     return None
 
 
+# ============================================================
+# RISK ENGINE
+# ============================================================
+
 def risk_engine_decision(body: Dict[str, Any]) -> Dict[str, Any]:
     state = load_state()
 
@@ -608,7 +662,7 @@ def guard_check_block() -> bool:
 def root():
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 1.2.0</p>
+    <p>version: 1.3.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>time: {now_iso()}</p>
     """
@@ -619,6 +673,48 @@ def state(secret: Optional[str] = None):
     if secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
     return load_state()
+
+
+@app.get("/logs")
+def logs(secret: str, limit: int = 100):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    limit = max(1, min(limit, 1000))
+    rows = read_trade_log_rows(limit=limit)
+
+    return {
+        "ok": True,
+        "count": len(rows),
+        "rows": rows,
+    }
+
+
+@app.get("/logs_summary")
+def logs_summary(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    return {
+        "ok": True,
+        "summary": summarize_trade_log(),
+    }
+
+
+@app.get("/logs_csv")
+def logs_csv(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    ensure_trade_log()
+
+    with TRADE_LOG_FILE.open("r", encoding="utf-8") as file:
+        content = file.read()
+
+    return HTMLResponse(
+        content=f"<pre>{content}</pre>",
+        media_type="text/html"
+    )
 
 
 @app.get("/guard_status")
