@@ -40,7 +40,7 @@ APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="1.3.1")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="1.4.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -127,6 +127,12 @@ def opposite_bybit_side(bybit_side: str) -> str:
     return "Sell" if bybit_side == "Buy" else "Buy"
 
 
+def utc_range_last_days(days: int) -> tuple[int, int]:
+    end_s = int(time.time())
+    start_s = end_s - days * 24 * 60 * 60
+    return start_s * 1000, end_s * 1000
+
+
 # ============================================================
 # STRATEGY STATE / TRADE LOG
 # ============================================================
@@ -167,9 +173,6 @@ def ensure_trade_log() -> None:
 
 
 def sanitize_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Masks sensitive values before writing payload to logs.
-    """
     sanitized = dict(payload)
 
     sensitive_keys = [
@@ -476,11 +479,7 @@ def get_position_linear(symbol: str) -> Dict[str, Any]:
     return best or positions[0]
 
 
-def get_open_positions_count() -> int:
-    """
-    Counts all open USDT linear positions.
-    Used for global max_open_positions protection.
-    """
+def get_all_open_positions() -> list[Dict[str, Any]]:
     resp = bybit(
         "GET",
         "/v5/position/list",
@@ -492,19 +491,20 @@ def get_open_positions_count() -> int:
 
     positions = (resp.get("result") or {}).get("list") or []
 
-    count = 0
+    open_positions = []
     for position in positions:
         size = abs(float(position.get("size", "0") or 0.0))
         if size > 0:
-            count += 1
+            open_positions.append(position)
 
-    return count
+    return open_positions
+
+
+def get_open_positions_count() -> int:
+    return len(get_all_open_positions())
 
 
 def has_open_position(symbol: str) -> bool:
-    """
-    Checks whether the specific symbol already has an open position.
-    """
     pos = get_position_linear(symbol)
     size = abs(float(pos.get("size", "0") or 0.0))
     return size > 0
@@ -524,15 +524,224 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
 
 
 # ============================================================
+# CLOSED PNL / OPEN RISK HELPERS
+# ============================================================
+
+def get_closed_pnl(
+    start_ms: int,
+    end_ms: int,
+    symbol: Optional[str] = None,
+    limit: int = 100,
+) -> list[Dict[str, Any]]:
+    all_rows: list[Dict[str, Any]] = []
+    cursor: Optional[str] = None
+
+    while True:
+        params: Dict[str, Any] = {
+            "category": "linear",
+            "startTime": start_ms,
+            "endTime": end_ms,
+            "limit": limit,
+        }
+
+        if symbol:
+            params["symbol"] = normalize_symbol(symbol)
+
+        if cursor:
+            params["cursor"] = cursor
+
+        resp = bybit("GET", "/v5/position/closed-pnl", params)
+        result = resp.get("result") or {}
+        rows = result.get("list") or []
+
+        all_rows.extend(rows)
+
+        cursor = result.get("nextPageCursor")
+        if not cursor:
+            break
+
+        if len(all_rows) >= 1000:
+            break
+
+    return all_rows
+
+
+def summarize_closed_pnl(rows: list[Dict[str, Any]]) -> Dict[str, Any]:
+    total = 0.0
+    gross_profit = 0.0
+    gross_loss = 0.0
+    wins = 0
+    losses = 0
+
+    by_symbol: Dict[str, Dict[str, Any]] = {}
+
+    for row in rows:
+        symbol = row.get("symbol", "UNKNOWN")
+        pnl = float(row.get("closedPnl", "0") or 0.0)
+
+        total += pnl
+
+        if pnl > 0:
+            gross_profit += pnl
+            wins += 1
+        elif pnl < 0:
+            gross_loss += abs(pnl)
+            losses += 1
+
+        if symbol not in by_symbol:
+            by_symbol[symbol] = {
+                "trades": 0,
+                "net_pnl": 0.0,
+                "wins": 0,
+                "losses": 0,
+                "gross_profit": 0.0,
+                "gross_loss": 0.0,
+            }
+
+        by_symbol[symbol]["trades"] += 1
+        by_symbol[symbol]["net_pnl"] += pnl
+
+        if pnl > 0:
+            by_symbol[symbol]["wins"] += 1
+            by_symbol[symbol]["gross_profit"] += pnl
+        elif pnl < 0:
+            by_symbol[symbol]["losses"] += 1
+            by_symbol[symbol]["gross_loss"] += abs(pnl)
+
+    trade_count = len(rows)
+
+    profit_factor = None
+    if gross_loss > 0:
+        profit_factor = gross_profit / gross_loss
+
+    win_rate = None
+    if trade_count > 0:
+        win_rate = wins / trade_count * 100.0
+
+    for symbol, data in by_symbol.items():
+        symbol_pf = None
+        if data["gross_loss"] > 0:
+            symbol_pf = data["gross_profit"] / data["gross_loss"]
+
+        symbol_wr = None
+        if data["trades"] > 0:
+            symbol_wr = data["wins"] / data["trades"] * 100.0
+
+        data["profit_factor"] = symbol_pf
+        data["win_rate"] = symbol_wr
+
+    return {
+        "trades": trade_count,
+        "net_pnl": total,
+        "gross_profit": gross_profit,
+        "gross_loss": gross_loss,
+        "wins": wins,
+        "losses": losses,
+        "profit_factor": profit_factor,
+        "win_rate": win_rate,
+        "by_symbol": by_symbol,
+    }
+
+
+def summarize_open_risk() -> Dict[str, Any]:
+    positions = get_all_open_positions()
+
+    total_unrealized_pnl = 0.0
+    total_position_value = 0.0
+    by_symbol: Dict[str, Dict[str, Any]] = {}
+
+    for position in positions:
+        symbol = position.get("symbol", "UNKNOWN")
+        side = position.get("side", "")
+        size = float(position.get("size", "0") or 0.0)
+        avg_price = float(position.get("avgPrice", "0") or 0.0)
+        mark_price = float(position.get("markPrice", "0") or 0.0)
+        position_value = float(position.get("positionValue", "0") or 0.0)
+        unrealized = float(position.get("unrealisedPnl", "0") or 0.0)
+
+        total_unrealized_pnl += unrealized
+        total_position_value += position_value
+
+        by_symbol[symbol] = {
+            "symbol": symbol,
+            "side": side,
+            "size": size,
+            "avg_price": avg_price,
+            "mark_price": mark_price,
+            "position_value": position_value,
+            "unrealized_pnl": unrealized,
+            "liq_price": position.get("liqPrice", ""),
+            "leverage": position.get("leverage", ""),
+            "take_profit": position.get("takeProfit", ""),
+            "stop_loss": position.get("stopLoss", ""),
+        }
+
+    return {
+        "open_positions": len(positions),
+        "total_unrealized_pnl": total_unrealized_pnl,
+        "total_position_value": total_position_value,
+        "by_symbol": by_symbol,
+    }
+
+
+def check_closed_pnl_limits(state: Dict[str, Any]) -> Optional[str]:
+    global_cfg = state.get("global", {})
+
+    daily_limit = float(global_cfg.get("daily_loss_limit_usdt", 0.0) or 0.0)
+    weekly_limit = float(global_cfg.get("weekly_loss_limit_usdt", 0.0) or 0.0)
+
+    if daily_limit > 0:
+        start_ms, end_ms = utc_range_last_days(1)
+        rows = get_closed_pnl(start_ms=start_ms, end_ms=end_ms)
+        summary = summarize_closed_pnl(rows)
+        daily_net = float(summary.get("net_pnl", 0.0))
+
+        if daily_net <= -abs(daily_limit):
+            return f"DAILY_CLOSED_PNL_LIMIT_REACHED: {daily_net:.4f} USDT"
+
+    if weekly_limit > 0:
+        start_ms, end_ms = utc_range_last_days(7)
+        rows = get_closed_pnl(start_ms=start_ms, end_ms=end_ms)
+        summary = summarize_closed_pnl(rows)
+        weekly_net = float(summary.get("net_pnl", 0.0))
+
+        if weekly_net <= -abs(weekly_limit):
+            return f"WEEKLY_CLOSED_PNL_LIMIT_REACHED: {weekly_net:.4f} USDT"
+
+    return None
+
+
+def check_open_unrealized_limits(state: Dict[str, Any], symbol: str) -> Optional[str]:
+    global_cfg = state.get("global", {})
+
+    total_limit = float(global_cfg.get("open_unrealized_loss_limit_usdt", 0.0) or 0.0)
+    symbol_limit = float(global_cfg.get("symbol_unrealized_loss_limit_usdt", 0.0) or 0.0)
+
+    if total_limit <= 0 and symbol_limit <= 0:
+        return None
+
+    summary = summarize_open_risk()
+    total_unrealized = float(summary.get("total_unrealized_pnl", 0.0))
+
+    if total_limit > 0 and total_unrealized <= -abs(total_limit):
+        return f"OPEN_UNREALIZED_TOTAL_LIMIT_REACHED: {total_unrealized:.4f} USDT"
+
+    if symbol_limit > 0:
+        by_symbol = summary.get("by_symbol", {})
+        symbol_data = by_symbol.get(symbol)
+        if symbol_data:
+            symbol_unrealized = float(symbol_data.get("unrealized_pnl", 0.0))
+            if symbol_unrealized <= -abs(symbol_limit):
+                return f"OPEN_UNREALIZED_SYMBOL_LIMIT_REACHED: {symbol} {symbol_unrealized:.4f} USDT"
+
+    return None
+
+
+# ============================================================
 # POSITION LIMIT CHECKS
 # ============================================================
 
 def check_position_limits(state: Dict[str, Any], symbol: str) -> Optional[str]:
-    """
-    Enforces:
-    - max_open_positions from strategy_state.json
-    - no duplicate open position on the same symbol
-    """
     global_cfg = state.get("global", {})
     max_open_positions = int(global_cfg.get("max_open_positions", 1))
 
@@ -603,6 +812,26 @@ def risk_engine_decision(body: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     if mode in {"MICRO", "LIVE"}:
+        closed_pnl_limit_reason = check_closed_pnl_limits(state)
+        if closed_pnl_limit_reason:
+            return {
+                "allow_order": False,
+                "mode": mode,
+                "risk_pct_used": 0.0,
+                "decision": "REJECTED",
+                "reason": closed_pnl_limit_reason,
+            }
+
+        open_unrealized_limit_reason = check_open_unrealized_limits(state, symbol)
+        if open_unrealized_limit_reason:
+            return {
+                "allow_order": False,
+                "mode": mode,
+                "risk_pct_used": 0.0,
+                "decision": "REJECTED",
+                "reason": open_unrealized_limit_reason,
+            }
+
         position_limit_reason = check_position_limits(state, symbol)
         if position_limit_reason:
             return {
@@ -685,7 +914,7 @@ def guard_check_block() -> bool:
 def root():
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 1.3.1</p>
+    <p>version: 1.4.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>time: {now_iso()}</p>
     """
@@ -738,6 +967,68 @@ def logs_csv(secret: str):
         content=f"<pre>{content}</pre>",
         media_type="text/html"
     )
+
+
+@app.get("/closed_pnl_summary")
+def closed_pnl_summary(secret: str, days: int = 1, symbol: Optional[str] = None):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    days = max(1, min(days, 30))
+    start_ms, end_ms = utc_range_last_days(days)
+
+    rows = get_closed_pnl(
+        start_ms=start_ms,
+        end_ms=end_ms,
+        symbol=symbol,
+    )
+
+    summary = summarize_closed_pnl(rows)
+
+    return {
+        "ok": True,
+        "days": days,
+        "symbol": normalize_symbol(symbol) if symbol else None,
+        "start_ms": start_ms,
+        "end_ms": end_ms,
+        "summary": summary,
+    }
+
+
+@app.get("/open_risk_summary")
+def open_risk_summary(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    return {
+        "ok": True,
+        "summary": summarize_open_risk(),
+    }
+
+
+@app.get("/risk_status")
+def risk_status(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    state_data = load_state()
+
+    closed_pnl_reason = check_closed_pnl_limits(state_data)
+    open_unrealized_reason = check_open_unrealized_limits(state_data, symbol="")
+
+    return {
+        "ok": True,
+        "real_orders_enabled": ENABLE_REAL_ORDERS,
+        "closed_pnl_guard": {
+            "blocked": closed_pnl_reason is not None,
+            "reason": closed_pnl_reason,
+        },
+        "open_unrealized_guard": {
+            "blocked": open_unrealized_reason is not None,
+            "reason": open_unrealized_reason,
+        },
+        "open_risk": summarize_open_risk(),
+    }
 
 
 @app.get("/guard_status")
@@ -881,7 +1172,6 @@ def execute_bybit_trade(body: Dict[str, Any], risk_pct_used: float) -> Dict[str,
     except Exception:
         order_id = ""
 
-    # Poll position
     size = 0.0
     side_now = ""
 
@@ -917,7 +1207,6 @@ def execute_bybit_trade(body: Dict[str, Any], risk_pct_used: float) -> Dict[str,
 
     log(f"[INFO] tp1_qty={tp1_qty} tp2_qty={tp2_qty}")
 
-    # Place TP1
     if tp1_qty > 0 and tp1 is not None:
         tp1_req = {
             "category": "linear",
@@ -938,7 +1227,6 @@ def execute_bybit_trade(body: Dict[str, Any], risk_pct_used: float) -> Dict[str,
         except HTTPException as err:
             log(f"[ERR] order/create TP1 failed: {err.detail}")
 
-    # Place TP2
     if tp2_qty > 0 and tp2 is not None:
         tp2_req = {
             "category": "linear",
@@ -959,7 +1247,6 @@ def execute_bybit_trade(body: Dict[str, Any], risk_pct_used: float) -> Dict[str,
         except HTTPException as err:
             log(f"[ERR] order/create TP2 failed: {err.detail}")
 
-    # Place SL via trading stop
     if sl is not None:
         sl_req = {
             "category": "linear",
