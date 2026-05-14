@@ -31,8 +31,13 @@ BYBIT_BASE = os.getenv("BYBIT_BASE", "https://api.bybit.com").rstrip("/")
 SHARED_SECRET = os.getenv("SHARED_SECRET", "CHANGE_ME")
 RECV_WINDOW = os.getenv("RECV_WINDOW", "5000")
 
-# Safety master switch. Keep false until paper/micro logging is verified.
+# Safety master switch.
 ENABLE_REAL_ORDERS = os.getenv("ENABLE_REAL_ORDERS", "false").lower() == "true"
+
+# Supabase persistent logging.
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "trade_events")
 
 HTTP_TIMEOUT = 15.0
 
@@ -40,7 +45,7 @@ APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="1.4.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="1.5.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -133,6 +138,15 @@ def utc_range_last_days(days: int) -> tuple[int, int]:
     return start_s * 1000, end_s * 1000
 
 
+def to_float_or_none(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
 # ============================================================
 # STRATEGY STATE / TRADE LOG
 # ============================================================
@@ -192,6 +206,74 @@ def sanitize_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return sanitized
 
 
+def supabase_enabled() -> bool:
+    return bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY and SUPABASE_TABLE)
+
+
+def supabase_headers(prefer: str = "return=minimal") -> Dict[str, str]:
+    return {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": prefer,
+    }
+
+
+def supabase_table_url() -> str:
+    return f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}"
+
+
+def write_supabase_trade_event(
+    body: Dict[str, Any],
+    mode: str,
+    risk_pct_used: float,
+    decision: str,
+    decision_reason: str,
+    order_id: str = "",
+    status: str = "logged",
+) -> None:
+    """
+    Writes persistent trade event into Supabase.
+    Failure here must not block trading.
+    """
+    if not supabase_enabled():
+        return
+
+    symbol = normalize_symbol(body.get("symbol", ""))
+    side = str(body.get("side", "")).upper()
+    strategy = body.get("strategy", "UNKNOWN")
+
+    payload = {
+        "timestamp_utc": now_iso(),
+        "strategy": strategy,
+        "symbol": symbol,
+        "side": side,
+        "mode": mode,
+        "signal_price": to_float_or_none(body.get("signalPrice")),
+        "sl": to_float_or_none(body.get("sl")),
+        "tp1": to_float_or_none(body.get("tp1")),
+        "tp2": to_float_or_none(body.get("tp2")),
+        "risk_pct_requested": to_float_or_none(body.get("riskPct")),
+        "risk_pct_used": risk_pct_used,
+        "decision": decision,
+        "decision_reason": decision_reason,
+        "order_id": order_id,
+        "status": status,
+        "raw_payload": sanitize_payload(body),
+    }
+
+    try:
+        resp = client.post(
+            supabase_table_url(),
+            headers=supabase_headers(),
+            json=payload,
+        )
+        if resp.status_code >= 400:
+            log(f"[WARN] Supabase insert failed: {resp.status_code} {resp.text}")
+    except Exception as exc:
+        log(f"[WARN] Supabase insert exception: {exc}")
+
+
 def write_trade_log(
     body: Dict[str, Any],
     mode: str,
@@ -201,6 +283,10 @@ def write_trade_log(
     order_id: str = "",
     status: str = "logged",
 ) -> None:
+    """
+    Writes local CSV log and persistent Supabase log.
+    Supabase failure is non-blocking.
+    """
     ensure_trade_log()
 
     symbol = normalize_symbol(body.get("symbol", ""))
@@ -229,6 +315,16 @@ def write_trade_log(
     with TRADE_LOG_FILE.open("a", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)
         writer.writerow(row)
+
+    write_supabase_trade_event(
+        body=body,
+        mode=mode,
+        risk_pct_used=risk_pct_used,
+        decision=decision,
+        decision_reason=decision_reason,
+        order_id=order_id,
+        status=status,
+    )
 
 
 def read_trade_log_rows(limit: int = 100) -> list[Dict[str, Any]]:
@@ -273,6 +369,64 @@ def summarize_trade_log() -> Dict[str, Any]:
         ts = row.get("timestamp")
         if ts:
             summary["last_timestamp"] = ts
+
+    return summary
+
+
+def fetch_supabase_logs(limit: int = 100) -> list[Dict[str, Any]]:
+    if not supabase_enabled():
+        return []
+
+    safe_limit = max(1, min(limit, 1000))
+
+    params = {
+        "select": "*",
+        "order": "created_at.desc",
+        "limit": str(safe_limit),
+    }
+
+    resp = client.get(
+        supabase_table_url(),
+        headers=supabase_headers(prefer=""),
+        params=params,
+    )
+
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Supabase fetch failed: {resp.status_code} {resp.text}",
+        )
+
+    return resp.json()
+
+
+def summarize_supabase_rows(rows: list[Dict[str, Any]]) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "total_rows_sample": len(rows),
+        "by_decision": {},
+        "by_status": {},
+        "by_mode": {},
+        "by_symbol": {},
+        "by_strategy": {},
+        "latest_created_at": None,
+    }
+
+    for row in rows:
+        decision = row.get("decision") or "UNKNOWN"
+        status = row.get("status") or "UNKNOWN"
+        mode = row.get("mode") or "UNKNOWN"
+        symbol = row.get("symbol") or "UNKNOWN"
+        strategy = row.get("strategy") or "UNKNOWN"
+
+        summary["by_decision"][decision] = summary["by_decision"].get(decision, 0) + 1
+        summary["by_status"][status] = summary["by_status"].get(status, 0) + 1
+        summary["by_mode"][mode] = summary["by_mode"].get(mode, 0) + 1
+        summary["by_symbol"][symbol] = summary["by_symbol"].get(symbol, 0) + 1
+        summary["by_strategy"][strategy] = summary["by_strategy"].get(strategy, 0) + 1
+
+        created_at = row.get("created_at")
+        if created_at and summary["latest_created_at"] is None:
+            summary["latest_created_at"] = created_at
 
     return summary
 
@@ -914,8 +1068,9 @@ def guard_check_block() -> bool:
 def root():
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 1.4.0</p>
+    <p>version: 1.5.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
+    <p>supabase_enabled: {supabase_enabled()}</p>
     <p>time: {now_iso()}</p>
     """
 
@@ -965,8 +1120,52 @@ def logs_csv(secret: str):
 
     return HTMLResponse(
         content=f"<pre>{content}</pre>",
-        media_type="text/html"
+        media_type="text/html",
     )
+
+
+@app.get("/db_logs")
+def db_logs(secret: str, limit: int = 100):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    if not supabase_enabled():
+        return {
+            "ok": True,
+            "supabase_enabled": False,
+            "count": 0,
+            "rows": [],
+        }
+
+    rows = fetch_supabase_logs(limit=limit)
+
+    return {
+        "ok": True,
+        "supabase_enabled": True,
+        "count": len(rows),
+        "rows": rows,
+    }
+
+
+@app.get("/db_logs_summary")
+def db_logs_summary(secret: str, limit: int = 1000):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    if not supabase_enabled():
+        return {
+            "ok": True,
+            "supabase_enabled": False,
+            "summary": {},
+        }
+
+    rows = fetch_supabase_logs(limit=limit)
+
+    return {
+        "ok": True,
+        "supabase_enabled": True,
+        "summary": summarize_supabase_rows(rows),
+    }
 
 
 @app.get("/closed_pnl_summary")
@@ -1019,6 +1218,7 @@ def risk_status(secret: str):
     return {
         "ok": True,
         "real_orders_enabled": ENABLE_REAL_ORDERS,
+        "supabase_enabled": supabase_enabled(),
         "closed_pnl_guard": {
             "blocked": closed_pnl_reason is not None,
             "reason": closed_pnl_reason,
