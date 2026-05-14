@@ -54,27 +54,27 @@
             "risk_pct": 0.05
           },
           "SHORT": {
-            "mode": "PAPER",
+            "mode": "OFF",
             "risk_pct": 0.05
           }
         },
         "MANAUSDT": {
           "LONG": {
-            "mode": "PAPER",
+            "mode": "OFF",
             "risk_pct": 0.05
           },
           "SHORT": {
-            "mode": "PAPER",
+            "mode": "OFF",
             "risk_pct": 0.05
           }
         },
         "APEUSDT": {
           "LONG": {
-            "mode": "PAPER",
+            "mode": "OFF",
             "risk_pct": 0.05
           },
           "SHORT": {
-            "mode": "PAPER",
+            "mode": "OFF",
             "risk_pct": 0.05
           }
         }
