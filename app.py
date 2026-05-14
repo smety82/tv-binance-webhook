@@ -31,10 +31,8 @@ BYBIT_BASE = os.getenv("BYBIT_BASE", "https://api.bybit.com").rstrip("/")
 SHARED_SECRET = os.getenv("SHARED_SECRET", "CHANGE_ME")
 RECV_WINDOW = os.getenv("RECV_WINDOW", "5000")
 
-# Safety master switch.
 ENABLE_REAL_ORDERS = os.getenv("ENABLE_REAL_ORDERS", "false").lower() == "true"
 
-# Supabase persistent logging.
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "trade_events")
@@ -45,7 +43,7 @@ APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="1.5.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="1.6.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -211,12 +209,16 @@ def supabase_enabled() -> bool:
 
 
 def supabase_headers(prefer: str = "return=minimal") -> Dict[str, str]:
-    return {
+    headers = {
         "apikey": SUPABASE_SERVICE_ROLE_KEY,
         "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
         "Content-Type": "application/json",
-        "Prefer": prefer,
     }
+
+    if prefer:
+        headers["Prefer"] = prefer
+
+    return headers
 
 
 def supabase_table_url() -> str:
@@ -232,10 +234,6 @@ def write_supabase_trade_event(
     order_id: str = "",
     status: str = "logged",
 ) -> None:
-    """
-    Writes persistent trade event into Supabase.
-    Failure here must not block trading.
-    """
     if not supabase_enabled():
         return
 
@@ -283,10 +281,6 @@ def write_trade_log(
     order_id: str = "",
     status: str = "logged",
 ) -> None:
-    """
-    Writes local CSV log and persistent Supabase log.
-    Supabase failure is non-blocking.
-    """
     ensure_trade_log()
 
     symbol = normalize_symbol(body.get("symbol", ""))
@@ -400,6 +394,38 @@ def fetch_supabase_logs(limit: int = 100) -> list[Dict[str, Any]]:
     return resp.json()
 
 
+def fetch_supabase_logs_since(days: int = 1, limit: int = 5000) -> list[Dict[str, Any]]:
+    if not supabase_enabled():
+        return []
+
+    safe_days = max(1, min(days, 30))
+    safe_limit = max(1, min(limit, 10000))
+
+    start_s = int(time.time()) - safe_days * 24 * 60 * 60
+    start_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(start_s))
+
+    params = {
+        "select": "*",
+        "created_at": f"gte.{start_iso}",
+        "order": "created_at.desc",
+        "limit": str(safe_limit),
+    }
+
+    resp = client.get(
+        supabase_table_url(),
+        headers=supabase_headers(prefer=""),
+        params=params,
+    )
+
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Supabase report fetch failed: {resp.status_code} {resp.text}",
+        )
+
+    return resp.json()
+
+
 def summarize_supabase_rows(rows: list[Dict[str, Any]]) -> Dict[str, Any]:
     summary: Dict[str, Any] = {
         "total_rows_sample": len(rows),
@@ -429,6 +455,91 @@ def summarize_supabase_rows(rows: list[Dict[str, Any]]) -> Dict[str, Any]:
             summary["latest_created_at"] = created_at
 
     return summary
+
+
+def build_performance_report(days: int = 1) -> Dict[str, Any]:
+    safe_days = max(1, min(days, 30))
+    rows = fetch_supabase_logs_since(days=safe_days)
+
+    report: Dict[str, Any] = {
+        "days": safe_days,
+        "event_count": len(rows),
+        "by_strategy": {},
+        "by_symbol": {},
+        "by_side": {},
+        "by_mode": {},
+        "by_decision": {},
+        "by_status": {},
+        "strategy_symbol_matrix": {},
+        "rejections": {},
+        "orders": {
+            "order_sent": 0,
+            "order_failed": 0,
+            "paper_logged": 0,
+            "accepted_micro": 0,
+            "accepted_live": 0,
+            "rejected": 0,
+        },
+        "latest_events": rows[:20],
+    }
+
+    for row in rows:
+        strategy = row.get("strategy") or "UNKNOWN"
+        symbol = row.get("symbol") or "UNKNOWN"
+        side = row.get("side") or "UNKNOWN"
+        mode = row.get("mode") or "UNKNOWN"
+        decision = row.get("decision") or "UNKNOWN"
+        status = row.get("status") or "UNKNOWN"
+        reason = row.get("decision_reason") or "UNKNOWN"
+
+        report["by_strategy"][strategy] = report["by_strategy"].get(strategy, 0) + 1
+        report["by_symbol"][symbol] = report["by_symbol"].get(symbol, 0) + 1
+        report["by_side"][side] = report["by_side"].get(side, 0) + 1
+        report["by_mode"][mode] = report["by_mode"].get(mode, 0) + 1
+        report["by_decision"][decision] = report["by_decision"].get(decision, 0) + 1
+        report["by_status"][status] = report["by_status"].get(status, 0) + 1
+
+        matrix_key = f"{strategy}|{symbol}|{side}|{mode}"
+        if matrix_key not in report["strategy_symbol_matrix"]:
+            report["strategy_symbol_matrix"][matrix_key] = {
+                "strategy": strategy,
+                "symbol": symbol,
+                "side": side,
+                "mode": mode,
+                "count": 0,
+                "decisions": {},
+                "statuses": {},
+            }
+
+        report["strategy_symbol_matrix"][matrix_key]["count"] += 1
+        report["strategy_symbol_matrix"][matrix_key]["decisions"][decision] = (
+            report["strategy_symbol_matrix"][matrix_key]["decisions"].get(decision, 0) + 1
+        )
+        report["strategy_symbol_matrix"][matrix_key]["statuses"][status] = (
+            report["strategy_symbol_matrix"][matrix_key]["statuses"].get(status, 0) + 1
+        )
+
+        if decision == "PAPER_LOGGED":
+            report["orders"]["paper_logged"] += 1
+        elif decision == "ACCEPTED_MICRO":
+            report["orders"]["accepted_micro"] += 1
+        elif decision == "ACCEPTED_LIVE":
+            report["orders"]["accepted_live"] += 1
+        elif decision == "REJECTED":
+            report["orders"]["rejected"] += 1
+            report["rejections"][reason] = report["rejections"].get(reason, 0) + 1
+        elif decision == "ORDER_FAILED":
+            report["orders"]["order_failed"] += 1
+
+        if status == "order_sent":
+            report["orders"]["order_sent"] += 1
+
+    start_ms, end_ms = utc_range_last_days(safe_days)
+    closed_rows = get_closed_pnl(start_ms=start_ms, end_ms=end_ms)
+    report["bybit_closed_pnl"] = summarize_closed_pnl(closed_rows)
+    report["open_risk"] = summarize_open_risk()
+
+    return report
 
 
 # ============================================================
@@ -1068,7 +1179,7 @@ def guard_check_block() -> bool:
 def root():
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 1.5.0</p>
+    <p>version: 1.6.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
     <p>time: {now_iso()}</p>
@@ -1165,6 +1276,23 @@ def db_logs_summary(secret: str, limit: int = 1000):
         "ok": True,
         "supabase_enabled": True,
         "summary": summarize_supabase_rows(rows),
+    }
+
+
+@app.get("/performance_report")
+def performance_report(secret: str, days: int = 1):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    if not supabase_enabled():
+        return {
+            "ok": False,
+            "error": "Supabase is not enabled",
+        }
+
+    return {
+        "ok": True,
+        "report": build_performance_report(days=days),
     }
 
 
