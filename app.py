@@ -43,8 +43,9 @@ HTTP_TIMEOUT = 15.0
 APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
+RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="1.9.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="2.0.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -161,6 +162,65 @@ def fmt_num(value: Any, digits: int = 4) -> str:
         return f"{float(value):.{digits}f}"
     except Exception:
         return h(value)
+
+
+# ============================================================
+# RUNTIME STATE / TRADING PAUSE
+# ============================================================
+
+def default_runtime_state() -> Dict[str, Any]:
+    return {
+        "trading_paused": False,
+        "paused_at": None,
+        "resumed_at": None,
+        "pause_reason": None,
+        "updated_at": now_iso(),
+    }
+
+
+def load_runtime_state() -> Dict[str, Any]:
+    if not RUNTIME_STATE_FILE.exists():
+        state = default_runtime_state()
+        save_runtime_state(state)
+        return state
+
+    try:
+        with RUNTIME_STATE_FILE.open("r", encoding="utf-8") as file:
+            state = json.load(file)
+    except Exception:
+        state = default_runtime_state()
+        save_runtime_state(state)
+
+    for key, value in default_runtime_state().items():
+        if key not in state:
+            state[key] = value
+
+    return state
+
+
+def save_runtime_state(state: Dict[str, Any]) -> None:
+    state["updated_at"] = now_iso()
+    with RUNTIME_STATE_FILE.open("w", encoding="utf-8") as file:
+        json.dump(state, file, ensure_ascii=False, indent=2)
+
+
+def is_trading_paused() -> bool:
+    return bool(load_runtime_state().get("trading_paused", False))
+
+
+def set_trading_paused(paused: bool, reason: Optional[str] = None) -> Dict[str, Any]:
+    state = load_runtime_state()
+    state["trading_paused"] = bool(paused)
+
+    if paused:
+        state["paused_at"] = now_iso()
+        state["pause_reason"] = reason or "Manual runtime pause"
+    else:
+        state["resumed_at"] = now_iso()
+        state["pause_reason"] = None
+
+    save_runtime_state(state)
+    return state
 
 
 # ============================================================
@@ -531,6 +591,7 @@ def build_performance_report(days: int = 1) -> Dict[str, Any]:
             "accepted_micro": 0,
             "accepted_live": 0,
             "rejected": 0,
+            "runtime_paused": 0,
         },
         "latest_events": rows[:20],
     }
@@ -582,6 +643,8 @@ def build_performance_report(days: int = 1) -> Dict[str, Any]:
             report["rejections"][reason] = report["rejections"].get(reason, 0) + 1
         elif decision == "ORDER_FAILED":
             report["orders"]["order_failed"] += 1
+        elif decision == "RUNTIME_PAUSED":
+            report["orders"]["runtime_paused"] += 1
 
         if status == "order_sent":
             report["orders"]["order_sent"] += 1
@@ -715,6 +778,7 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
                 "rejected": 0,
                 "order_sent": 0,
                 "order_failed": 0,
+                "runtime_paused": 0,
                 "decisions": {},
                 "statuses": {},
                 "latest_created_at": None,
@@ -735,6 +799,8 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
             group["rejected"] += 1
         elif decision == "ORDER_FAILED":
             group["order_failed"] += 1
+        elif decision == "RUNTIME_PAUSED":
+            group["runtime_paused"] += 1
 
         if status == "order_sent":
             group["order_sent"] += 1
@@ -805,7 +871,7 @@ def badge_class(value: str) -> str:
     v = str(value).upper()
     if v in {"GOOD", "ON", "TRUE", "PAPER_LOGGED", "ACCEPTED_MICRO", "ACCEPTED_LIVE", "ORDER_SENT", "EMERGENCY_CLOSE_SENT", "CANCEL_ALL_ORDERS_SENT"}:
         return "good"
-    if v in {"WATCH", "PAPER", "MICRO", "SYSTEM"}:
+    if v in {"WATCH", "PAPER", "MICRO", "SYSTEM", "RUNTIME_PAUSED"}:
         return "watch"
     if v in {"BAD", "OFF", "FALSE", "REJECTED", "ORDER_FAILED", "ERROR"}:
         return "bad"
@@ -840,6 +906,9 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
     safe_days = max(1, min(days, 30))
 
     state_data = load_state()
+    runtime_state = load_runtime_state()
+    trading_paused = bool(runtime_state.get("trading_paused", False))
+
     open_risk = summarize_open_risk()
 
     closed_1_rows = get_closed_pnl(*utc_range_last_days(1))
@@ -891,6 +960,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
             h(item.get("order_sent")),
             h(item.get("rejected")),
             h(item.get("order_failed")),
+            h(item.get("runtime_paused", 0)),
             fmt_num(closed_data.get("net_pnl")),
             fmt_num(closed_data.get("profit_factor"), 3),
             html_badge(health_data.get("status")),
@@ -918,6 +988,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
         ["Paper logged", h(perf_orders.get("paper_logged", 0))],
         ["Accepted MICRO", h(perf_orders.get("accepted_micro", 0))],
         ["Accepted LIVE", h(perf_orders.get("accepted_live", 0))],
+        ["Runtime paused", h(perf_orders.get("runtime_paused", 0))],
         ["Order sent", h(perf_orders.get("order_sent", 0))],
         ["Order failed", h(perf_orders.get("order_failed", 0))],
         ["Rejected", h(perf_orders.get("rejected", 0))],
@@ -952,6 +1023,22 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
         </form>
         """
 
+    pause_button = ""
+    if trading_paused:
+        pause_button = f"""
+        <form method="post" action="/trading_pause_off?secret={h(secret)}"
+              onsubmit="return confirm('Resume MICRO/LIVE order execution?');">
+            <button class="goodbtn" type="submit">Resume Trading</button>
+        </form>
+        """
+    else:
+        pause_button = f"""
+        <form method="post" action="/trading_pause_on?secret={h(secret)}&reason=Manual%20dashboard%20pause"
+              onsubmit="return confirm('Pause MICRO/LIVE order execution? Signals will still be logged.');">
+            <button class="warn" type="submit">Pause Trading</button>
+        </form>
+        """
+
     nav = f"""
     <div class="nav">
         <a href="/dashboard?secret={h(secret)}&days=1">Dashboard 1D</a>
@@ -960,8 +1047,11 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
         <a href="/strategy_health?secret={h(secret)}&days={safe_days}">JSON Health</a>
         <a href="/db_logs?secret={h(secret)}&limit=20">JSON DB Logs</a>
         <a href="/risk_status?secret={h(secret)}">Risk Status</a>
+        <a href="/trading_pause_status?secret={h(secret)}">Pause Status</a>
     </div>
     """
+
+    pause_card_class = "dangerbox" if trading_paused else "card"
 
     return f"""
     <!doctype html>
@@ -1101,21 +1191,33 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
                 background: #111827;
                 color: white;
             }}
+            button.goodbtn {{
+                background: #166534;
+                color: white;
+            }}
             .dangerbox {{
                 border: 1px solid #fecaca;
                 background: #fff1f2;
+                border-radius: 12px;
+                padding: 16px;
+                box-shadow: 0 1px 4px rgba(0,0,0,0.08);
             }}
         </style>
     </head>
     <body>
         <h1>TV Webhook ↔ Bybit Risk Engine Dashboard</h1>
-        <div class="muted">Version 1.9.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
+        <div class="muted">Version 2.0.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
         {nav}
 
         <div class="grid">
             <div class="card">
-                <div class="label">Real orders</div>
+                <div class="label">Real orders master</div>
                 <div class="metric">{html_badge(str(ENABLE_REAL_ORDERS))}</div>
+            </div>
+            <div class="{pause_card_class}">
+                <div class="label">Runtime trading pause</div>
+                <div class="metric">{html_badge(str(trading_paused))}</div>
+                <div class="muted">Reason: {h(runtime_state.get("pause_reason"))}</div>
             </div>
             <div class="card">
                 <div class="label">Supabase</div>
@@ -1138,12 +1240,18 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
                 <div class="metric">{fmt_num(closed_7.get("net_pnl"))}</div>
             </div>
             <div class="card">
-                <div class="label">Health GOOD</div>
-                <div class="metric">{h(health_counts.get("GOOD", 0))}</div>
-            </div>
-            <div class="card">
                 <div class="label">Health WATCH / BAD</div>
                 <div class="metric">{h(health_counts.get("WATCH", 0))} / {h(health_counts.get("BAD", 0))}</div>
+            </div>
+        </div>
+
+        <div class="section card">
+            <h2>Runtime Trading Control</h2>
+            <div class="muted">
+                Pause blocks MICRO/LIVE order execution immediately. TradingView signals are still accepted and logged.
+            </div>
+            <div class="controls">
+                {pause_button}
             </div>
         </div>
 
@@ -1184,12 +1292,17 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
 
         <div class="section">
             <h2>Strategy Health</h2>
-            {html_table(["Strategy", "Symbol", "Side", "Mode", "Events", "Paper", "Orders", "Rejects", "Failures", "Closed PnL", "PF", "Health", "Score", "Reasons"], health_rows)}
+            {html_table(["Strategy", "Symbol", "Side", "Mode", "Events", "Paper", "Orders", "Rejects", "Failures", "Paused", "Closed PnL", "PF", "Health", "Score", "Reasons"], health_rows)}
         </div>
 
         <div class="section">
             <h2>Latest Events</h2>
             {html_table(["Created", "Strategy", "Symbol", "Side", "Mode", "Decision", "Reason", "Status", "Order ID"], latest_rows)}
+        </div>
+
+        <div class="section">
+            <h2>Runtime State</h2>
+            <pre class="card">{h(runtime_state)}</pre>
         </div>
 
         <div class="section">
@@ -2028,10 +2141,12 @@ def emergency_close_all_impl() -> Dict[str, Any]:
 
 @app.get("/", response_class=HTMLResponse)
 def root():
+    runtime_state = load_runtime_state()
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 1.9.0</p>
+    <p>version: 2.0.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
+    <p>trading_paused: {runtime_state.get("trading_paused")}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
     <p>time: {now_iso()}</p>
     <p><a href="/dashboard?secret=REPLACE_WITH_SECRET&days=7">Dashboard</a></p>
@@ -2047,6 +2162,67 @@ def dashboard(secret: str, days: int = 7):
         content=build_dashboard_html(secret=secret, days=days),
         media_type="text/html",
     )
+
+
+@app.post("/trading_pause_on")
+def trading_pause_on(secret: str, reason: Optional[str] = None):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    state = set_trading_paused(True, reason=reason or "Manual pause")
+
+    write_system_log(
+        action="trading_pause_on",
+        symbol="SYSTEM",
+        side="",
+        decision="RUNTIME_PAUSED",
+        reason=state.get("pause_reason") or "Manual pause",
+        status="logged",
+        extra={"runtime_state": state},
+    )
+
+    return {
+        "ok": True,
+        "action": "trading_pause_on",
+        "runtime_state": state,
+    }
+
+
+@app.post("/trading_pause_off")
+def trading_pause_off(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    state = set_trading_paused(False)
+
+    write_system_log(
+        action="trading_pause_off",
+        symbol="SYSTEM",
+        side="",
+        decision="RUNTIME_RESUMED",
+        reason="Manual resume",
+        status="logged",
+        extra={"runtime_state": state},
+    )
+
+    return {
+        "ok": True,
+        "action": "trading_pause_off",
+        "runtime_state": state,
+    }
+
+
+@app.get("/trading_pause_status")
+def trading_pause_status(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    return {
+        "ok": True,
+        "runtime_state": load_runtime_state(),
+        "real_orders_enabled": ENABLE_REAL_ORDERS,
+        "effective_real_order_execution_enabled": ENABLE_REAL_ORDERS and not is_trading_paused(),
+    }
 
 
 @app.post("/emergency_close_all")
@@ -2276,10 +2452,13 @@ def risk_status(secret: str):
 
     closed_pnl_reason = check_closed_pnl_limits(state_data)
     open_unrealized_reason = check_open_unrealized_limits(state_data, symbol="")
+    runtime_state = load_runtime_state()
 
     return {
         "ok": True,
         "real_orders_enabled": ENABLE_REAL_ORDERS,
+        "trading_paused": runtime_state.get("trading_paused"),
+        "effective_real_order_execution_enabled": ENABLE_REAL_ORDERS and not runtime_state.get("trading_paused"),
         "supabase_enabled": supabase_enabled(),
         "closed_pnl_guard": {
             "blocked": closed_pnl_reason is not None,
@@ -2619,6 +2798,29 @@ async def tv_webhook(request: Request):
             {
                 "order_sent": False,
                 "decision": decision,
+            }
+        )
+
+    if is_trading_paused():
+        write_trade_log(
+            body=body,
+            mode=mode,
+            risk_pct_used=risk_pct_used,
+            decision="RUNTIME_PAUSED",
+            decision_reason="Trading paused by runtime kill switch",
+            status="blocked_by_runtime_pause",
+        )
+
+        return ok(
+            {
+                "order_sent": False,
+                "decision": {
+                    **decision,
+                    "allow_order": False,
+                    "decision": "RUNTIME_PAUSED",
+                    "reason": "Trading paused by runtime kill switch",
+                },
+                "msg": "Risk engine approved, but runtime trading pause is active.",
             }
         )
 
