@@ -44,7 +44,7 @@ APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="1.8.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="1.9.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -334,6 +334,40 @@ def write_trade_log(
         risk_pct_used=risk_pct_used,
         decision=decision,
         decision_reason=decision_reason,
+        order_id=order_id,
+        status=status,
+    )
+
+
+def write_system_log(
+    action: str,
+    symbol: str = "",
+    side: str = "",
+    decision: str = "SYSTEM_ACTION",
+    reason: str = "",
+    order_id: str = "",
+    status: str = "logged",
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    body = {
+        "strategy": "SYSTEM_EMERGENCY",
+        "symbol": normalize_symbol(symbol) if symbol else "SYSTEM",
+        "side": side,
+        "signalPrice": None,
+        "sl": None,
+        "tp1": None,
+        "tp2": None,
+        "riskPct": 0.0,
+        "action": action,
+        "extra": extra or {},
+    }
+
+    write_trade_log(
+        body=body,
+        mode="SYSTEM",
+        risk_pct_used=0.0,
+        decision=decision,
+        decision_reason=reason,
         order_id=order_id,
         status=status,
     )
@@ -769,9 +803,9 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
 
 def badge_class(value: str) -> str:
     v = str(value).upper()
-    if v in {"GOOD", "ON", "TRUE", "PAPER_LOGGED", "ACCEPTED_MICRO", "ACCEPTED_LIVE", "ORDER_SENT"}:
+    if v in {"GOOD", "ON", "TRUE", "PAPER_LOGGED", "ACCEPTED_MICRO", "ACCEPTED_LIVE", "ORDER_SENT", "EMERGENCY_CLOSE_SENT", "CANCEL_ALL_ORDERS_SENT"}:
         return "good"
-    if v in {"WATCH", "PAPER", "MICRO"}:
+    if v in {"WATCH", "PAPER", "MICRO", "SYSTEM"}:
         return "watch"
     if v in {"BAD", "OFF", "FALSE", "REJECTED", "ORDER_FAILED", "ERROR"}:
         return "bad"
@@ -890,7 +924,10 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
     ]
 
     open_positions_rows = []
+    open_position_symbols = []
+
     for symbol, data in open_risk.get("by_symbol", {}).items():
+        open_position_symbols.append(symbol)
         open_positions_rows.append([
             h(symbol),
             h(data.get("side")),
@@ -905,6 +942,16 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
         ])
 
     health_counts = health.get("status_counts", {})
+
+    per_symbol_close_buttons = ""
+    for symbol in open_position_symbols:
+        per_symbol_close_buttons += f"""
+        <form method="post" action="/emergency_close_symbol?secret={h(secret)}&symbol={h(symbol)}"
+              onsubmit="return confirm('Close {h(symbol)} position at market?');">
+            <button class="danger" type="submit">Close {h(symbol)}</button>
+        </form>
+        """
+
     nav = f"""
     <div class="nav">
         <a href="/dashboard?secret={h(secret)}&days=1">Dashboard 1D</a>
@@ -1025,11 +1072,44 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
                 padding: 2px 6px;
                 border-radius: 5px;
             }}
+            .controls {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-top: 12px;
+            }}
+            form {{
+                display: inline-block;
+                margin: 0;
+            }}
+            button {{
+                border: 0;
+                border-radius: 8px;
+                padding: 10px 14px;
+                font-weight: 700;
+                cursor: pointer;
+            }}
+            button.danger {{
+                background: #991b1b;
+                color: white;
+            }}
+            button.warn {{
+                background: #92400e;
+                color: white;
+            }}
+            button.secondary {{
+                background: #111827;
+                color: white;
+            }}
+            .dangerbox {{
+                border: 1px solid #fecaca;
+                background: #fff1f2;
+            }}
         </style>
     </head>
     <body>
         <h1>TV Webhook ↔ Bybit Risk Engine Dashboard</h1>
-        <div class="muted">Version 1.8.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
+        <div class="muted">Version 1.9.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
         {nav}
 
         <div class="grid">
@@ -1064,6 +1144,26 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
             <div class="card">
                 <div class="label">Health WATCH / BAD</div>
                 <div class="metric">{h(health_counts.get("WATCH", 0))} / {h(health_counts.get("BAD", 0))}</div>
+            </div>
+        </div>
+
+        <div class="section card dangerbox">
+            <h2>Emergency Controls</h2>
+            <div class="muted">
+                These actions send real Bybit requests. Use only if manual intervention is needed.
+            </div>
+            <div class="controls">
+                <form method="post" action="/emergency_close_all?secret={h(secret)}"
+                      onsubmit="return confirm('Close ALL open positions at market?');">
+                    <button class="danger" type="submit">Close ALL Positions</button>
+                </form>
+
+                <form method="post" action="/cancel_all_orders?secret={h(secret)}"
+                      onsubmit="return confirm('Cancel ALL open orders?');">
+                    <button class="warn" type="submit">Cancel ALL Orders</button>
+                </form>
+
+                {per_symbol_close_buttons}
             </div>
         </div>
 
@@ -1731,6 +1831,198 @@ def guard_check_block() -> bool:
 
 
 # ============================================================
+# EMERGENCY ACTIONS
+# ============================================================
+
+def cancel_all_orders_for_symbol(symbol: Optional[str] = None) -> Dict[str, Any]:
+    req: Dict[str, Any] = {
+        "category": "linear",
+        "settleCoin": "USDT",
+    }
+
+    if symbol:
+        req.pop("settleCoin", None)
+        req["symbol"] = normalize_symbol(symbol)
+
+    log(f"[REQ] order/cancel-all: {req}")
+    resp = bybit("POST", "/v5/order/cancel-all", req)
+    log(f"[RESP] order/cancel-all: {resp}")
+
+    return resp
+
+
+def close_position_market(position: Dict[str, Any]) -> Dict[str, Any]:
+    symbol = normalize_symbol(position.get("symbol", ""))
+    side = position.get("side", "")
+    size = abs(float(position.get("size", "0") or 0.0))
+
+    if not symbol or not side or size <= 0:
+        raise HTTPException(400, f"Invalid open position data: {position}")
+
+    _, lot_step, min_qty = get_instrument(symbol)
+
+    close_side = opposite_bybit_side(side)
+    qty_rounded = max(round_step(size, lot_step), min_qty)
+
+    link_id = f"EMERG-CLOSE-{symbol}-{now_ms()}"
+
+    req = {
+        "category": "linear",
+        "symbol": symbol,
+        "side": close_side,
+        "orderType": "Market",
+        "qty": fmt_qty(qty_rounded),
+        "timeInForce": "IOC",
+        "reduceOnly": True,
+        "orderLinkId": link_id,
+    }
+
+    log(f"[REQ] emergency close position: {req}")
+    resp = bybit("POST", "/v5/order/create", req)
+    log(f"[RESP] emergency close position: {resp}")
+
+    order_id = ""
+    try:
+        order_id = resp.get("result", {}).get("orderId", "")
+    except Exception:
+        order_id = ""
+
+    write_system_log(
+        action="emergency_close_position",
+        symbol=symbol,
+        side=close_side,
+        decision="EMERGENCY_CLOSE_SENT",
+        reason=f"Closed {symbol} {side} size={size}",
+        order_id=order_id,
+        status="order_sent",
+        extra={
+            "position": position,
+            "request": req,
+            "response": resp,
+        },
+    )
+
+    return {
+        "symbol": symbol,
+        "original_side": side,
+        "close_side": close_side,
+        "size": size,
+        "qty_sent": qty_rounded,
+        "order_id": order_id,
+        "response": resp,
+    }
+
+
+def emergency_close_symbol_impl(symbol: str) -> Dict[str, Any]:
+    symbol = normalize_symbol(symbol)
+
+    try:
+        cancel_resp = cancel_all_orders_for_symbol(symbol=symbol)
+        write_system_log(
+            action="cancel_orders_before_emergency_close_symbol",
+            symbol=symbol,
+            side="",
+            decision="CANCEL_ALL_ORDERS_SENT",
+            reason=f"Canceled open orders for {symbol} before emergency close",
+            status="order_sent",
+            extra={"response": cancel_resp},
+        )
+    except Exception as exc:
+        cancel_resp = {"error": str(exc)}
+        write_system_log(
+            action="cancel_orders_before_emergency_close_symbol",
+            symbol=symbol,
+            side="",
+            decision="ORDER_FAILED",
+            reason=f"Cancel orders failed before emergency close: {exc}",
+            status="error",
+        )
+
+    pos = get_position_linear(symbol)
+    size = abs(float(pos.get("size", "0") or 0.0))
+
+    if size <= 0:
+        write_system_log(
+            action="emergency_close_symbol",
+            symbol=symbol,
+            side="",
+            decision="REJECTED",
+            reason="NO_OPEN_POSITION",
+            status="logged",
+            extra={"position": pos},
+        )
+        return {
+            "symbol": symbol,
+            "closed": False,
+            "reason": "NO_OPEN_POSITION",
+            "cancel_orders_response": cancel_resp,
+            "position": pos,
+        }
+
+    close_resp = close_position_market(pos)
+
+    return {
+        "symbol": symbol,
+        "closed": True,
+        "cancel_orders_response": cancel_resp,
+        "close_response": close_resp,
+    }
+
+
+def emergency_close_all_impl() -> Dict[str, Any]:
+    try:
+        cancel_resp = cancel_all_orders_for_symbol(symbol=None)
+        write_system_log(
+            action="cancel_orders_before_emergency_close_all",
+            symbol="SYSTEM",
+            side="",
+            decision="CANCEL_ALL_ORDERS_SENT",
+            reason="Canceled all open orders before emergency close all",
+            status="order_sent",
+            extra={"response": cancel_resp},
+        )
+    except Exception as exc:
+        cancel_resp = {"error": str(exc)}
+        write_system_log(
+            action="cancel_orders_before_emergency_close_all",
+            symbol="SYSTEM",
+            side="",
+            decision="ORDER_FAILED",
+            reason=f"Cancel all orders failed before emergency close all: {exc}",
+            status="error",
+        )
+
+    positions = get_all_open_positions()
+    results = []
+
+    for position in positions:
+        try:
+            results.append(close_position_market(position))
+        except Exception as exc:
+            symbol = normalize_symbol(position.get("symbol", "UNKNOWN"))
+            write_system_log(
+                action="emergency_close_all_position_error",
+                symbol=symbol,
+                side=position.get("side", ""),
+                decision="ORDER_FAILED",
+                reason=str(exc),
+                status="error",
+                extra={"position": position},
+            )
+            results.append({
+                "symbol": symbol,
+                "error": str(exc),
+                "position": position,
+            })
+
+    return {
+        "cancel_orders_response": cancel_resp,
+        "positions_found": len(positions),
+        "close_results": results,
+    }
+
+
+# ============================================================
 # ROUTES
 # ============================================================
 
@@ -1738,7 +2030,7 @@ def guard_check_block() -> bool:
 def root():
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 1.8.0</p>
+    <p>version: 1.9.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
     <p>time: {now_iso()}</p>
@@ -1755,6 +2047,60 @@ def dashboard(secret: str, days: int = 7):
         content=build_dashboard_html(secret=secret, days=days),
         media_type="text/html",
     )
+
+
+@app.post("/emergency_close_all")
+def emergency_close_all(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    result = emergency_close_all_impl()
+
+    return {
+        "ok": True,
+        "action": "emergency_close_all",
+        "result": result,
+    }
+
+
+@app.post("/emergency_close_symbol")
+def emergency_close_symbol(secret: str, symbol: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    result = emergency_close_symbol_impl(symbol)
+
+    return {
+        "ok": True,
+        "action": "emergency_close_symbol",
+        "symbol": normalize_symbol(symbol),
+        "result": result,
+    }
+
+
+@app.post("/cancel_all_orders")
+def cancel_all_orders(secret: str, symbol: Optional[str] = None):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    resp = cancel_all_orders_for_symbol(symbol=symbol)
+
+    write_system_log(
+        action="cancel_all_orders",
+        symbol=normalize_symbol(symbol) if symbol else "SYSTEM",
+        side="",
+        decision="CANCEL_ALL_ORDERS_SENT",
+        reason=f"Cancel all orders requested. symbol={symbol or 'ALL'}",
+        status="order_sent",
+        extra={"response": resp},
+    )
+
+    return {
+        "ok": True,
+        "action": "cancel_all_orders",
+        "symbol": normalize_symbol(symbol) if symbol else None,
+        "result": resp,
+    }
 
 
 @app.get("/state")
