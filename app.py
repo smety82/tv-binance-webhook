@@ -43,7 +43,7 @@ APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="1.6.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="1.7.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -540,6 +540,209 @@ def build_performance_report(days: int = 1) -> Dict[str, Any]:
     report["open_risk"] = summarize_open_risk()
 
     return report
+
+
+def classify_health(
+    event_count: int,
+    paper_logged: int,
+    order_sent: int,
+    rejected: int,
+    order_failed: int,
+    net_pnl: Optional[float],
+    profit_factor: Optional[float],
+    mode: str,
+) -> Dict[str, Any]:
+    reasons = []
+
+    if event_count == 0:
+        return {
+            "status": "NO_DATA",
+            "score": 0,
+            "reasons": ["No events in selected period"],
+        }
+
+    rejection_rate = rejected / event_count if event_count > 0 else 0.0
+    error_rate = order_failed / event_count if event_count > 0 else 0.0
+
+    score = 50
+
+    if event_count < 3:
+        score -= 15
+        reasons.append("Low sample size")
+
+    if rejection_rate > 0.30:
+        score -= 25
+        reasons.append(f"High rejection rate: {rejection_rate:.1%}")
+    elif rejection_rate > 0.10:
+        score -= 10
+        reasons.append(f"Moderate rejection rate: {rejection_rate:.1%}")
+
+    if error_rate > 0:
+        score -= 35
+        reasons.append(f"Order failures detected: {order_failed}")
+
+    mode_upper = mode.upper()
+
+    if mode_upper == "PAPER":
+        if paper_logged > 0 and order_failed == 0:
+            score += 10
+            reasons.append("Paper events logged successfully")
+
+        if event_count >= 5:
+            score += 10
+            reasons.append("Enough paper events for initial observation")
+
+    if mode_upper in {"MICRO", "LIVE"}:
+        if order_sent > 0:
+            score += 10
+            reasons.append("Real orders sent successfully")
+
+        if net_pnl is not None:
+            if net_pnl > 0:
+                score += 15
+                reasons.append(f"Positive closed PnL: {net_pnl:.4f}")
+            elif net_pnl < 0:
+                score -= 15
+                reasons.append(f"Negative closed PnL: {net_pnl:.4f}")
+
+        if profit_factor is not None:
+            if profit_factor >= 1.3:
+                score += 15
+                reasons.append(f"Profit factor acceptable: {profit_factor:.2f}")
+            elif profit_factor < 1.0:
+                score -= 20
+                reasons.append(f"Profit factor below 1: {profit_factor:.2f}")
+
+    score = max(0, min(score, 100))
+
+    if score >= 75:
+        status = "GOOD"
+    elif score >= 45:
+        status = "WATCH"
+    else:
+        status = "BAD"
+
+    return {
+        "status": status,
+        "score": score,
+        "reasons": reasons,
+    }
+
+
+def build_strategy_health(days: int = 7) -> Dict[str, Any]:
+    safe_days = max(1, min(days, 30))
+    rows = fetch_supabase_logs_since(days=safe_days, limit=10000)
+
+    start_ms, end_ms = utc_range_last_days(safe_days)
+    closed_rows = get_closed_pnl(start_ms=start_ms, end_ms=end_ms)
+    closed_summary = summarize_closed_pnl(closed_rows)
+    closed_by_symbol = closed_summary.get("by_symbol", {})
+
+    groups: Dict[str, Dict[str, Any]] = {}
+
+    for row in rows:
+        strategy = row.get("strategy") or "UNKNOWN"
+        symbol = row.get("symbol") or "UNKNOWN"
+        side = row.get("side") or "UNKNOWN"
+        mode = row.get("mode") or "UNKNOWN"
+        decision = row.get("decision") or "UNKNOWN"
+        status = row.get("status") or "UNKNOWN"
+
+        key = f"{strategy}|{symbol}|{side}|{mode}"
+
+        if key not in groups:
+            groups[key] = {
+                "strategy": strategy,
+                "symbol": symbol,
+                "side": side,
+                "mode": mode,
+                "event_count": 0,
+                "paper_logged": 0,
+                "accepted_micro": 0,
+                "accepted_live": 0,
+                "rejected": 0,
+                "order_sent": 0,
+                "order_failed": 0,
+                "decisions": {},
+                "statuses": {},
+                "latest_created_at": None,
+            }
+
+        group = groups[key]
+        group["event_count"] += 1
+        group["decisions"][decision] = group["decisions"].get(decision, 0) + 1
+        group["statuses"][status] = group["statuses"].get(status, 0) + 1
+
+        if decision == "PAPER_LOGGED":
+            group["paper_logged"] += 1
+        elif decision == "ACCEPTED_MICRO":
+            group["accepted_micro"] += 1
+        elif decision == "ACCEPTED_LIVE":
+            group["accepted_live"] += 1
+        elif decision == "REJECTED":
+            group["rejected"] += 1
+        elif decision == "ORDER_FAILED":
+            group["order_failed"] += 1
+
+        if status == "order_sent":
+            group["order_sent"] += 1
+
+        created_at = row.get("created_at")
+        if created_at and group["latest_created_at"] is None:
+            group["latest_created_at"] = created_at
+
+    health_rows = []
+
+    for key, group in groups.items():
+        symbol = group["symbol"]
+        symbol_pnl = closed_by_symbol.get(symbol, {})
+
+        net_pnl = symbol_pnl.get("net_pnl")
+        profit_factor = symbol_pnl.get("profit_factor")
+
+        health = classify_health(
+            event_count=int(group["event_count"]),
+            paper_logged=int(group["paper_logged"]),
+            order_sent=int(group["order_sent"]),
+            rejected=int(group["rejected"]),
+            order_failed=int(group["order_failed"]),
+            net_pnl=net_pnl,
+            profit_factor=profit_factor,
+            mode=group["mode"],
+        )
+
+        health_rows.append({
+            **group,
+            "closed_pnl_by_symbol": {
+                "net_pnl": net_pnl,
+                "profit_factor": profit_factor,
+                "trades": symbol_pnl.get("trades"),
+                "win_rate": symbol_pnl.get("win_rate"),
+            },
+            "health": health,
+        })
+
+    health_rows.sort(
+        key=lambda x: (
+            x["health"]["status"],
+            -int(x["event_count"]),
+        )
+    )
+
+    status_counts: Dict[str, int] = {}
+
+    for row in health_rows:
+        status = row["health"]["status"]
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    return {
+        "days": safe_days,
+        "group_count": len(health_rows),
+        "status_counts": status_counts,
+        "items": health_rows,
+        "bybit_closed_pnl_total": closed_summary,
+        "open_risk": summarize_open_risk(),
+    }
 
 
 # ============================================================
@@ -1179,7 +1382,7 @@ def guard_check_block() -> bool:
 def root():
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 1.6.0</p>
+    <p>version: 1.7.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
     <p>time: {now_iso()}</p>
@@ -1293,6 +1496,23 @@ def performance_report(secret: str, days: int = 1):
     return {
         "ok": True,
         "report": build_performance_report(days=days),
+    }
+
+
+@app.get("/strategy_health")
+def strategy_health(secret: str, days: int = 7):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    if not supabase_enabled():
+        return {
+            "ok": False,
+            "error": "Supabase is not enabled",
+        }
+
+    return {
+        "ok": True,
+        "health": build_strategy_health(days=days),
     }
 
 
