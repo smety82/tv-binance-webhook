@@ -2,6 +2,7 @@
 import csv
 import hmac
 import hashlib
+import html
 import json
 import math
 import os
@@ -43,7 +44,7 @@ APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="1.7.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="1.8.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -143,6 +144,23 @@ def to_float_or_none(value: Any) -> Optional[float]:
         return float(value)
     except Exception:
         return None
+
+
+def h(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return html.escape(json.dumps(value, ensure_ascii=False))
+    return html.escape(str(value))
+
+
+def fmt_num(value: Any, digits: int = 4) -> str:
+    try:
+        if value is None:
+            return ""
+        return f"{float(value):.{digits}f}"
+    except Exception:
+        return h(value)
 
 
 # ============================================================
@@ -743,6 +761,344 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
         "bybit_closed_pnl_total": closed_summary,
         "open_risk": summarize_open_risk(),
     }
+
+
+# ============================================================
+# DASHBOARD HTML
+# ============================================================
+
+def badge_class(value: str) -> str:
+    v = str(value).upper()
+    if v in {"GOOD", "ON", "TRUE", "PAPER_LOGGED", "ACCEPTED_MICRO", "ACCEPTED_LIVE", "ORDER_SENT"}:
+        return "good"
+    if v in {"WATCH", "PAPER", "MICRO"}:
+        return "watch"
+    if v in {"BAD", "OFF", "FALSE", "REJECTED", "ORDER_FAILED", "ERROR"}:
+        return "bad"
+    return "neutral"
+
+
+def html_badge(value: Any) -> str:
+    text = h(value)
+    css = badge_class(str(value))
+    return f'<span class="badge {css}">{text}</span>'
+
+
+def html_table(headers: list[str], rows: list[list[Any]]) -> str:
+    thead = "".join(f"<th>{h(header)}</th>" for header in headers)
+    body_rows = []
+
+    for row in rows:
+        cells = "".join(f"<td>{cell}</td>" for cell in row)
+        body_rows.append(f"<tr>{cells}</tr>")
+
+    tbody = "".join(body_rows) if body_rows else f'<tr><td colspan="{len(headers)}" class="muted">No data</td></tr>'
+
+    return f"""
+    <table>
+        <thead><tr>{thead}</tr></thead>
+        <tbody>{tbody}</tbody>
+    </table>
+    """
+
+
+def build_dashboard_html(secret: str, days: int = 7) -> str:
+    safe_days = max(1, min(days, 30))
+
+    state_data = load_state()
+    open_risk = summarize_open_risk()
+
+    closed_1_rows = get_closed_pnl(*utc_range_last_days(1))
+    closed_7_rows = get_closed_pnl(*utc_range_last_days(7))
+    closed_1 = summarize_closed_pnl(closed_1_rows)
+    closed_7 = summarize_closed_pnl(closed_7_rows)
+
+    performance = build_performance_report(days=safe_days) if supabase_enabled() else {}
+    health = build_strategy_health(days=safe_days) if supabase_enabled() else {
+        "items": [],
+        "status_counts": {},
+        "group_count": 0,
+    }
+
+    latest_logs = fetch_supabase_logs(limit=20) if supabase_enabled() else read_trade_log_rows(limit=20)
+
+    closed_pnl_rows = [
+        [
+            "1 day",
+            fmt_num(closed_1.get("net_pnl")),
+            fmt_num(closed_1.get("gross_profit")),
+            fmt_num(closed_1.get("gross_loss")),
+            h(closed_1.get("trades")),
+            fmt_num(closed_1.get("profit_factor"), 3),
+            fmt_num(closed_1.get("win_rate"), 2),
+        ],
+        [
+            "7 days",
+            fmt_num(closed_7.get("net_pnl")),
+            fmt_num(closed_7.get("gross_profit")),
+            fmt_num(closed_7.get("gross_loss")),
+            h(closed_7.get("trades")),
+            fmt_num(closed_7.get("profit_factor"), 3),
+            fmt_num(closed_7.get("win_rate"), 2),
+        ],
+    ]
+
+    health_rows = []
+    for item in health.get("items", []):
+        health_data = item.get("health", {})
+        closed_data = item.get("closed_pnl_by_symbol", {})
+        health_rows.append([
+            h(item.get("strategy")),
+            h(item.get("symbol")),
+            h(item.get("side")),
+            html_badge(item.get("mode")),
+            h(item.get("event_count")),
+            h(item.get("paper_logged")),
+            h(item.get("order_sent")),
+            h(item.get("rejected")),
+            h(item.get("order_failed")),
+            fmt_num(closed_data.get("net_pnl")),
+            fmt_num(closed_data.get("profit_factor"), 3),
+            html_badge(health_data.get("status")),
+            h(health_data.get("score")),
+            h(", ".join(health_data.get("reasons", []))),
+        ])
+
+    latest_rows = []
+    for row in latest_logs:
+        latest_rows.append([
+            h(row.get("created_at") or row.get("timestamp")),
+            h(row.get("strategy")),
+            h(row.get("symbol")),
+            h(row.get("side")),
+            html_badge(row.get("mode")),
+            html_badge(row.get("decision")),
+            h(row.get("decision_reason")),
+            h(row.get("status")),
+            h(row.get("order_id")),
+        ])
+
+    perf_orders = performance.get("orders", {}) if performance else {}
+    perf_rows = [
+        ["Event count", h(performance.get("event_count", 0) if performance else 0)],
+        ["Paper logged", h(perf_orders.get("paper_logged", 0))],
+        ["Accepted MICRO", h(perf_orders.get("accepted_micro", 0))],
+        ["Accepted LIVE", h(perf_orders.get("accepted_live", 0))],
+        ["Order sent", h(perf_orders.get("order_sent", 0))],
+        ["Order failed", h(perf_orders.get("order_failed", 0))],
+        ["Rejected", h(perf_orders.get("rejected", 0))],
+    ]
+
+    open_positions_rows = []
+    for symbol, data in open_risk.get("by_symbol", {}).items():
+        open_positions_rows.append([
+            h(symbol),
+            h(data.get("side")),
+            fmt_num(data.get("size")),
+            fmt_num(data.get("avg_price")),
+            fmt_num(data.get("mark_price")),
+            fmt_num(data.get("position_value")),
+            fmt_num(data.get("unrealized_pnl")),
+            h(data.get("leverage")),
+            h(data.get("stop_loss")),
+            h(data.get("take_profit")),
+        ])
+
+    health_counts = health.get("status_counts", {})
+    nav = f"""
+    <div class="nav">
+        <a href="/dashboard?secret={h(secret)}&days=1">Dashboard 1D</a>
+        <a href="/dashboard?secret={h(secret)}&days=7">Dashboard 7D</a>
+        <a href="/performance_report?secret={h(secret)}&days={safe_days}">JSON Performance</a>
+        <a href="/strategy_health?secret={h(secret)}&days={safe_days}">JSON Health</a>
+        <a href="/db_logs?secret={h(secret)}&limit=20">JSON DB Logs</a>
+        <a href="/risk_status?secret={h(secret)}">Risk Status</a>
+    </div>
+    """
+
+    return f"""
+    <!doctype html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>TV Bybit Risk Engine Dashboard</title>
+        <style>
+            body {{
+                font-family: Arial, Helvetica, sans-serif;
+                margin: 24px;
+                background: #f6f8fb;
+                color: #1f2937;
+            }}
+            h1, h2 {{
+                margin-bottom: 8px;
+            }}
+            .grid {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                gap: 14px;
+                margin: 16px 0 24px;
+            }}
+            .card {{
+                background: white;
+                border-radius: 12px;
+                padding: 16px;
+                box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+                border: 1px solid #e5e7eb;
+            }}
+            .metric {{
+                font-size: 28px;
+                font-weight: 700;
+                margin-top: 6px;
+            }}
+            .label {{
+                color: #6b7280;
+                font-size: 13px;
+            }}
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                background: white;
+                border-radius: 12px;
+                overflow: hidden;
+                box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+                margin-bottom: 24px;
+            }}
+            th, td {{
+                padding: 10px 12px;
+                border-bottom: 1px solid #e5e7eb;
+                text-align: left;
+                font-size: 13px;
+                vertical-align: top;
+            }}
+            th {{
+                background: #111827;
+                color: white;
+                font-weight: 600;
+            }}
+            tr:hover td {{
+                background: #f9fafb;
+            }}
+            .badge {{
+                display: inline-block;
+                padding: 3px 8px;
+                border-radius: 999px;
+                font-size: 12px;
+                font-weight: 700;
+            }}
+            .good {{
+                background: #dcfce7;
+                color: #166534;
+            }}
+            .watch {{
+                background: #fef3c7;
+                color: #92400e;
+            }}
+            .bad {{
+                background: #fee2e2;
+                color: #991b1b;
+            }}
+            .neutral {{
+                background: #e5e7eb;
+                color: #374151;
+            }}
+            .muted {{
+                color: #6b7280;
+            }}
+            .nav {{
+                margin: 14px 0 24px;
+            }}
+            .nav a {{
+                display: inline-block;
+                margin: 0 8px 8px 0;
+                padding: 8px 12px;
+                border-radius: 8px;
+                background: #111827;
+                color: white;
+                text-decoration: none;
+                font-size: 13px;
+            }}
+            .section {{
+                margin-top: 26px;
+            }}
+            code {{
+                background: #eef2ff;
+                padding: 2px 6px;
+                border-radius: 5px;
+            }}
+        </style>
+    </head>
+    <body>
+        <h1>TV Webhook ↔ Bybit Risk Engine Dashboard</h1>
+        <div class="muted">Version 1.8.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
+        {nav}
+
+        <div class="grid">
+            <div class="card">
+                <div class="label">Real orders</div>
+                <div class="metric">{html_badge(str(ENABLE_REAL_ORDERS))}</div>
+            </div>
+            <div class="card">
+                <div class="label">Supabase</div>
+                <div class="metric">{html_badge(str(supabase_enabled()))}</div>
+            </div>
+            <div class="card">
+                <div class="label">Open positions</div>
+                <div class="metric">{h(open_risk.get("open_positions"))}</div>
+            </div>
+            <div class="card">
+                <div class="label">Open unrealized PnL</div>
+                <div class="metric">{fmt_num(open_risk.get("total_unrealized_pnl"))}</div>
+            </div>
+            <div class="card">
+                <div class="label">Closed PnL 1D</div>
+                <div class="metric">{fmt_num(closed_1.get("net_pnl"))}</div>
+            </div>
+            <div class="card">
+                <div class="label">Closed PnL 7D</div>
+                <div class="metric">{fmt_num(closed_7.get("net_pnl"))}</div>
+            </div>
+            <div class="card">
+                <div class="label">Health GOOD</div>
+                <div class="metric">{h(health_counts.get("GOOD", 0))}</div>
+            </div>
+            <div class="card">
+                <div class="label">Health WATCH / BAD</div>
+                <div class="metric">{h(health_counts.get("WATCH", 0))} / {h(health_counts.get("BAD", 0))}</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Performance Summary</h2>
+            {html_table(["Metric", "Value"], perf_rows)}
+        </div>
+
+        <div class="section">
+            <h2>Closed PnL</h2>
+            {html_table(["Window", "Net PnL", "Gross Profit", "Gross Loss", "Trades", "PF", "Win Rate %"], closed_pnl_rows)}
+        </div>
+
+        <div class="section">
+            <h2>Open Positions / Risk</h2>
+            {html_table(["Symbol", "Side", "Size", "Avg Price", "Mark Price", "Position Value", "Unrealized PnL", "Leverage", "SL", "TP"], open_positions_rows)}
+        </div>
+
+        <div class="section">
+            <h2>Strategy Health</h2>
+            {html_table(["Strategy", "Symbol", "Side", "Mode", "Events", "Paper", "Orders", "Rejects", "Failures", "Closed PnL", "PF", "Health", "Score", "Reasons"], health_rows)}
+        </div>
+
+        <div class="section">
+            <h2>Latest Events</h2>
+            {html_table(["Created", "Strategy", "Symbol", "Side", "Mode", "Decision", "Reason", "Status", "Order ID"], latest_rows)}
+        </div>
+
+        <div class="section">
+            <h2>Configured State</h2>
+            <pre class="card">{h(state_data)}</pre>
+        </div>
+    </body>
+    </html>
+    """
 
 
 # ============================================================
@@ -1382,11 +1738,23 @@ def guard_check_block() -> bool:
 def root():
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 1.7.0</p>
+    <p>version: 1.8.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
     <p>time: {now_iso()}</p>
+    <p><a href="/dashboard?secret=REPLACE_WITH_SECRET&days=7">Dashboard</a></p>
     """
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard(secret: str, days: int = 7):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    return HTMLResponse(
+        content=build_dashboard_html(secret=secret, days=days),
+        media_type="text/html",
+    )
 
 
 @app.get("/state")
