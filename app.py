@@ -38,6 +38,11 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "trade_events")
 
+ORDER_MIN_STOP_DISTANCE_PCT = float(os.getenv("ORDER_MIN_STOP_DISTANCE_PCT", "0.15"))
+ORDER_MAX_STOP_DISTANCE_PCT = float(os.getenv("ORDER_MAX_STOP_DISTANCE_PCT", "8.0"))
+ORDER_MIN_TP1_RR = float(os.getenv("ORDER_MIN_TP1_RR", "0.8"))
+ORDER_MIN_TP2_RR = float(os.getenv("ORDER_MIN_TP2_RR", "1.2"))
+
 HTTP_TIMEOUT = 15.0
 
 APP_DIR = Path(__file__).resolve().parent
@@ -45,7 +50,7 @@ STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="2.0.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="2.1.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -569,6 +574,148 @@ def summarize_supabase_rows(rows: list[Dict[str, Any]]) -> Dict[str, Any]:
     return summary
 
 
+# ============================================================
+# ORDER QUALITY GUARD
+# ============================================================
+
+def validate_order_quality(body: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Validates TradingView signal structure before any real Bybit order.
+    This does not run for PAPER/OFF because no order is sent.
+    """
+    symbol = normalize_symbol(body.get("symbol", ""))
+    side = normalize_side(body.get("side", ""))
+
+    signal_price = to_float_or_none(body.get("signalPrice"))
+    sl = to_float_or_none(body.get("sl"))
+    tp1 = to_float_or_none(body.get("tp1"))
+    tp2 = to_float_or_none(body.get("tp2"))
+
+    reasons = []
+
+    if signal_price is None:
+        reasons.append("MISSING_SIGNAL_PRICE")
+    if sl is None:
+        reasons.append("MISSING_SL")
+    if tp1 is None:
+        reasons.append("MISSING_TP1")
+    if tp2 is None:
+        reasons.append("MISSING_TP2")
+
+    if reasons:
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "side": side,
+            "reason": ";".join(reasons),
+            "details": {
+                "signalPrice": signal_price,
+                "sl": sl,
+                "tp1": tp1,
+                "tp2": tp2,
+            },
+        }
+
+    assert signal_price is not None
+    assert sl is not None
+    assert tp1 is not None
+    assert tp2 is not None
+
+    if signal_price <= 0:
+        reasons.append("INVALID_SIGNAL_PRICE")
+    if sl <= 0:
+        reasons.append("INVALID_SL")
+    if tp1 <= 0:
+        reasons.append("INVALID_TP1")
+    if tp2 <= 0:
+        reasons.append("INVALID_TP2")
+
+    if reasons:
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "side": side,
+            "reason": ";".join(reasons),
+            "details": {
+                "signalPrice": signal_price,
+                "sl": sl,
+                "tp1": tp1,
+                "tp2": tp2,
+            },
+        }
+
+    if side == "LONG":
+        if not (sl < signal_price < tp1 < tp2):
+            reasons.append("INVALID_LONG_PRICE_STRUCTURE_EXPECTED_SL_LT_SIGNAL_LT_TP1_LT_TP2")
+
+        risk_distance = signal_price - sl
+        tp1_distance = tp1 - signal_price
+        tp2_distance = tp2 - signal_price
+
+    else:
+        if not (tp2 < tp1 < signal_price < sl):
+            reasons.append("INVALID_SHORT_PRICE_STRUCTURE_EXPECTED_TP2_LT_TP1_LT_SIGNAL_LT_SL")
+
+        risk_distance = sl - signal_price
+        tp1_distance = signal_price - tp1
+        tp2_distance = signal_price - tp2
+
+    if risk_distance <= 0:
+        reasons.append("INVALID_RISK_DISTANCE")
+
+    stop_distance_pct = (risk_distance / signal_price) * 100.0 if signal_price > 0 else 0.0
+    tp1_rr = tp1_distance / risk_distance if risk_distance > 0 else 0.0
+    tp2_rr = tp2_distance / risk_distance if risk_distance > 0 else 0.0
+
+    if stop_distance_pct < ORDER_MIN_STOP_DISTANCE_PCT:
+        reasons.append(
+            f"STOP_TOO_CLOSE_{stop_distance_pct:.4f}%_MIN_{ORDER_MIN_STOP_DISTANCE_PCT:.4f}%"
+        )
+
+    if stop_distance_pct > ORDER_MAX_STOP_DISTANCE_PCT:
+        reasons.append(
+            f"STOP_TOO_FAR_{stop_distance_pct:.4f}%_MAX_{ORDER_MAX_STOP_DISTANCE_PCT:.4f}%"
+        )
+
+    if tp1_rr < ORDER_MIN_TP1_RR:
+        reasons.append(
+            f"TP1_RR_TOO_LOW_{tp1_rr:.4f}_MIN_{ORDER_MIN_TP1_RR:.4f}"
+        )
+
+    if tp2_rr < ORDER_MIN_TP2_RR:
+        reasons.append(
+            f"TP2_RR_TOO_LOW_{tp2_rr:.4f}_MIN_{ORDER_MIN_TP2_RR:.4f}"
+        )
+
+    if tp2_rr <= tp1_rr:
+        reasons.append("TP2_RR_NOT_ABOVE_TP1_RR")
+
+    return {
+        "ok": len(reasons) == 0,
+        "symbol": symbol,
+        "side": side,
+        "reason": "OK" if not reasons else ";".join(reasons),
+        "details": {
+            "signalPrice": signal_price,
+            "sl": sl,
+            "tp1": tp1,
+            "tp2": tp2,
+            "risk_distance": risk_distance,
+            "stop_distance_pct": stop_distance_pct,
+            "tp1_rr": tp1_rr,
+            "tp2_rr": tp2_rr,
+            "min_stop_distance_pct": ORDER_MIN_STOP_DISTANCE_PCT,
+            "max_stop_distance_pct": ORDER_MAX_STOP_DISTANCE_PCT,
+            "min_tp1_rr": ORDER_MIN_TP1_RR,
+            "min_tp2_rr": ORDER_MIN_TP2_RR,
+        },
+    }
+
+
+# ============================================================
+# REPORTING
+# ============================================================
+
 def build_performance_report(days: int = 1) -> Dict[str, Any]:
     safe_days = max(1, min(days, 30))
     rows = fetch_supabase_logs_since(days=safe_days)
@@ -592,6 +739,7 @@ def build_performance_report(days: int = 1) -> Dict[str, Any]:
             "accepted_live": 0,
             "rejected": 0,
             "runtime_paused": 0,
+            "order_quality_rejected": 0,
         },
         "latest_events": rows[:20],
     }
@@ -645,6 +793,9 @@ def build_performance_report(days: int = 1) -> Dict[str, Any]:
             report["orders"]["order_failed"] += 1
         elif decision == "RUNTIME_PAUSED":
             report["orders"]["runtime_paused"] += 1
+        elif decision == "ORDER_QUALITY_REJECTED":
+            report["orders"]["order_quality_rejected"] += 1
+            report["rejections"][reason] = report["rejections"].get(reason, 0) + 1
 
         if status == "order_sent":
             report["orders"]["order_sent"] += 1
@@ -663,6 +814,7 @@ def classify_health(
     order_sent: int,
     rejected: int,
     order_failed: int,
+    order_quality_rejected: int,
     net_pnl: Optional[float],
     profit_factor: Optional[float],
     mode: str,
@@ -678,6 +830,7 @@ def classify_health(
 
     rejection_rate = rejected / event_count if event_count > 0 else 0.0
     error_rate = order_failed / event_count if event_count > 0 else 0.0
+    quality_reject_rate = order_quality_rejected / event_count if event_count > 0 else 0.0
 
     score = 50
 
@@ -691,6 +844,13 @@ def classify_health(
     elif rejection_rate > 0.10:
         score -= 10
         reasons.append(f"Moderate rejection rate: {rejection_rate:.1%}")
+
+    if quality_reject_rate > 0.30:
+        score -= 30
+        reasons.append(f"High order quality rejection rate: {quality_reject_rate:.1%}")
+    elif quality_reject_rate > 0:
+        score -= 15
+        reasons.append(f"Order quality rejections detected: {order_quality_rejected}")
 
     if error_rate > 0:
         score -= 35
@@ -779,6 +939,7 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
                 "order_sent": 0,
                 "order_failed": 0,
                 "runtime_paused": 0,
+                "order_quality_rejected": 0,
                 "decisions": {},
                 "statuses": {},
                 "latest_created_at": None,
@@ -801,6 +962,8 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
             group["order_failed"] += 1
         elif decision == "RUNTIME_PAUSED":
             group["runtime_paused"] += 1
+        elif decision == "ORDER_QUALITY_REJECTED":
+            group["order_quality_rejected"] += 1
 
         if status == "order_sent":
             group["order_sent"] += 1
@@ -824,6 +987,7 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
             order_sent=int(group["order_sent"]),
             rejected=int(group["rejected"]),
             order_failed=int(group["order_failed"]),
+            order_quality_rejected=int(group["order_quality_rejected"]),
             net_pnl=net_pnl,
             profit_factor=profit_factor,
             mode=group["mode"],
@@ -871,7 +1035,7 @@ def badge_class(value: str) -> str:
     v = str(value).upper()
     if v in {"GOOD", "ON", "TRUE", "PAPER_LOGGED", "ACCEPTED_MICRO", "ACCEPTED_LIVE", "ORDER_SENT", "EMERGENCY_CLOSE_SENT", "CANCEL_ALL_ORDERS_SENT"}:
         return "good"
-    if v in {"WATCH", "PAPER", "MICRO", "SYSTEM", "RUNTIME_PAUSED"}:
+    if v in {"WATCH", "PAPER", "MICRO", "SYSTEM", "RUNTIME_PAUSED", "ORDER_QUALITY_REJECTED"}:
         return "watch"
     if v in {"BAD", "OFF", "FALSE", "REJECTED", "ORDER_FAILED", "ERROR"}:
         return "bad"
@@ -961,6 +1125,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
             h(item.get("rejected")),
             h(item.get("order_failed")),
             h(item.get("runtime_paused", 0)),
+            h(item.get("order_quality_rejected", 0)),
             fmt_num(closed_data.get("net_pnl")),
             fmt_num(closed_data.get("profit_factor"), 3),
             html_badge(health_data.get("status")),
@@ -989,6 +1154,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
         ["Accepted MICRO", h(perf_orders.get("accepted_micro", 0))],
         ["Accepted LIVE", h(perf_orders.get("accepted_live", 0))],
         ["Runtime paused", h(perf_orders.get("runtime_paused", 0))],
+        ["Order quality rejected", h(perf_orders.get("order_quality_rejected", 0))],
         ["Order sent", h(perf_orders.get("order_sent", 0))],
         ["Order failed", h(perf_orders.get("order_failed", 0))],
         ["Rejected", h(perf_orders.get("rejected", 0))],
@@ -1048,6 +1214,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
         <a href="/db_logs?secret={h(secret)}&limit=20">JSON DB Logs</a>
         <a href="/risk_status?secret={h(secret)}">Risk Status</a>
         <a href="/trading_pause_status?secret={h(secret)}">Pause Status</a>
+        <a href="/order_quality_config?secret={h(secret)}">Quality Config</a>
     </div>
     """
 
@@ -1206,7 +1373,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
     </head>
     <body>
         <h1>TV Webhook ↔ Bybit Risk Engine Dashboard</h1>
-        <div class="muted">Version 2.0.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
+        <div class="muted">Version 2.1.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
         {nav}
 
         <div class="grid">
@@ -1255,6 +1422,15 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
             </div>
         </div>
 
+        <div class="section card">
+            <h2>Order Quality Guard</h2>
+            <div class="muted">
+                Active before every MICRO/LIVE order.
+                Min stop: {ORDER_MIN_STOP_DISTANCE_PCT}% · Max stop: {ORDER_MAX_STOP_DISTANCE_PCT}% ·
+                Min TP1 RR: {ORDER_MIN_TP1_RR} · Min TP2 RR: {ORDER_MIN_TP2_RR}
+            </div>
+        </div>
+
         <div class="section card dangerbox">
             <h2>Emergency Controls</h2>
             <div class="muted">
@@ -1292,7 +1468,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
 
         <div class="section">
             <h2>Strategy Health</h2>
-            {html_table(["Strategy", "Symbol", "Side", "Mode", "Events", "Paper", "Orders", "Rejects", "Failures", "Paused", "Closed PnL", "PF", "Health", "Score", "Reasons"], health_rows)}
+            {html_table(["Strategy", "Symbol", "Side", "Mode", "Events", "Paper", "Orders", "Rejects", "Failures", "Paused", "Quality Rejects", "Closed PnL", "PF", "Health", "Score", "Reasons"], health_rows)}
         </div>
 
         <div class="section">
@@ -2144,7 +2320,7 @@ def root():
     runtime_state = load_runtime_state()
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 2.0.0</p>
+    <p>version: 2.1.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>trading_paused: {runtime_state.get("trading_paused")}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
@@ -2162,6 +2338,33 @@ def dashboard(secret: str, days: int = 7):
         content=build_dashboard_html(secret=secret, days=days),
         media_type="text/html",
     )
+
+
+@app.get("/order_quality_config")
+def order_quality_config(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    return {
+        "ok": True,
+        "order_quality_guard": {
+            "min_stop_distance_pct": ORDER_MIN_STOP_DISTANCE_PCT,
+            "max_stop_distance_pct": ORDER_MAX_STOP_DISTANCE_PCT,
+            "min_tp1_rr": ORDER_MIN_TP1_RR,
+            "min_tp2_rr": ORDER_MIN_TP2_RR,
+        },
+    }
+
+
+@app.post("/test_order_quality")
+async def test_order_quality(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+
+    return {
+        "ok": True,
+        "quality": validate_order_quality(body),
+    }
 
 
 @app.post("/trading_pause_on")
@@ -2460,6 +2663,12 @@ def risk_status(secret: str):
         "trading_paused": runtime_state.get("trading_paused"),
         "effective_real_order_execution_enabled": ENABLE_REAL_ORDERS and not runtime_state.get("trading_paused"),
         "supabase_enabled": supabase_enabled(),
+        "order_quality_guard": {
+            "min_stop_distance_pct": ORDER_MIN_STOP_DISTANCE_PCT,
+            "max_stop_distance_pct": ORDER_MAX_STOP_DISTANCE_PCT,
+            "min_tp1_rr": ORDER_MIN_TP1_RR,
+            "min_tp2_rr": ORDER_MIN_TP2_RR,
+        },
         "closed_pnl_guard": {
             "blocked": closed_pnl_reason is not None,
             "reason": closed_pnl_reason,
@@ -2801,6 +3010,31 @@ async def tv_webhook(request: Request):
             }
         )
 
+    quality = validate_order_quality(body)
+    if not quality["ok"]:
+        write_trade_log(
+            body=body,
+            mode=mode,
+            risk_pct_used=risk_pct_used,
+            decision="ORDER_QUALITY_REJECTED",
+            decision_reason=quality["reason"],
+            status="rejected_by_order_quality_guard",
+        )
+
+        return ok(
+            {
+                "order_sent": False,
+                "decision": {
+                    **decision,
+                    "allow_order": False,
+                    "decision": "ORDER_QUALITY_REJECTED",
+                    "reason": quality["reason"],
+                },
+                "quality": quality,
+                "msg": "Risk engine approved, but order quality guard rejected the signal.",
+            }
+        )
+
     if is_trading_paused():
         write_trade_log(
             body=body,
@@ -2860,6 +3094,7 @@ async def tv_webhook(request: Request):
             {
                 "order_sent": True,
                 "decision": decision,
+                "quality": quality,
                 "result": result,
             }
         )
