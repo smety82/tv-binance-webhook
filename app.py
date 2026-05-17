@@ -42,6 +42,7 @@ ORDER_MIN_STOP_DISTANCE_PCT = float(os.getenv("ORDER_MIN_STOP_DISTANCE_PCT", "0.
 ORDER_MAX_STOP_DISTANCE_PCT = float(os.getenv("ORDER_MAX_STOP_DISTANCE_PCT", "8.0"))
 ORDER_MIN_TP1_RR = float(os.getenv("ORDER_MIN_TP1_RR", "0.8"))
 ORDER_MIN_TP2_RR = float(os.getenv("ORDER_MIN_TP2_RR", "1.2"))
+ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT = float(os.getenv("ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT", "1.0"))
 
 HTTP_TIMEOUT = 15.0
 
@@ -50,7 +51,7 @@ STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="2.1.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="2.2.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -575,14 +576,10 @@ def summarize_supabase_rows(rows: list[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 # ============================================================
-# ORDER QUALITY GUARD
+# ORDER QUALITY / LIVE PRICE GUARDS
 # ============================================================
 
 def validate_order_quality(body: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Validates TradingView signal structure before any real Bybit order.
-    This does not run for PAPER/OFF because no order is sent.
-    """
     symbol = normalize_symbol(body.get("symbol", ""))
     side = normalize_side(body.get("side", ""))
 
@@ -712,6 +709,46 @@ def validate_order_quality(body: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def validate_live_price_deviation(body: Dict[str, Any]) -> Dict[str, Any]:
+    symbol = normalize_symbol(body.get("symbol", ""))
+    signal_price = to_float_or_none(body.get("signalPrice"))
+
+    if signal_price is None or signal_price <= 0:
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "reason": "MISSING_OR_INVALID_SIGNAL_PRICE",
+            "details": {
+                "signalPrice": signal_price,
+                "max_deviation_pct": ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT,
+            },
+        }
+
+    live_price = get_ticker_last(symbol)
+    deviation_pct = abs(live_price - signal_price) / signal_price * 100.0
+
+    ok_flag = deviation_pct <= ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT
+
+    reason = "OK"
+    if not ok_flag:
+        reason = (
+            f"SIGNAL_PRICE_DEVIATION_TOO_HIGH_"
+            f"{deviation_pct:.4f}%_MAX_{ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT:.4f}%"
+        )
+
+    return {
+        "ok": ok_flag,
+        "symbol": symbol,
+        "reason": reason,
+        "details": {
+            "signalPrice": signal_price,
+            "bybit_last_price": live_price,
+            "deviation_pct": deviation_pct,
+            "max_deviation_pct": ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT,
+        },
+    }
+
+
 # ============================================================
 # REPORTING
 # ============================================================
@@ -740,6 +777,7 @@ def build_performance_report(days: int = 1) -> Dict[str, Any]:
             "rejected": 0,
             "runtime_paused": 0,
             "order_quality_rejected": 0,
+            "price_deviation_rejected": 0,
         },
         "latest_events": rows[:20],
     }
@@ -796,6 +834,9 @@ def build_performance_report(days: int = 1) -> Dict[str, Any]:
         elif decision == "ORDER_QUALITY_REJECTED":
             report["orders"]["order_quality_rejected"] += 1
             report["rejections"][reason] = report["rejections"].get(reason, 0) + 1
+        elif decision == "ORDER_PRICE_DEVIATION_REJECTED":
+            report["orders"]["price_deviation_rejected"] += 1
+            report["rejections"][reason] = report["rejections"].get(reason, 0) + 1
 
         if status == "order_sent":
             report["orders"]["order_sent"] += 1
@@ -815,6 +856,7 @@ def classify_health(
     rejected: int,
     order_failed: int,
     order_quality_rejected: int,
+    price_deviation_rejected: int,
     net_pnl: Optional[float],
     profit_factor: Optional[float],
     mode: str,
@@ -831,6 +873,7 @@ def classify_health(
     rejection_rate = rejected / event_count if event_count > 0 else 0.0
     error_rate = order_failed / event_count if event_count > 0 else 0.0
     quality_reject_rate = order_quality_rejected / event_count if event_count > 0 else 0.0
+    price_deviation_reject_rate = price_deviation_rejected / event_count if event_count > 0 else 0.0
 
     score = 50
 
@@ -851,6 +894,13 @@ def classify_health(
     elif quality_reject_rate > 0:
         score -= 15
         reasons.append(f"Order quality rejections detected: {order_quality_rejected}")
+
+    if price_deviation_reject_rate > 0.30:
+        score -= 30
+        reasons.append(f"High price deviation rejection rate: {price_deviation_reject_rate:.1%}")
+    elif price_deviation_reject_rate > 0:
+        score -= 15
+        reasons.append(f"Price deviation rejections detected: {price_deviation_rejected}")
 
     if error_rate > 0:
         score -= 35
@@ -940,6 +990,7 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
                 "order_failed": 0,
                 "runtime_paused": 0,
                 "order_quality_rejected": 0,
+                "price_deviation_rejected": 0,
                 "decisions": {},
                 "statuses": {},
                 "latest_created_at": None,
@@ -964,6 +1015,8 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
             group["runtime_paused"] += 1
         elif decision == "ORDER_QUALITY_REJECTED":
             group["order_quality_rejected"] += 1
+        elif decision == "ORDER_PRICE_DEVIATION_REJECTED":
+            group["price_deviation_rejected"] += 1
 
         if status == "order_sent":
             group["order_sent"] += 1
@@ -988,6 +1041,7 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
             rejected=int(group["rejected"]),
             order_failed=int(group["order_failed"]),
             order_quality_rejected=int(group["order_quality_rejected"]),
+            price_deviation_rejected=int(group["price_deviation_rejected"]),
             net_pnl=net_pnl,
             profit_factor=profit_factor,
             mode=group["mode"],
@@ -1035,7 +1089,7 @@ def badge_class(value: str) -> str:
     v = str(value).upper()
     if v in {"GOOD", "ON", "TRUE", "PAPER_LOGGED", "ACCEPTED_MICRO", "ACCEPTED_LIVE", "ORDER_SENT", "EMERGENCY_CLOSE_SENT", "CANCEL_ALL_ORDERS_SENT"}:
         return "good"
-    if v in {"WATCH", "PAPER", "MICRO", "SYSTEM", "RUNTIME_PAUSED", "ORDER_QUALITY_REJECTED"}:
+    if v in {"WATCH", "PAPER", "MICRO", "SYSTEM", "RUNTIME_PAUSED", "ORDER_QUALITY_REJECTED", "ORDER_PRICE_DEVIATION_REJECTED"}:
         return "watch"
     if v in {"BAD", "OFF", "FALSE", "REJECTED", "ORDER_FAILED", "ERROR"}:
         return "bad"
@@ -1126,6 +1180,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
             h(item.get("order_failed")),
             h(item.get("runtime_paused", 0)),
             h(item.get("order_quality_rejected", 0)),
+            h(item.get("price_deviation_rejected", 0)),
             fmt_num(closed_data.get("net_pnl")),
             fmt_num(closed_data.get("profit_factor"), 3),
             html_badge(health_data.get("status")),
@@ -1155,6 +1210,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
         ["Accepted LIVE", h(perf_orders.get("accepted_live", 0))],
         ["Runtime paused", h(perf_orders.get("runtime_paused", 0))],
         ["Order quality rejected", h(perf_orders.get("order_quality_rejected", 0))],
+        ["Price deviation rejected", h(perf_orders.get("price_deviation_rejected", 0))],
         ["Order sent", h(perf_orders.get("order_sent", 0))],
         ["Order failed", h(perf_orders.get("order_failed", 0))],
         ["Rejected", h(perf_orders.get("rejected", 0))],
@@ -1373,7 +1429,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
     </head>
     <body>
         <h1>TV Webhook ↔ Bybit Risk Engine Dashboard</h1>
-        <div class="muted">Version 2.1.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
+        <div class="muted">Version 2.2.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
         {nav}
 
         <div class="grid">
@@ -1423,11 +1479,12 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
         </div>
 
         <div class="section card">
-            <h2>Order Quality Guard</h2>
+            <h2>Order Quality & Price Deviation Guards</h2>
             <div class="muted">
                 Active before every MICRO/LIVE order.
                 Min stop: {ORDER_MIN_STOP_DISTANCE_PCT}% · Max stop: {ORDER_MAX_STOP_DISTANCE_PCT}% ·
-                Min TP1 RR: {ORDER_MIN_TP1_RR} · Min TP2 RR: {ORDER_MIN_TP2_RR}
+                Min TP1 RR: {ORDER_MIN_TP1_RR} · Min TP2 RR: {ORDER_MIN_TP2_RR} ·
+                Max signal/live price deviation: {ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT}%
             </div>
         </div>
 
@@ -1468,7 +1525,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
 
         <div class="section">
             <h2>Strategy Health</h2>
-            {html_table(["Strategy", "Symbol", "Side", "Mode", "Events", "Paper", "Orders", "Rejects", "Failures", "Paused", "Quality Rejects", "Closed PnL", "PF", "Health", "Score", "Reasons"], health_rows)}
+            {html_table(["Strategy", "Symbol", "Side", "Mode", "Events", "Paper", "Orders", "Rejects", "Failures", "Paused", "Quality Rejects", "Price Rejects", "Closed PnL", "PF", "Health", "Score", "Reasons"], health_rows)}
         </div>
 
         <div class="section">
@@ -2320,7 +2377,7 @@ def root():
     runtime_state = load_runtime_state()
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 2.1.0</p>
+    <p>version: 2.2.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>trading_paused: {runtime_state.get("trading_paused")}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
@@ -2347,11 +2404,12 @@ def order_quality_config(secret: str):
 
     return {
         "ok": True,
-        "order_quality_guard": {
+        "order_guards": {
             "min_stop_distance_pct": ORDER_MIN_STOP_DISTANCE_PCT,
             "max_stop_distance_pct": ORDER_MAX_STOP_DISTANCE_PCT,
             "min_tp1_rr": ORDER_MIN_TP1_RR,
             "min_tp2_rr": ORDER_MIN_TP2_RR,
+            "max_signal_price_deviation_pct": ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT,
         },
     }
 
@@ -2364,6 +2422,17 @@ async def test_order_quality(request: Request):
     return {
         "ok": True,
         "quality": validate_order_quality(body),
+    }
+
+
+@app.post("/test_price_deviation")
+async def test_price_deviation(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+
+    return {
+        "ok": True,
+        "price_deviation": validate_live_price_deviation(body),
     }
 
 
@@ -2663,11 +2732,12 @@ def risk_status(secret: str):
         "trading_paused": runtime_state.get("trading_paused"),
         "effective_real_order_execution_enabled": ENABLE_REAL_ORDERS and not runtime_state.get("trading_paused"),
         "supabase_enabled": supabase_enabled(),
-        "order_quality_guard": {
+        "order_guards": {
             "min_stop_distance_pct": ORDER_MIN_STOP_DISTANCE_PCT,
             "max_stop_distance_pct": ORDER_MAX_STOP_DISTANCE_PCT,
             "min_tp1_rr": ORDER_MIN_TP1_RR,
             "min_tp2_rr": ORDER_MIN_TP2_RR,
+            "max_signal_price_deviation_pct": ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT,
         },
         "closed_pnl_guard": {
             "blocked": closed_pnl_reason is not None,
@@ -3035,6 +3105,32 @@ async def tv_webhook(request: Request):
             }
         )
 
+    price_deviation = validate_live_price_deviation(body)
+    if not price_deviation["ok"]:
+        write_trade_log(
+            body=body,
+            mode=mode,
+            risk_pct_used=risk_pct_used,
+            decision="ORDER_PRICE_DEVIATION_REJECTED",
+            decision_reason=price_deviation["reason"],
+            status="rejected_by_price_deviation_guard",
+        )
+
+        return ok(
+            {
+                "order_sent": False,
+                "decision": {
+                    **decision,
+                    "allow_order": False,
+                    "decision": "ORDER_PRICE_DEVIATION_REJECTED",
+                    "reason": price_deviation["reason"],
+                },
+                "quality": quality,
+                "price_deviation": price_deviation,
+                "msg": "Risk engine approved, but live price deviation guard rejected the signal.",
+            }
+        )
+
     if is_trading_paused():
         write_trade_log(
             body=body,
@@ -3054,6 +3150,8 @@ async def tv_webhook(request: Request):
                     "decision": "RUNTIME_PAUSED",
                     "reason": "Trading paused by runtime kill switch",
                 },
+                "quality": quality,
+                "price_deviation": price_deviation,
                 "msg": "Risk engine approved, but runtime trading pause is active.",
             }
         )
@@ -3072,6 +3170,8 @@ async def tv_webhook(request: Request):
             {
                 "order_sent": False,
                 "decision": decision,
+                "quality": quality,
+                "price_deviation": price_deviation,
                 "msg": "Risk engine approved, but ENABLE_REAL_ORDERS=false",
             }
         )
@@ -3095,6 +3195,7 @@ async def tv_webhook(request: Request):
                 "order_sent": True,
                 "decision": decision,
                 "quality": quality,
+                "price_deviation": price_deviation,
                 "result": result,
             }
         )
