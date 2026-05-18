@@ -46,6 +46,13 @@ ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT = float(os.getenv("ORDER_MAX_SIGNAL_PRICE_D
 ORDER_SIGNAL_COOLDOWN_MINUTES = int(os.getenv("ORDER_SIGNAL_COOLDOWN_MINUTES", "30"))
 ORDER_ALERT_IDEMPOTENCY_LOOKBACK_HOURS = int(os.getenv("ORDER_ALERT_IDEMPOTENCY_LOOKBACK_HOURS", "48"))
 
+# Exposure guard.
+# 0 = disabled. Set these in Render Environment Variables to activate hard limits.
+MAX_TOTAL_POSITION_VALUE_USDT = float(os.getenv("MAX_TOTAL_POSITION_VALUE_USDT", "0"))
+MAX_SYMBOL_POSITION_VALUE_USDT = float(os.getenv("MAX_SYMBOL_POSITION_VALUE_USDT", "0"))
+MAX_EQUITY_USAGE_PCT = float(os.getenv("MAX_EQUITY_USAGE_PCT", "0"))
+MAX_LEVERAGE_EXPOSURE_PCT = float(os.getenv("MAX_LEVERAGE_EXPOSURE_PCT", "0"))
+
 HTTP_TIMEOUT = 15.0
 
 APP_DIR = Path(__file__).resolve().parent
@@ -53,7 +60,7 @@ STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="2.4.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="2.5.1")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -996,6 +1003,7 @@ def build_performance_report(days: int = 1) -> Dict[str, Any]:
             "price_deviation_rejected": 0,
             "duplicate_signal_rejected": 0,
             "duplicate_alert_rejected": 0,
+            "exposure_rejected": 0,
         },
         "latest_events": rows[:20],
     }
@@ -1061,6 +1069,9 @@ def build_performance_report(days: int = 1) -> Dict[str, Any]:
         elif decision == "DUPLICATE_ALERT_REJECTED":
             report["orders"]["duplicate_alert_rejected"] += 1
             report["rejections"][reason] = report["rejections"].get(reason, 0) + 1
+        elif decision == "EXPOSURE_REJECTED":
+            report["orders"]["exposure_rejected"] += 1
+            report["rejections"][reason] = report["rejections"].get(reason, 0) + 1
 
         if status == "order_sent":
             report["orders"]["order_sent"] += 1
@@ -1083,6 +1094,7 @@ def classify_health(
     price_deviation_rejected: int,
     duplicate_signal_rejected: int,
     duplicate_alert_rejected: int,
+    exposure_rejected: int,
     net_pnl: Optional[float],
     profit_factor: Optional[float],
     mode: str,
@@ -1102,6 +1114,7 @@ def classify_health(
     price_deviation_reject_rate = price_deviation_rejected / event_count if event_count > 0 else 0.0
     duplicate_reject_rate = duplicate_signal_rejected / event_count if event_count > 0 else 0.0
     duplicate_alert_reject_rate = duplicate_alert_rejected / event_count if event_count > 0 else 0.0
+    exposure_reject_rate = exposure_rejected / event_count if event_count > 0 else 0.0
 
     score = 50
 
@@ -1143,6 +1156,13 @@ def classify_health(
     elif duplicate_alert_reject_rate > 0:
         score -= 5
         reasons.append(f"Duplicate alerts detected: {duplicate_alert_rejected}")
+
+    if exposure_reject_rate > 0.30:
+        score -= 25
+        reasons.append(f"High exposure rejection rate: {exposure_reject_rate:.1%}")
+    elif exposure_reject_rate > 0:
+        score -= 10
+        reasons.append(f"Exposure guard rejections detected: {exposure_rejected}")
 
     if error_rate > 0:
         score -= 35
@@ -1235,6 +1255,7 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
                 "price_deviation_rejected": 0,
                 "duplicate_signal_rejected": 0,
                 "duplicate_alert_rejected": 0,
+                "exposure_rejected": 0,
                 "decisions": {},
                 "statuses": {},
                 "latest_created_at": None,
@@ -1265,6 +1286,8 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
             group["duplicate_signal_rejected"] += 1
         elif decision == "DUPLICATE_ALERT_REJECTED":
             group["duplicate_alert_rejected"] += 1
+        elif decision == "EXPOSURE_REJECTED":
+            group["exposure_rejected"] += 1
 
         if status == "order_sent":
             group["order_sent"] += 1
@@ -1292,6 +1315,7 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
             price_deviation_rejected=int(group["price_deviation_rejected"]),
             duplicate_signal_rejected=int(group["duplicate_signal_rejected"]),
             duplicate_alert_rejected=int(group["duplicate_alert_rejected"]),
+            exposure_rejected=int(group["exposure_rejected"]),
             net_pnl=net_pnl,
             profit_factor=profit_factor,
             mode=group["mode"],
@@ -1359,6 +1383,7 @@ def badge_class(value: str) -> str:
         "ORDER_PRICE_DEVIATION_REJECTED",
         "DUPLICATE_SIGNAL_REJECTED",
         "DUPLICATE_ALERT_REJECTED",
+        "EXPOSURE_REJECTED",
     }:
         return "watch"
     if v in {"BAD", "OFF", "FALSE", "REJECTED", "ORDER_FAILED", "ERROR"}:
@@ -1453,6 +1478,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
             h(item.get("price_deviation_rejected", 0)),
             h(item.get("duplicate_signal_rejected", 0)),
             h(item.get("duplicate_alert_rejected", 0)),
+            h(item.get("exposure_rejected", 0)),
             fmt_num(closed_data.get("net_pnl")),
             fmt_num(closed_data.get("profit_factor"), 3),
             html_badge(health_data.get("status")),
@@ -1485,6 +1511,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
         ["Price deviation rejected", h(perf_orders.get("price_deviation_rejected", 0))],
         ["Duplicate signal rejected", h(perf_orders.get("duplicate_signal_rejected", 0))],
         ["Duplicate alert rejected", h(perf_orders.get("duplicate_alert_rejected", 0))],
+        ["Exposure rejected", h(perf_orders.get("exposure_rejected", 0))],
         ["Order sent", h(perf_orders.get("order_sent", 0))],
         ["Order failed", h(perf_orders.get("order_failed", 0))],
         ["Rejected", h(perf_orders.get("rejected", 0))],
@@ -1702,7 +1729,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
     </head>
     <body>
         <h1>TV Webhook ↔ Bybit Risk Engine Dashboard</h1>
-        <div class="muted">Version 2.4.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
+        <div class="muted">Version 2.5.1 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
         {nav}
 
         <div class="grid">
@@ -1722,6 +1749,10 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
             <div class="card">
                 <div class="label">Open positions</div>
                 <div class="metric">{h(open_risk.get("open_positions"))}</div>
+            </div>
+            <div class="card">
+                <div class="label">Open position value</div>
+                <div class="metric">{fmt_num(open_risk.get("total_position_value"))}</div>
             </div>
             <div class="card">
                 <div class="label">Open unrealized PnL</div>
@@ -1763,6 +1794,17 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
             </div>
         </div>
 
+        <div class="section card">
+            <h2>Exposure Guard</h2>
+            <div class="muted">
+                0 means disabled.
+                Max total position value: {MAX_TOTAL_POSITION_VALUE_USDT} USDT ·
+                Max symbol position value: {MAX_SYMBOL_POSITION_VALUE_USDT} USDT ·
+                Max equity usage: {MAX_EQUITY_USAGE_PCT}% ·
+                Max leverage exposure: {MAX_LEVERAGE_EXPOSURE_PCT}%
+            </div>
+        </div>
+
         <div class="section card dangerbox">
             <h2>Emergency Controls</h2>
             <div class="muted">
@@ -1800,7 +1842,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
 
         <div class="section">
             <h2>Strategy Health</h2>
-            {html_table(["Strategy", "Symbol", "Side", "Mode", "Events", "Paper", "Orders", "Rejects", "Failures", "Paused", "Quality Rejects", "Price Rejects", "Duplicate Rejects", "Alert Duplicates", "Closed PnL", "PF", "Health", "Score", "Reasons"], health_rows)}
+            {html_table(["Strategy", "Symbol", "Side", "Mode", "Events", "Paper", "Orders", "Rejects", "Failures", "Paused", "Quality Rejects", "Price Rejects", "Duplicate Rejects", "Alert Duplicates", "Exposure Rejects", "Closed PnL", "PF", "Health", "Score", "Reasons"], health_rows)}
         </div>
 
         <div class="section">
@@ -2307,6 +2349,185 @@ def check_position_limits(state: Dict[str, Any], symbol: str) -> Optional[str]:
     return None
 
 
+def exposure_limits_enabled() -> bool:
+    return any([
+        MAX_TOTAL_POSITION_VALUE_USDT > 0,
+        MAX_SYMBOL_POSITION_VALUE_USDT > 0,
+        MAX_EQUITY_USAGE_PCT > 0,
+        MAX_LEVERAGE_EXPOSURE_PCT > 0,
+    ])
+
+
+def estimate_new_order_exposure(body: Dict[str, Any], risk_pct_used: float) -> Dict[str, Any]:
+    symbol = normalize_symbol(body.get("symbol", ""))
+    side = normalize_side(body.get("side", ""))
+    sl = to_float_or_none(body.get("sl"))
+    qty_in = to_float_or_none(body.get("qty"))
+
+    _, lot_step, min_qty = get_instrument(symbol)
+    live_price = get_ticker_last(symbol)
+    equity = get_equity_usdt()
+
+    if qty_in is not None and qty_in > 0:
+        qty_calc = qty_in
+        sizing_method = "explicit_qty"
+        risk_usd = None
+        stop_distance = None
+    else:
+        if sl is None or sl <= 0:
+            return {
+                "ok": False,
+                "reason": "EXPOSURE_ESTIMATE_FAILED_MISSING_SL",
+                "details": {
+                    "symbol": symbol,
+                    "side": side,
+                    "risk_pct_used": risk_pct_used,
+                    "sl": sl,
+                    "qty": qty_in,
+                },
+            }
+
+        stop_distance = abs(live_price - sl)
+        if stop_distance <= 0:
+            return {
+                "ok": False,
+                "reason": "EXPOSURE_ESTIMATE_FAILED_INVALID_STOP_DISTANCE",
+                "details": {
+                    "symbol": symbol,
+                    "side": side,
+                    "live_price": live_price,
+                    "sl": sl,
+                    "stop_distance": stop_distance,
+                },
+            }
+
+        risk_usd = equity * (risk_pct_used / 100.0)
+        qty_calc = risk_usd / stop_distance
+        sizing_method = "risk_pct"
+
+    qty_rounded = max(round_step(float(qty_calc), lot_step), min_qty)
+    estimated_new_position_value = qty_rounded * live_price
+
+    open_risk = summarize_open_risk()
+    current_total_position_value = float(open_risk.get("total_position_value", 0.0) or 0.0)
+
+    current_symbol_position_value = 0.0
+    by_symbol = open_risk.get("by_symbol", {})
+    if symbol in by_symbol:
+        current_symbol_position_value = float(by_symbol[symbol].get("position_value", 0.0) or 0.0)
+
+    projected_total_position_value = current_total_position_value + estimated_new_position_value
+    projected_symbol_position_value = current_symbol_position_value + estimated_new_position_value
+
+    projected_equity_usage_pct = None
+    projected_leverage_exposure_pct = None
+
+    if equity > 0:
+        projected_equity_usage_pct = projected_total_position_value / equity * 100.0
+        projected_leverage_exposure_pct = projected_total_position_value / equity * 100.0
+
+    return {
+        "ok": True,
+        "reason": "OK",
+        "details": {
+            "symbol": symbol,
+            "side": side,
+            "sizing_method": sizing_method,
+            "risk_pct_used": risk_pct_used,
+            "risk_usd": risk_usd,
+            "stop_distance": stop_distance,
+            "live_price": live_price,
+            "equity": equity,
+            "qty_calc": qty_calc,
+            "qty_rounded": qty_rounded,
+            "lot_step": lot_step,
+            "min_qty": min_qty,
+            "estimated_new_position_value": estimated_new_position_value,
+            "current_total_position_value": current_total_position_value,
+            "current_symbol_position_value": current_symbol_position_value,
+            "projected_total_position_value": projected_total_position_value,
+            "projected_symbol_position_value": projected_symbol_position_value,
+            "projected_equity_usage_pct": projected_equity_usage_pct,
+            "projected_leverage_exposure_pct": projected_leverage_exposure_pct,
+            "limits": {
+                "max_total_position_value_usdt": MAX_TOTAL_POSITION_VALUE_USDT,
+                "max_symbol_position_value_usdt": MAX_SYMBOL_POSITION_VALUE_USDT,
+                "max_equity_usage_pct": MAX_EQUITY_USAGE_PCT,
+                "max_leverage_exposure_pct": MAX_LEVERAGE_EXPOSURE_PCT,
+            },
+        },
+    }
+
+
+def validate_pre_trade_exposure(body: Dict[str, Any], risk_pct_used: float) -> Dict[str, Any]:
+    if not exposure_limits_enabled():
+        return {
+            "ok": True,
+            "reason": "EXPOSURE_GUARD_DISABLED",
+            "details": {
+                "limits": {
+                    "max_total_position_value_usdt": MAX_TOTAL_POSITION_VALUE_USDT,
+                    "max_symbol_position_value_usdt": MAX_SYMBOL_POSITION_VALUE_USDT,
+                    "max_equity_usage_pct": MAX_EQUITY_USAGE_PCT,
+                    "max_leverage_exposure_pct": MAX_LEVERAGE_EXPOSURE_PCT,
+                },
+            },
+        }
+
+    estimate = estimate_new_order_exposure(body, risk_pct_used)
+    if not estimate.get("ok"):
+        return estimate
+
+    details = estimate["details"]
+    reasons = []
+
+    projected_total = float(details.get("projected_total_position_value", 0.0) or 0.0)
+    projected_symbol = float(details.get("projected_symbol_position_value", 0.0) or 0.0)
+    projected_equity_usage_pct = details.get("projected_equity_usage_pct")
+    projected_leverage_exposure_pct = details.get("projected_leverage_exposure_pct")
+
+    if MAX_TOTAL_POSITION_VALUE_USDT > 0 and projected_total > MAX_TOTAL_POSITION_VALUE_USDT:
+        reasons.append(
+            f"MAX_TOTAL_POSITION_VALUE_EXCEEDED_{projected_total:.4f}_MAX_{MAX_TOTAL_POSITION_VALUE_USDT:.4f}"
+        )
+
+    if MAX_SYMBOL_POSITION_VALUE_USDT > 0 and projected_symbol > MAX_SYMBOL_POSITION_VALUE_USDT:
+        reasons.append(
+            f"MAX_SYMBOL_POSITION_VALUE_EXCEEDED_{projected_symbol:.4f}_MAX_{MAX_SYMBOL_POSITION_VALUE_USDT:.4f}"
+        )
+
+    if (
+        MAX_EQUITY_USAGE_PCT > 0
+        and projected_equity_usage_pct is not None
+        and projected_equity_usage_pct > MAX_EQUITY_USAGE_PCT
+    ):
+        reasons.append(
+            f"MAX_EQUITY_USAGE_EXCEEDED_{projected_equity_usage_pct:.4f}%_MAX_{MAX_EQUITY_USAGE_PCT:.4f}%"
+        )
+
+    if (
+        MAX_LEVERAGE_EXPOSURE_PCT > 0
+        and projected_leverage_exposure_pct is not None
+        and projected_leverage_exposure_pct > MAX_LEVERAGE_EXPOSURE_PCT
+    ):
+        reasons.append(
+            f"MAX_LEVERAGE_EXPOSURE_EXCEEDED_{projected_leverage_exposure_pct:.4f}%_MAX_{MAX_LEVERAGE_EXPOSURE_PCT:.4f}%"
+        )
+
+    if reasons:
+        return {
+            "ok": False,
+            "reason": ";".join(reasons),
+            "details": details,
+        }
+
+    return {
+        "ok": True,
+        "reason": "OK",
+        "details": details,
+    }
+
+
 # ============================================================
 # RISK ENGINE
 # ============================================================
@@ -2652,12 +2873,16 @@ def root():
     runtime_state = load_runtime_state()
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 2.4.0</p>
+    <p>version: 2.5.1</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>trading_paused: {runtime_state.get("trading_paused")}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
     <p>cooldown_minutes: {ORDER_SIGNAL_COOLDOWN_MINUTES}</p>
     <p>alert_idempotency_lookback_hours: {ORDER_ALERT_IDEMPOTENCY_LOOKBACK_HOURS}</p>
+    <p>max_total_position_value_usdt: {MAX_TOTAL_POSITION_VALUE_USDT}</p>
+    <p>max_symbol_position_value_usdt: {MAX_SYMBOL_POSITION_VALUE_USDT}</p>
+    <p>max_equity_usage_pct: {MAX_EQUITY_USAGE_PCT}</p>
+    <p>max_leverage_exposure_pct: {MAX_LEVERAGE_EXPOSURE_PCT}</p>
     <p>time: {now_iso()}</p>
     <p><a href="/dashboard?secret=REPLACE_WITH_SECRET&days=7">Dashboard</a></p>
     """
@@ -2689,6 +2914,10 @@ def order_quality_config(secret: str):
             "max_signal_price_deviation_pct": ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT,
             "duplicate_signal_cooldown_minutes": ORDER_SIGNAL_COOLDOWN_MINUTES,
             "alert_idempotency_lookback_hours": ORDER_ALERT_IDEMPOTENCY_LOOKBACK_HOURS,
+            "max_total_position_value_usdt": MAX_TOTAL_POSITION_VALUE_USDT,
+            "max_symbol_position_value_usdt": MAX_SYMBOL_POSITION_VALUE_USDT,
+            "max_equity_usage_pct": MAX_EQUITY_USAGE_PCT,
+            "max_leverage_exposure_pct": MAX_LEVERAGE_EXPOSURE_PCT,
         },
     }
 
@@ -2734,6 +2963,21 @@ async def test_alert_idempotency(request: Request):
     return {
         "ok": True,
         "alert_idempotency": validate_alert_idempotency(body),
+    }
+
+
+@app.post("/test_exposure")
+async def test_exposure(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+
+    risk_pct_used = to_float_or_none(body.get("riskPct"))
+    if risk_pct_used is None:
+        risk_pct_used = 0.0
+
+    return {
+        "ok": True,
+        "exposure": validate_pre_trade_exposure(body, risk_pct_used),
     }
 
 
@@ -3041,6 +3285,11 @@ def risk_status(secret: str):
             "max_signal_price_deviation_pct": ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT,
             "duplicate_signal_cooldown_minutes": ORDER_SIGNAL_COOLDOWN_MINUTES,
             "alert_idempotency_lookback_hours": ORDER_ALERT_IDEMPOTENCY_LOOKBACK_HOURS,
+            "max_total_position_value_usdt": MAX_TOTAL_POSITION_VALUE_USDT,
+            "max_symbol_position_value_usdt": MAX_SYMBOL_POSITION_VALUE_USDT,
+            "max_equity_usage_pct": MAX_EQUITY_USAGE_PCT,
+            "max_leverage_exposure_pct": MAX_LEVERAGE_EXPOSURE_PCT,
+            "exposure_guard_enabled": exposure_limits_enabled(),
         },
         "closed_pnl_guard": {
             "blocked": closed_pnl_reason is not None,
@@ -3489,6 +3738,35 @@ async def tv_webhook(request: Request):
             }
         )
 
+    exposure = validate_pre_trade_exposure(body, risk_pct_used)
+    if not exposure["ok"]:
+        write_trade_log(
+            body=body,
+            mode=mode,
+            risk_pct_used=risk_pct_used,
+            decision="EXPOSURE_REJECTED",
+            decision_reason=exposure["reason"],
+            status="rejected_by_exposure_guard",
+        )
+
+        return ok(
+            {
+                "order_sent": False,
+                "decision": {
+                    **decision,
+                    "allow_order": False,
+                    "decision": "EXPOSURE_REJECTED",
+                    "reason": exposure["reason"],
+                },
+                "quality": quality,
+                "price_deviation": price_deviation,
+                "duplicate_signal": duplicate_signal,
+                "alert_idempotency": alert_idempotency,
+                "exposure": exposure,
+                "msg": "Risk engine approved, but pre-trade exposure guard rejected the signal.",
+            }
+        )
+
     if is_trading_paused():
         write_trade_log(
             body=body,
@@ -3512,6 +3790,7 @@ async def tv_webhook(request: Request):
                 "price_deviation": price_deviation,
                 "duplicate_signal": duplicate_signal,
                 "alert_idempotency": alert_idempotency,
+                "exposure": exposure,
                 "msg": "Risk engine approved, but runtime trading pause is active.",
             }
         )
@@ -3534,6 +3813,7 @@ async def tv_webhook(request: Request):
                 "price_deviation": price_deviation,
                 "duplicate_signal": duplicate_signal,
                 "alert_idempotency": alert_idempotency,
+                "exposure": exposure,
                 "msg": "Risk engine approved, but ENABLE_REAL_ORDERS=false",
             }
         )
@@ -3560,6 +3840,7 @@ async def tv_webhook(request: Request):
                 "price_deviation": price_deviation,
                 "duplicate_signal": duplicate_signal,
                 "alert_idempotency": alert_idempotency,
+                "exposure": exposure,
                 "result": result,
             }
         )
