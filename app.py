@@ -60,6 +60,29 @@ POST_ORDER_VERIFY_RETRIES = int(os.getenv("POST_ORDER_VERIFY_RETRIES", "5"))
 POST_ORDER_VERIFY_SLEEP_SEC = float(os.getenv("POST_ORDER_VERIFY_SLEEP_SEC", "0.5"))
 AUTO_CLOSE_ON_PROTECTION_MISSING = os.getenv("AUTO_CLOSE_ON_PROTECTION_MISSING", "false").lower() == "true"
 
+
+# Strategy admin / trade limit / auto-downgrade / notification / dashboard v2.
+STRATEGY_ADMIN_ENABLED = os.getenv("STRATEGY_ADMIN_ENABLED", "true").lower() == "true"
+MAX_DAILY_TRADES_GLOBAL = int(os.getenv("MAX_DAILY_TRADES_GLOBAL", "0"))
+MAX_DAILY_TRADES_PER_SYMBOL = int(os.getenv("MAX_DAILY_TRADES_PER_SYMBOL", "0"))
+MAX_DAILY_LOSSES_PER_SYMBOL = int(os.getenv("MAX_DAILY_LOSSES_PER_SYMBOL", "0"))
+MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "0"))
+
+AUTO_DOWNGRADE_ENABLED = os.getenv("AUTO_DOWNGRADE_ENABLED", "true").lower() == "true"
+AUTO_DOWNGRADE_TARGET_MODE = os.getenv("AUTO_DOWNGRADE_TARGET_MODE", "PAPER").upper()
+AUTO_DOWNGRADE_ON_ORDER_FAILED = os.getenv("AUTO_DOWNGRADE_ON_ORDER_FAILED", "true").lower() == "true"
+AUTO_DOWNGRADE_ON_PROTECTION_FAILED = os.getenv("AUTO_DOWNGRADE_ON_PROTECTION_FAILED", "true").lower() == "true"
+AUTO_DOWNGRADE_ON_DAILY_LIMIT = os.getenv("AUTO_DOWNGRADE_ON_DAILY_LIMIT", "false").lower() == "true"
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "false").lower() == "true"
+NOTIFY_ORDER_SENT = os.getenv("NOTIFY_ORDER_SENT", "true").lower() == "true"
+NOTIFY_ORDER_FAILED = os.getenv("NOTIFY_ORDER_FAILED", "true").lower() == "true"
+NOTIFY_REJECTIONS = os.getenv("NOTIFY_REJECTIONS", "false").lower() == "true"
+NOTIFY_PROTECTION_FAILED = os.getenv("NOTIFY_PROTECTION_FAILED", "true").lower() == "true"
+NOTIFY_AUTO_DOWNGRADE = os.getenv("NOTIFY_AUTO_DOWNGRADE", "true").lower() == "true"
+
 HTTP_TIMEOUT = 15.0
 
 APP_DIR = Path(__file__).resolve().parent
@@ -67,7 +90,7 @@ STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="2.6.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="3.4.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -258,6 +281,92 @@ def load_state() -> Dict[str, Any]:
         raise HTTPException(500, f"Missing strategy_state.json at {STATE_FILE}")
     with STATE_FILE.open("r", encoding="utf-8") as file:
         return json.load(file)
+
+
+def save_state(state: Dict[str, Any]) -> None:
+    with STATE_FILE.open("w", encoding="utf-8") as file:
+        json.dump(state, file, ensure_ascii=False, indent=2)
+
+
+def require_strategy_admin() -> None:
+    if not STRATEGY_ADMIN_ENABLED:
+        raise HTTPException(403, "Strategy admin API is disabled")
+
+
+def get_side_config_ref(state: Dict[str, Any], strategy: str, symbol: str, side: str) -> Dict[str, Any]:
+    strategy = str(strategy)
+    symbol = normalize_symbol(symbol)
+    side = normalize_side(side)
+
+    strategies = state.setdefault("strategies", {})
+    strategy_cfg = strategies.setdefault(strategy, {"enabled": True, "symbols": {}})
+    symbols_cfg = strategy_cfg.setdefault("symbols", {})
+    symbol_cfg = symbols_cfg.setdefault(symbol, {})
+    side_cfg = symbol_cfg.setdefault(side, {"mode": "OFF", "risk_pct": 0.0})
+    return side_cfg
+
+
+def get_side_config_copy(state: Dict[str, Any], strategy: str, symbol: str, side: str) -> Dict[str, Any]:
+    try:
+        return dict(get_side_config_ref(state, strategy, symbol, side))
+    except Exception:
+        return {}
+
+
+def set_strategy_side_config(
+    strategy: str,
+    symbol: str,
+    side: str,
+    mode: Optional[str] = None,
+    risk_pct: Optional[float] = None,
+    extra_updates: Optional[Dict[str, Any]] = None,
+    reason: str = "manual_update",
+) -> Dict[str, Any]:
+    require_strategy_admin()
+    state = load_state()
+    side_cfg = get_side_config_ref(state, strategy, symbol, side)
+
+    before = dict(side_cfg)
+
+    if mode is not None:
+        mode_up = str(mode).upper().strip()
+        if mode_up not in {"OFF", "PAPER", "MICRO", "LIVE"}:
+            raise HTTPException(400, f"Invalid mode: {mode}")
+        side_cfg["mode"] = mode_up
+
+    if risk_pct is not None:
+        risk_value = float(risk_pct)
+        if risk_value < 0:
+            raise HTTPException(400, "risk_pct cannot be negative")
+        side_cfg["risk_pct"] = risk_value
+
+    if extra_updates:
+        for key, value in extra_updates.items():
+            if key in {"mode", "risk_pct"}:
+                continue
+            side_cfg[key] = value
+
+    save_state(state)
+
+    after = dict(side_cfg)
+    write_system_log(
+        action="strategy_state_update",
+        symbol=normalize_symbol(symbol),
+        side=normalize_side(side),
+        decision="STRATEGY_STATE_UPDATED",
+        reason=reason,
+        status="logged",
+        extra={"strategy": strategy, "before": before, "after": after},
+    )
+
+    return {
+        "strategy": strategy,
+        "symbol": normalize_symbol(symbol),
+        "side": normalize_side(side),
+        "before": before,
+        "after": after,
+        "state_saved": True,
+    }
 
 
 def ensure_trade_log() -> None:
@@ -1011,6 +1120,7 @@ def build_performance_report(days: int = 1) -> Dict[str, Any]:
             "duplicate_signal_rejected": 0,
             "duplicate_alert_rejected": 0,
             "exposure_rejected": 0,
+            "trade_limit_rejected": 0,
         },
         "latest_events": rows[:20],
     }
@@ -1079,6 +1189,9 @@ def build_performance_report(days: int = 1) -> Dict[str, Any]:
         elif decision == "EXPOSURE_REJECTED":
             report["orders"]["exposure_rejected"] += 1
             report["rejections"][reason] = report["rejections"].get(reason, 0) + 1
+        elif decision == "TRADE_LIMIT_REJECTED":
+            report["orders"]["trade_limit_rejected"] += 1
+            report["rejections"][reason] = report["rejections"].get(reason, 0) + 1
 
         if status == "order_sent":
             report["orders"]["order_sent"] += 1
@@ -1102,6 +1215,7 @@ def classify_health(
     duplicate_signal_rejected: int,
     duplicate_alert_rejected: int,
     exposure_rejected: int,
+    trade_limit_rejected: int,
     net_pnl: Optional[float],
     profit_factor: Optional[float],
     mode: str,
@@ -1122,6 +1236,7 @@ def classify_health(
     duplicate_reject_rate = duplicate_signal_rejected / event_count if event_count > 0 else 0.0
     duplicate_alert_reject_rate = duplicate_alert_rejected / event_count if event_count > 0 else 0.0
     exposure_reject_rate = exposure_rejected / event_count if event_count > 0 else 0.0
+    trade_limit_reject_rate = trade_limit_rejected / event_count if event_count > 0 else 0.0
 
     score = 50
 
@@ -1170,6 +1285,13 @@ def classify_health(
     elif exposure_reject_rate > 0:
         score -= 10
         reasons.append(f"Exposure guard rejections detected: {exposure_rejected}")
+
+    if trade_limit_reject_rate > 0.30:
+        score -= 15
+        reasons.append(f"High trade-limit rejection rate: {trade_limit_reject_rate:.1%}")
+    elif trade_limit_reject_rate > 0:
+        score -= 5
+        reasons.append(f"Trade-limit rejections detected: {trade_limit_rejected}")
 
     if error_rate > 0:
         score -= 35
@@ -1263,6 +1385,7 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
                 "duplicate_signal_rejected": 0,
                 "duplicate_alert_rejected": 0,
                 "exposure_rejected": 0,
+                "trade_limit_rejected": 0,
                 "decisions": {},
                 "statuses": {},
                 "latest_created_at": None,
@@ -1295,6 +1418,8 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
             group["duplicate_alert_rejected"] += 1
         elif decision == "EXPOSURE_REJECTED":
             group["exposure_rejected"] += 1
+        elif decision == "TRADE_LIMIT_REJECTED":
+            group["trade_limit_rejected"] += 1
 
         if status == "order_sent":
             group["order_sent"] += 1
@@ -1323,6 +1448,7 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
             duplicate_signal_rejected=int(group["duplicate_signal_rejected"]),
             duplicate_alert_rejected=int(group["duplicate_alert_rejected"]),
             exposure_rejected=int(group["exposure_rejected"]),
+            trade_limit_rejected=int(group["trade_limit_rejected"]),
             net_pnl=net_pnl,
             profit_factor=profit_factor,
             mode=group["mode"],
@@ -1487,6 +1613,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
             h(item.get("duplicate_signal_rejected", 0)),
             h(item.get("duplicate_alert_rejected", 0)),
             h(item.get("exposure_rejected", 0)),
+            h(item.get("trade_limit_rejected", 0)),
             fmt_num(closed_data.get("net_pnl")),
             fmt_num(closed_data.get("profit_factor"), 3),
             html_badge(health_data.get("status")),
@@ -1520,6 +1647,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
         ["Duplicate signal rejected", h(perf_orders.get("duplicate_signal_rejected", 0))],
         ["Duplicate alert rejected", h(perf_orders.get("duplicate_alert_rejected", 0))],
         ["Exposure rejected", h(perf_orders.get("exposure_rejected", 0))],
+        ["Trade limit rejected", h(perf_orders.get("trade_limit_rejected", 0))],
         ["Order sent", h(perf_orders.get("order_sent", 0))],
         ["Order failed", h(perf_orders.get("order_failed", 0))],
         ["Rejected", h(perf_orders.get("rejected", 0))],
@@ -1737,7 +1865,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
     </head>
     <body>
         <h1>TV Webhook ↔ Bybit Risk Engine Dashboard</h1>
-        <div class="muted">Version 2.6.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
+        <div class="muted">Version 3.4.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
         {nav}
 
         <div class="grid">
@@ -1859,7 +1987,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
 
         <div class="section">
             <h2>Strategy Health</h2>
-            {html_table(["Strategy", "Symbol", "Side", "Mode", "Events", "Paper", "Orders", "Rejects", "Failures", "Paused", "Quality Rejects", "Price Rejects", "Duplicate Rejects", "Alert Duplicates", "Exposure Rejects", "Closed PnL", "PF", "Health", "Score", "Reasons"], health_rows)}
+            {html_table(["Strategy", "Symbol", "Side", "Mode", "Events", "Paper", "Orders", "Rejects", "Failures", "Paused", "Quality Rejects", "Price Rejects", "Duplicate Rejects", "Alert Duplicates", "Exposure Rejects", "Trade Limit Rejects", "Closed PnL", "PF", "Health", "Score", "Reasons"], health_rows)}
         </div>
 
         <div class="section">
@@ -2494,6 +2622,15 @@ def estimate_new_order_exposure(body: Dict[str, Any], risk_pct_used: float) -> D
             "post_order_verify_retries": POST_ORDER_VERIFY_RETRIES,
             "post_order_verify_sleep_sec": POST_ORDER_VERIFY_SLEEP_SEC,
             "auto_close_on_protection_missing": AUTO_CLOSE_ON_PROTECTION_MISSING,
+            "strategy_admin_enabled": STRATEGY_ADMIN_ENABLED,
+            "max_daily_trades_global": MAX_DAILY_TRADES_GLOBAL,
+            "max_daily_trades_per_symbol": MAX_DAILY_TRADES_PER_SYMBOL,
+            "max_daily_losses_per_symbol": MAX_DAILY_LOSSES_PER_SYMBOL,
+            "max_consecutive_losses": MAX_CONSECUTIVE_LOSSES,
+            "auto_downgrade_enabled": AUTO_DOWNGRADE_ENABLED,
+            "auto_downgrade_target_mode": AUTO_DOWNGRADE_TARGET_MODE,
+            "telegram_enabled": TELEGRAM_ENABLED,
+            "telegram_configured": telegram_configured(),
             },
         },
     }
@@ -2672,6 +2809,311 @@ def validate_post_order_protection(symbol: str) -> Dict[str, Any]:
         "details": last_details,
     }
 
+
+
+# ============================================================
+# STRATEGY ADMIN / TRADE LIMITS / NOTIFICATIONS / LIFECYCLE / DASHBOARD V2
+# ============================================================
+
+def telegram_configured() -> bool:
+    return bool(TELEGRAM_ENABLED and TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+
+
+def notify_event(title: str, message: str, important: bool = False) -> Dict[str, Any]:
+    if not telegram_configured():
+        return {"ok": False, "sent": False, "reason": "TELEGRAM_DISABLED_OR_NOT_CONFIGURED"}
+
+    text = f"{title}\n{message}"
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text[:3900],
+        "disable_web_page_preview": True,
+    }
+
+    try:
+        resp = client.post(url, json=payload, timeout=10.0)
+        if resp.status_code >= 400:
+            log(f"[WARN] Telegram notify failed: {resp.status_code} {resp.text}")
+            return {"ok": False, "sent": False, "reason": resp.text}
+        return {"ok": True, "sent": True}
+    except Exception as exc:
+        log(f"[WARN] Telegram notify exception: {exc}")
+        return {"ok": False, "sent": False, "reason": str(exc)}
+
+
+def get_recent_trade_events(days: int = 1) -> list[Dict[str, Any]]:
+    if supabase_enabled():
+        try:
+            return fetch_supabase_logs_since(days=days, limit=10000)
+        except Exception as exc:
+            log(f"[WARN] Supabase recent event fetch failed: {exc}")
+    return read_trade_log_rows(limit=0)
+
+
+def is_order_sent_event(row: Dict[str, Any]) -> bool:
+    status = str(row.get("status") or "").lower()
+    decision = str(row.get("decision") or "").upper()
+    return status == "order_sent" or decision in {"ACCEPTED_MICRO", "ACCEPTED_LIVE"}
+
+
+def count_daily_orders(symbol: Optional[str] = None, strategy: Optional[str] = None) -> int:
+    rows = get_recent_trade_events(days=1)
+    count = 0
+    sym = normalize_symbol(symbol) if symbol else None
+    for row in rows:
+        if not is_order_sent_event(row):
+            continue
+        if sym and normalize_symbol(row.get("symbol", "")) != sym:
+            continue
+        if strategy and str(row.get("strategy")) != str(strategy):
+            continue
+        count += 1
+    return count
+
+
+def get_closed_pnl_losses(symbol: str, days: int = 1) -> Dict[str, Any]:
+    start_ms, end_ms = utc_range_last_days(days)
+    rows = get_closed_pnl(start_ms=start_ms, end_ms=end_ms, symbol=symbol)
+    losses = []
+    for row in rows:
+        pnl = float(row.get("closedPnl", "0") or 0.0)
+        if pnl < 0:
+            losses.append(row)
+    return {"rows": rows, "losses": losses, "loss_count": len(losses)}
+
+
+def get_consecutive_losses(symbol: str, days: int = 7) -> int:
+    start_ms, end_ms = utc_range_last_days(days)
+    rows = get_closed_pnl(start_ms=start_ms, end_ms=end_ms, symbol=symbol)
+    try:
+        rows = sorted(rows, key=lambda r: int(r.get("updatedTime") or r.get("createdTime") or 0), reverse=True)
+    except Exception:
+        pass
+
+    streak = 0
+    for row in rows:
+        pnl = float(row.get("closedPnl", "0") or 0.0)
+        if pnl < 0:
+            streak += 1
+        elif pnl > 0:
+            break
+    return streak
+
+
+def get_configured_trade_limits(strategy: str, symbol: str, side: str) -> Dict[str, Any]:
+    state = load_state()
+    side_cfg = get_side_config_copy(state, strategy, symbol, side)
+    global_cfg = state.get("global", {})
+
+    def int_limit(key: str, default: int) -> int:
+        value = side_cfg.get(key, global_cfg.get(key, default))
+        try:
+            return int(value or 0)
+        except Exception:
+            return int(default or 0)
+
+    return {
+        "max_daily_trades_global": int(global_cfg.get("max_daily_trades_global", MAX_DAILY_TRADES_GLOBAL) or 0),
+        "max_daily_trades_per_symbol": int_limit("max_daily_trades", MAX_DAILY_TRADES_PER_SYMBOL),
+        "max_daily_losses_per_symbol": int_limit("max_daily_losses", MAX_DAILY_LOSSES_PER_SYMBOL),
+        "max_consecutive_losses": int_limit("max_consecutive_losses", MAX_CONSECUTIVE_LOSSES),
+    }
+
+
+def validate_trade_limits(body: Dict[str, Any]) -> Dict[str, Any]:
+    strategy = str(body.get("strategy", "UNKNOWN"))
+    symbol = normalize_symbol(body.get("symbol", ""))
+    side = normalize_side(body.get("side", ""))
+    limits = get_configured_trade_limits(strategy, symbol, side)
+
+    reasons = []
+    daily_global = count_daily_orders()
+    daily_symbol = count_daily_orders(symbol=symbol)
+    losses_data = get_closed_pnl_losses(symbol=symbol, days=1)
+    consecutive_losses = get_consecutive_losses(symbol=symbol, days=7)
+
+    if limits["max_daily_trades_global"] > 0 and daily_global >= limits["max_daily_trades_global"]:
+        reasons.append(f"MAX_DAILY_TRADES_GLOBAL_REACHED_{daily_global}_MAX_{limits['max_daily_trades_global']}")
+
+    if limits["max_daily_trades_per_symbol"] > 0 and daily_symbol >= limits["max_daily_trades_per_symbol"]:
+        reasons.append(f"MAX_DAILY_TRADES_SYMBOL_REACHED_{daily_symbol}_MAX_{limits['max_daily_trades_per_symbol']}")
+
+    if limits["max_daily_losses_per_symbol"] > 0 and losses_data["loss_count"] >= limits["max_daily_losses_per_symbol"]:
+        reasons.append(f"MAX_DAILY_LOSSES_SYMBOL_REACHED_{losses_data['loss_count']}_MAX_{limits['max_daily_losses_per_symbol']}")
+
+    if limits["max_consecutive_losses"] > 0 and consecutive_losses >= limits["max_consecutive_losses"]:
+        reasons.append(f"MAX_CONSECUTIVE_LOSSES_REACHED_{consecutive_losses}_MAX_{limits['max_consecutive_losses']}")
+
+    return {
+        "ok": len(reasons) == 0,
+        "reason": "OK" if not reasons else ";".join(reasons),
+        "details": {
+            "strategy": strategy,
+            "symbol": symbol,
+            "side": side,
+            "limits": limits,
+            "daily_global_order_count": daily_global,
+            "daily_symbol_order_count": daily_symbol,
+            "daily_symbol_loss_count": losses_data["loss_count"],
+            "consecutive_losses": consecutive_losses,
+        },
+    }
+
+
+def auto_downgrade_strategy(
+    strategy: str,
+    symbol: str,
+    side: str,
+    trigger: str,
+    reason: str,
+) -> Dict[str, Any]:
+    if not AUTO_DOWNGRADE_ENABLED:
+        return {"ok": False, "changed": False, "reason": "AUTO_DOWNGRADE_DISABLED"}
+
+    target_mode = AUTO_DOWNGRADE_TARGET_MODE.upper()
+    if target_mode not in {"OFF", "PAPER", "MICRO", "LIVE"}:
+        target_mode = "PAPER"
+
+    try:
+        state = load_state()
+        current = get_side_config_copy(state, strategy, symbol, side)
+        current_mode = str(current.get("mode", "OFF")).upper()
+        if current_mode in {"OFF", target_mode}:
+            return {"ok": True, "changed": False, "reason": "NO_CHANGE_NEEDED", "current_mode": current_mode}
+
+        result = set_strategy_side_config(
+            strategy=strategy,
+            symbol=symbol,
+            side=side,
+            mode=target_mode,
+            reason=f"auto_downgrade:{trigger}:{reason}",
+        )
+
+        if NOTIFY_AUTO_DOWNGRADE:
+            notify_event(
+                "⚠️ Auto downgrade executed",
+                f"{strategy} {normalize_symbol(symbol)} {normalize_side(side)}: {current_mode} → {target_mode}\nTrigger: {trigger}\nReason: {reason}",
+                important=True,
+            )
+
+        return {"ok": True, "changed": True, "result": result}
+    except Exception as exc:
+        log(f"[WARN] auto downgrade failed: {exc}")
+        return {"ok": False, "changed": False, "reason": str(exc)}
+
+
+def build_order_lifecycle(symbol: Optional[str] = None, days: int = 7) -> Dict[str, Any]:
+    safe_days = max(1, min(days, 30))
+    sym = normalize_symbol(symbol) if symbol else None
+    rows = get_recent_trade_events(days=safe_days)
+    if sym:
+        rows = [row for row in rows if normalize_symbol(row.get("symbol", "")) == sym]
+
+    latest_rows = rows[:100]
+    position = None
+    open_orders = []
+    protection = None
+    if sym:
+        try:
+            position = get_position_linear(sym)
+        except Exception as exc:
+            position = {"error": str(exc)}
+        try:
+            open_orders = get_open_orders(sym)
+        except Exception as exc:
+            open_orders = [{"error": str(exc)}]
+        try:
+            protection = validate_post_order_protection(sym)
+        except Exception as exc:
+            protection = {"ok": False, "reason": str(exc)}
+
+    return {
+        "days": safe_days,
+        "symbol": sym,
+        "events_count": len(rows),
+        "latest_events": latest_rows,
+        "position": position,
+        "open_orders": open_orders,
+        "protection": protection,
+        "summary": summarize_supabase_rows(rows) if rows else {},
+    }
+
+
+def build_dashboard_v2_html(secret: str, days: int = 7) -> str:
+    state = load_state()
+    safe_days = max(1, min(days, 30))
+    health = build_strategy_health(days=safe_days) if supabase_enabled() else {"items": [], "status_counts": {}}
+    open_risk = summarize_open_risk()
+
+    control_rows = []
+    strategies = state.get("strategies", {})
+    for strategy, strategy_cfg in strategies.items():
+        for symbol, symbol_cfg in strategy_cfg.get("symbols", {}).items():
+            for side in ["LONG", "SHORT"]:
+                side_cfg = symbol_cfg.get(side, {})
+                if not side_cfg:
+                    continue
+                mode = str(side_cfg.get("mode", "OFF")).upper()
+                risk_pct = side_cfg.get("risk_pct", 0.0)
+                buttons = []
+                for new_mode in ["OFF", "PAPER", "MICRO"]:
+                    buttons.append(
+                        f'<form method="get" action="/strategy_side_update_form?secret={h(secret)}&strategy={h(strategy)}&symbol={h(symbol)}&side={h(side)}&mode={new_mode}">'
+                        f'<button class="secondary" type="submit">{new_mode}</button></form>'
+                    )
+                risk_form = (
+                    f'<form method="get" action="/strategy_side_update_form?secret={h(secret)}&strategy={h(strategy)}&symbol={h(symbol)}&side={h(side)}">'
+                    f'<input name="risk_pct" value="{h(risk_pct)}" style="width:70px;padding:6px;border:1px solid #ddd;border-radius:6px;">'
+                    f'<button class="secondary" type="submit">Risk</button></form>'
+                )
+                control_rows.append([
+                    h(strategy), h(symbol), h(side), html_badge(mode), h(risk_pct), " ".join(buttons), risk_form
+                ])
+
+    open_rows = []
+    for symbol, data in open_risk.get("by_symbol", {}).items():
+        prot = {"ok": None, "reason": ""}
+        try:
+            prot = validate_post_order_protection(symbol)
+        except Exception as exc:
+            prot = {"ok": False, "reason": str(exc)}
+        open_rows.append([
+            h(symbol), h(data.get("side")), fmt_num(data.get("size")), fmt_num(data.get("position_value")),
+            fmt_num(data.get("unrealized_pnl")), html_badge("PROTECTED" if prot.get("ok") else "MISSING"), h(prot.get("reason")),
+            f'<a href="/order_lifecycle?secret={h(secret)}&symbol={h(symbol)}&days={safe_days}">lifecycle</a>'
+        ])
+
+    health_rows = []
+    for item in health.get("items", []):
+        hd = item.get("health", {})
+        health_rows.append([
+            h(item.get("strategy")), h(item.get("symbol")), h(item.get("side")), html_badge(item.get("mode")),
+            h(item.get("event_count")), h(item.get("order_sent")), h(item.get("order_failed")),
+            h(item.get("exposure_rejected", 0)), h(item.get("trade_limit_rejected", 0)), html_badge(hd.get("status")), h(hd.get("score")),
+            h(", ".join(hd.get("reasons", [])))
+        ])
+
+    return f"""
+    <!doctype html>
+    <html><head><meta charset="utf-8"><title>Trading Control Center v3.4.0</title>
+    <style>
+    body{{font-family:Arial,Helvetica,sans-serif;margin:24px;background:#f6f8fb;color:#1f2937}}
+    table{{width:100%;border-collapse:collapse;background:white;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:24px}}
+    th,td{{padding:10px 12px;border-bottom:1px solid #e5e7eb;text-align:left;font-size:13px;vertical-align:top}}
+    th{{background:#111827;color:white}} .card{{background:white;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:18px}}
+    .badge{{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;font-weight:700}} .good{{background:#dcfce7;color:#166534}} .watch{{background:#fef3c7;color:#92400e}} .bad{{background:#fee2e2;color:#991b1b}} .neutral{{background:#e5e7eb;color:#374151}}
+    button.secondary{{background:#111827;color:white;border:0;border-radius:8px;padding:7px 10px;font-weight:700;margin:2px;cursor:pointer}}
+    .nav a{{display:inline-block;margin:0 8px 8px 0;padding:8px 12px;border-radius:8px;background:#111827;color:white;text-decoration:none;font-size:13px}}
+    </style></head><body>
+    <h1>Trading Control Center v3.4.0</h1>
+    <div class="nav"><a href="/dashboard?secret={h(secret)}&days={safe_days}">Classic dashboard</a><a href="/risk_status?secret={h(secret)}">Risk JSON</a><a href="/strategy_state?secret={h(secret)}">Strategy JSON</a></div>
+    <div class="card"><b>Runtime:</b> real_orders={h(ENABLE_REAL_ORDERS)} · telegram={h(telegram_configured())} · auto_downgrade={h(AUTO_DOWNGRADE_ENABLED)} · open_positions={h(open_risk.get('open_positions'))} · open_value={fmt_num(open_risk.get('total_position_value'))}</div>
+    <h2>Strategy Controls</h2>{html_table(['Strategy','Symbol','Side','Mode','Risk %','Mode actions','Risk action'], control_rows)}
+    <h2>Open Positions & Protection</h2>{html_table(['Symbol','Side','Size','Position Value','Unrealized PnL','Protection','Reason','Lifecycle'], open_rows)}
+    <h2>Strategy Health</h2>{html_table(['Strategy','Symbol','Side','Mode','Events','Orders','Failures','Exposure Rejects','Trade Limit Rejects','Health','Score','Reasons'], health_rows)}
+    </body></html>
+    """
 
 # ============================================================
 # RISK ENGINE
@@ -3018,7 +3460,7 @@ def root():
     runtime_state = load_runtime_state()
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 2.6.0</p>
+    <p>version: 3.4.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>trading_paused: {runtime_state.get("trading_paused")}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
@@ -3030,6 +3472,10 @@ def root():
     <p>max_leverage_exposure_pct: {MAX_LEVERAGE_EXPOSURE_PCT}</p>
     <p>post_order_verify_enabled: {POST_ORDER_VERIFY_ENABLED}</p>
     <p>auto_close_on_protection_missing: {AUTO_CLOSE_ON_PROTECTION_MISSING}</p>
+    <p>strategy_admin_enabled: {STRATEGY_ADMIN_ENABLED}</p>
+    <p>auto_downgrade_enabled: {AUTO_DOWNGRADE_ENABLED}</p>
+    <p>telegram_configured: {telegram_configured()}</p>
+    <p><a href="/dashboard_v2?secret=REPLACE_WITH_SECRET&days=7">Dashboard v2</a></p>
     <p>time: {now_iso()}</p>
     <p><a href="/dashboard?secret=REPLACE_WITH_SECRET&days=7">Dashboard</a></p>
     """
@@ -3141,6 +3587,106 @@ def protection_status(secret: str, symbol: str):
         "ok": True,
         "protection": validate_post_order_protection(symbol),
     }
+
+
+@app.get("/dashboard_v2", response_class=HTMLResponse)
+def dashboard_v2(secret: str, days: int = 7):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return HTMLResponse(content=build_dashboard_v2_html(secret=secret, days=days), media_type="text/html")
+
+
+@app.get("/strategy_state")
+def strategy_state_get(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {"ok": True, "state": load_state()}
+
+
+@app.post("/strategy_state_raw_update")
+async def strategy_state_raw_update(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    require_strategy_admin()
+    new_state = body.get("state")
+    if not isinstance(new_state, dict):
+        raise HTTPException(400, "Body must contain object field: state")
+    before = load_state()
+    save_state(new_state)
+    write_system_log(
+        action="strategy_state_raw_update",
+        symbol="SYSTEM",
+        decision="STRATEGY_STATE_UPDATED",
+        reason="raw_state_update",
+        status="logged",
+        extra={"before": before, "after": new_state},
+    )
+    return {"ok": True, "state_saved": True, "state": new_state}
+
+
+@app.post("/strategy_side_update")
+async def strategy_side_update(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    result = set_strategy_side_config(
+        strategy=body.get("strategy"),
+        symbol=body.get("symbol"),
+        side=body.get("side"),
+        mode=body.get("mode"),
+        risk_pct=to_float_or_none(body.get("risk_pct")) if "risk_pct" in body else None,
+        extra_updates=body.get("extra") if isinstance(body.get("extra"), dict) else None,
+        reason=body.get("reason", "api_update"),
+    )
+    return {"ok": True, "result": result}
+
+
+@app.get("/strategy_side_update_form")
+@app.post("/strategy_side_update_form")
+def strategy_side_update_form(
+    secret: str,
+    strategy: str,
+    symbol: str,
+    side: str,
+    mode: Optional[str] = None,
+    risk_pct: Optional[float] = None,
+):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    result = set_strategy_side_config(
+        strategy=strategy,
+        symbol=symbol,
+        side=side,
+        mode=mode,
+        risk_pct=risk_pct,
+        reason="dashboard_v2_form_update",
+    )
+    return HTMLResponse(
+        content=f"<html><body><h3>Updated</h3><pre>{h(result)}</pre><p><a href='/dashboard_v2?secret={h(secret)}&days=7'>Back to dashboard v2</a></p></body></html>",
+        media_type="text/html",
+    )
+
+
+@app.get("/trade_limits_status")
+def trade_limits_status(secret: str, strategy: str, symbol: str, side: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    payload = {"strategy": strategy, "symbol": symbol, "side": side}
+    return {"ok": True, "trade_limits": validate_trade_limits(payload)}
+
+
+@app.get("/order_lifecycle")
+def order_lifecycle(secret: str, symbol: Optional[str] = None, days: int = 7):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {"ok": True, "lifecycle": build_order_lifecycle(symbol=symbol, days=days)}
+
+
+@app.post("/notify_test")
+async def notify_test(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    result = notify_event("✅ Trading bot test notification", body.get("message", "Notification test OK"), important=True)
+    return {"ok": True, "notify": result}
 
 
 @app.post("/trading_pause_on")
@@ -3456,6 +4002,15 @@ def risk_status(secret: str):
             "post_order_verify_sleep_sec": POST_ORDER_VERIFY_SLEEP_SEC,
             "auto_close_on_protection_missing": AUTO_CLOSE_ON_PROTECTION_MISSING,
             "exposure_guard_enabled": exposure_limits_enabled(),
+            "strategy_admin_enabled": STRATEGY_ADMIN_ENABLED,
+            "max_daily_trades_global": MAX_DAILY_TRADES_GLOBAL,
+            "max_daily_trades_per_symbol": MAX_DAILY_TRADES_PER_SYMBOL,
+            "max_daily_losses_per_symbol": MAX_DAILY_LOSSES_PER_SYMBOL,
+            "max_consecutive_losses": MAX_CONSECUTIVE_LOSSES,
+            "auto_downgrade_enabled": AUTO_DOWNGRADE_ENABLED,
+            "auto_downgrade_target_mode": AUTO_DOWNGRADE_TARGET_MODE,
+            "telegram_enabled": TELEGRAM_ENABLED,
+            "telegram_configured": telegram_configured(),
         },
         "closed_pnl_guard": {
             "blocked": closed_pnl_reason is not None,
@@ -3933,6 +4488,46 @@ async def tv_webhook(request: Request):
             }
         )
 
+    trade_limits = validate_trade_limits(body)
+    if not trade_limits["ok"]:
+        write_trade_log(
+            body=body,
+            mode=mode,
+            risk_pct_used=risk_pct_used,
+            decision="TRADE_LIMIT_REJECTED",
+            decision_reason=trade_limits["reason"],
+            status="rejected_by_trade_limit_guard",
+        )
+
+        if NOTIFY_REJECTIONS:
+            notify_event(
+                "🚫 Trade limit rejected signal",
+                f"{strategy} {symbol} {side}\nReason: {trade_limits['reason']}",
+                important=True,
+            )
+
+        if AUTO_DOWNGRADE_ON_DAILY_LIMIT:
+            auto_downgrade_strategy(strategy, symbol, side, "trade_limit", trade_limits["reason"])
+
+        return ok(
+            {
+                "order_sent": False,
+                "decision": {
+                    **decision,
+                    "allow_order": False,
+                    "decision": "TRADE_LIMIT_REJECTED",
+                    "reason": trade_limits["reason"],
+                },
+                "quality": quality,
+                "price_deviation": price_deviation,
+                "duplicate_signal": duplicate_signal,
+                "alert_idempotency": alert_idempotency,
+                "exposure": exposure,
+                "trade_limits": trade_limits,
+                "msg": "Risk engine approved, but daily/symbol trade limit guard rejected the signal.",
+            }
+        )
+
     if is_trading_paused():
         write_trade_log(
             body=body,
@@ -3957,6 +4552,7 @@ async def tv_webhook(request: Request):
                 "duplicate_signal": duplicate_signal,
                 "alert_idempotency": alert_idempotency,
                 "exposure": exposure,
+                "trade_limits": trade_limits,
                 "msg": "Risk engine approved, but runtime trading pause is active.",
             }
         )
@@ -3980,6 +4576,7 @@ async def tv_webhook(request: Request):
                 "duplicate_signal": duplicate_signal,
                 "alert_idempotency": alert_idempotency,
                 "exposure": exposure,
+                "trade_limits": trade_limits,
                 "msg": "Risk engine approved, but ENABLE_REAL_ORDERS=false",
             }
         )
@@ -3998,6 +4595,13 @@ async def tv_webhook(request: Request):
             status="order_sent",
         )
 
+        if NOTIFY_ORDER_SENT:
+            notify_event(
+                "✅ Order sent",
+                f"{strategy} {symbol} {side} mode={mode} risk={risk_pct_used}% order_id={order_id}",
+                important=False,
+            )
+
         post_order_protection = validate_post_order_protection(symbol)
         protection_recovery = None
 
@@ -4012,6 +4616,16 @@ async def tv_webhook(request: Request):
                 status="warning",
                 extra={"post_order_protection": post_order_protection},
             )
+
+            if NOTIFY_PROTECTION_FAILED:
+                notify_event(
+                    "⚠️ Protection verification failed",
+                    f"{strategy} {symbol} {side} order_id={order_id}\nReason: {post_order_protection['reason']}",
+                    important=True,
+                )
+
+            if AUTO_DOWNGRADE_ON_PROTECTION_FAILED:
+                auto_downgrade_strategy(strategy, symbol, side, "protection_failed", post_order_protection["reason"])
 
             if AUTO_CLOSE_ON_PROTECTION_MISSING:
                 try:
@@ -4038,6 +4652,7 @@ async def tv_webhook(request: Request):
                 "duplicate_signal": duplicate_signal,
                 "alert_idempotency": alert_idempotency,
                 "exposure": exposure,
+                "trade_limits": trade_limits,
                 "post_order_protection": post_order_protection,
                 "protection_recovery": protection_recovery,
                 "result": result,
@@ -4053,6 +4668,14 @@ async def tv_webhook(request: Request):
             decision_reason=str(err),
             status="error",
         )
+        if NOTIFY_ORDER_FAILED:
+            notify_event(
+                "❌ Order failed",
+                f"{strategy} {symbol} {side} mode={mode}\nError: {err}",
+                important=True,
+            )
+        if AUTO_DOWNGRADE_ON_ORDER_FAILED:
+            auto_downgrade_strategy(strategy, symbol, side, "order_failed", str(err))
         raise
 
 
