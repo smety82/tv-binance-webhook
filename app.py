@@ -53,6 +53,13 @@ MAX_SYMBOL_POSITION_VALUE_USDT = float(os.getenv("MAX_SYMBOL_POSITION_VALUE_USDT
 MAX_EQUITY_USAGE_PCT = float(os.getenv("MAX_EQUITY_USAGE_PCT", "0"))
 MAX_LEVERAGE_EXPOSURE_PCT = float(os.getenv("MAX_LEVERAGE_EXPOSURE_PCT", "0"))
 
+# Post-order protection verification.
+# Verifies after a real order that the position has SL and at least one reduce-only TP order.
+POST_ORDER_VERIFY_ENABLED = os.getenv("POST_ORDER_VERIFY_ENABLED", "true").lower() == "true"
+POST_ORDER_VERIFY_RETRIES = int(os.getenv("POST_ORDER_VERIFY_RETRIES", "5"))
+POST_ORDER_VERIFY_SLEEP_SEC = float(os.getenv("POST_ORDER_VERIFY_SLEEP_SEC", "0.5"))
+AUTO_CLOSE_ON_PROTECTION_MISSING = os.getenv("AUTO_CLOSE_ON_PROTECTION_MISSING", "false").lower() == "true"
+
 HTTP_TIMEOUT = 15.0
 
 APP_DIR = Path(__file__).resolve().parent
@@ -60,7 +67,7 @@ STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="2.5.1")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="2.6.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -1384,6 +1391,7 @@ def badge_class(value: str) -> str:
         "DUPLICATE_SIGNAL_REJECTED",
         "DUPLICATE_ALERT_REJECTED",
         "EXPOSURE_REJECTED",
+        "PROTECTION_VERIFY_FAILED",
     }:
         return "watch"
     if v in {"BAD", "OFF", "FALSE", "REJECTED", "ORDER_FAILED", "ERROR"}:
@@ -1729,7 +1737,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
     </head>
     <body>
         <h1>TV Webhook ↔ Bybit Risk Engine Dashboard</h1>
-        <div class="muted">Version 2.5.1 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
+        <div class="muted">Version 2.6.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
         {nav}
 
         <div class="grid">
@@ -1802,6 +1810,15 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
                 Max symbol position value: {MAX_SYMBOL_POSITION_VALUE_USDT} USDT ·
                 Max equity usage: {MAX_EQUITY_USAGE_PCT}% ·
                 Max leverage exposure: {MAX_LEVERAGE_EXPOSURE_PCT}%
+            </div>
+        </div>
+
+        <div class="section card">
+            <h2>Post-order Protection Verification</h2>
+            <div class="muted">
+                Checks after real order execution that an open position has stop loss and at least one reduce-only take-profit order.
+                Enabled: {POST_ORDER_VERIFY_ENABLED} · Retries: {POST_ORDER_VERIFY_RETRIES} · Sleep: {POST_ORDER_VERIFY_SLEEP_SEC}s ·
+                Auto-close if protection is missing: {AUTO_CLOSE_ON_PROTECTION_MISSING}
             </div>
         </div>
 
@@ -2064,6 +2081,25 @@ def get_position_linear(symbol: str) -> Dict[str, Any]:
             max_abs_size = size
 
     return best or positions[0]
+
+
+def get_open_orders(symbol: str) -> list[Dict[str, Any]]:
+    resp = bybit(
+        "GET",
+        "/v5/order/realtime",
+        {
+            "category": "linear",
+            "symbol": normalize_symbol(symbol),
+            "openOnly": 0,
+            "limit": 50,
+        },
+    )
+
+    orders = (resp.get("result") or {}).get("list") or []
+    if not isinstance(orders, list):
+        return []
+
+    return orders
 
 
 def get_all_open_positions() -> list[Dict[str, Any]]:
@@ -2454,6 +2490,10 @@ def estimate_new_order_exposure(body: Dict[str, Any], risk_pct_used: float) -> D
                 "max_symbol_position_value_usdt": MAX_SYMBOL_POSITION_VALUE_USDT,
                 "max_equity_usage_pct": MAX_EQUITY_USAGE_PCT,
                 "max_leverage_exposure_pct": MAX_LEVERAGE_EXPOSURE_PCT,
+            "post_order_verify_enabled": POST_ORDER_VERIFY_ENABLED,
+            "post_order_verify_retries": POST_ORDER_VERIFY_RETRIES,
+            "post_order_verify_sleep_sec": POST_ORDER_VERIFY_SLEEP_SEC,
+            "auto_close_on_protection_missing": AUTO_CLOSE_ON_PROTECTION_MISSING,
             },
         },
     }
@@ -2470,6 +2510,10 @@ def validate_pre_trade_exposure(body: Dict[str, Any], risk_pct_used: float) -> D
                     "max_symbol_position_value_usdt": MAX_SYMBOL_POSITION_VALUE_USDT,
                     "max_equity_usage_pct": MAX_EQUITY_USAGE_PCT,
                     "max_leverage_exposure_pct": MAX_LEVERAGE_EXPOSURE_PCT,
+            "post_order_verify_enabled": POST_ORDER_VERIFY_ENABLED,
+            "post_order_verify_retries": POST_ORDER_VERIFY_RETRIES,
+            "post_order_verify_sleep_sec": POST_ORDER_VERIFY_SLEEP_SEC,
+            "auto_close_on_protection_missing": AUTO_CLOSE_ON_PROTECTION_MISSING,
                 },
             },
         }
@@ -2525,6 +2569,107 @@ def validate_pre_trade_exposure(body: Dict[str, Any], risk_pct_used: float) -> D
         "ok": True,
         "reason": "OK",
         "details": details,
+    }
+
+
+# ============================================================
+# POST-ORDER PROTECTION VERIFICATION
+# ============================================================
+
+def _is_positive_number(value: Any) -> bool:
+    try:
+        return value is not None and value != "" and float(value) > 0
+    except Exception:
+        return False
+
+
+def validate_post_order_protection(symbol: str) -> Dict[str, Any]:
+    symbol = normalize_symbol(symbol)
+
+    if not POST_ORDER_VERIFY_ENABLED:
+        return {
+            "ok": True,
+            "reason": "POST_ORDER_VERIFY_DISABLED",
+            "details": {
+                "symbol": symbol,
+                "enabled": POST_ORDER_VERIFY_ENABLED,
+            },
+        }
+
+    attempts = max(1, POST_ORDER_VERIFY_RETRIES)
+    sleep_sec = max(0.0, POST_ORDER_VERIFY_SLEEP_SEC)
+    last_details: Dict[str, Any] = {}
+
+    for attempt in range(1, attempts + 1):
+        position = get_position_linear(symbol)
+        size = abs(float(position.get("size", "0") or 0.0))
+        side = position.get("side") or ""
+        stop_loss = position.get("stopLoss", "")
+        take_profit = position.get("takeProfit", "")
+
+        open_orders = get_open_orders(symbol)
+        active_orders = [
+            order for order in open_orders
+            if str(order.get("orderStatus", "")).lower() in {"new", "partiallyfilled", "untriggered"}
+        ]
+        reduce_only_orders = [
+            order for order in active_orders
+            if str(order.get("reduceOnly", "")).lower() == "true"
+        ]
+        reduce_only_limit_orders = [
+            order for order in reduce_only_orders
+            if str(order.get("orderType", "")).lower() == "limit"
+        ]
+
+        has_position = size > 0
+        has_sl = _is_positive_number(stop_loss)
+        has_tp = len(reduce_only_limit_orders) > 0 or _is_positive_number(take_profit)
+
+        missing = []
+        if not has_position:
+            missing.append("NO_OPEN_POSITION_AFTER_ENTRY")
+        if has_position and not has_sl:
+            missing.append("MISSING_STOP_LOSS")
+        if has_position and not has_tp:
+            missing.append("MISSING_REDUCE_ONLY_TAKE_PROFIT_ORDER")
+
+        last_details = {
+            "symbol": symbol,
+            "attempt": attempt,
+            "attempts": attempts,
+            "position": {
+                "side": side,
+                "size": size,
+                "avgPrice": position.get("avgPrice", ""),
+                "markPrice": position.get("markPrice", ""),
+                "stopLoss": stop_loss,
+                "takeProfit": take_profit,
+            },
+            "open_orders_count": len(open_orders),
+            "active_orders_count": len(active_orders),
+            "reduce_only_orders_count": len(reduce_only_orders),
+            "reduce_only_limit_orders_count": len(reduce_only_limit_orders),
+            "has_position": has_position,
+            "has_sl": has_sl,
+            "has_tp": has_tp,
+            "missing": missing,
+            "auto_close_on_protection_missing": AUTO_CLOSE_ON_PROTECTION_MISSING,
+        }
+
+        if has_position and has_sl and has_tp:
+            return {
+                "ok": True,
+                "reason": "PROTECTION_VERIFIED",
+                "details": last_details,
+            }
+
+        if attempt < attempts and sleep_sec > 0:
+            time.sleep(sleep_sec)
+
+    return {
+        "ok": False,
+        "reason": ";".join(last_details.get("missing", [])) or "PROTECTION_VERIFY_FAILED",
+        "details": last_details,
     }
 
 
@@ -2873,7 +3018,7 @@ def root():
     runtime_state = load_runtime_state()
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 2.5.1</p>
+    <p>version: 2.6.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>trading_paused: {runtime_state.get("trading_paused")}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
@@ -2883,6 +3028,8 @@ def root():
     <p>max_symbol_position_value_usdt: {MAX_SYMBOL_POSITION_VALUE_USDT}</p>
     <p>max_equity_usage_pct: {MAX_EQUITY_USAGE_PCT}</p>
     <p>max_leverage_exposure_pct: {MAX_LEVERAGE_EXPOSURE_PCT}</p>
+    <p>post_order_verify_enabled: {POST_ORDER_VERIFY_ENABLED}</p>
+    <p>auto_close_on_protection_missing: {AUTO_CLOSE_ON_PROTECTION_MISSING}</p>
     <p>time: {now_iso()}</p>
     <p><a href="/dashboard?secret=REPLACE_WITH_SECRET&days=7">Dashboard</a></p>
     """
@@ -2918,6 +3065,10 @@ def order_quality_config(secret: str):
             "max_symbol_position_value_usdt": MAX_SYMBOL_POSITION_VALUE_USDT,
             "max_equity_usage_pct": MAX_EQUITY_USAGE_PCT,
             "max_leverage_exposure_pct": MAX_LEVERAGE_EXPOSURE_PCT,
+            "post_order_verify_enabled": POST_ORDER_VERIFY_ENABLED,
+            "post_order_verify_retries": POST_ORDER_VERIFY_RETRIES,
+            "post_order_verify_sleep_sec": POST_ORDER_VERIFY_SLEEP_SEC,
+            "auto_close_on_protection_missing": AUTO_CLOSE_ON_PROTECTION_MISSING,
         },
     }
 
@@ -2978,6 +3129,17 @@ async def test_exposure(request: Request):
     return {
         "ok": True,
         "exposure": validate_pre_trade_exposure(body, risk_pct_used),
+    }
+
+
+@app.get("/protection_status")
+def protection_status(secret: str, symbol: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    return {
+        "ok": True,
+        "protection": validate_post_order_protection(symbol),
     }
 
 
@@ -3289,6 +3451,10 @@ def risk_status(secret: str):
             "max_symbol_position_value_usdt": MAX_SYMBOL_POSITION_VALUE_USDT,
             "max_equity_usage_pct": MAX_EQUITY_USAGE_PCT,
             "max_leverage_exposure_pct": MAX_LEVERAGE_EXPOSURE_PCT,
+            "post_order_verify_enabled": POST_ORDER_VERIFY_ENABLED,
+            "post_order_verify_retries": POST_ORDER_VERIFY_RETRIES,
+            "post_order_verify_sleep_sec": POST_ORDER_VERIFY_SLEEP_SEC,
+            "auto_close_on_protection_missing": AUTO_CLOSE_ON_PROTECTION_MISSING,
             "exposure_guard_enabled": exposure_limits_enabled(),
         },
         "closed_pnl_guard": {
@@ -3832,6 +3998,37 @@ async def tv_webhook(request: Request):
             status="order_sent",
         )
 
+        post_order_protection = validate_post_order_protection(symbol)
+        protection_recovery = None
+
+        if not post_order_protection["ok"]:
+            write_system_log(
+                action="post_order_protection_verify_failed",
+                symbol=symbol,
+                side=side,
+                decision="PROTECTION_VERIFY_FAILED",
+                reason=post_order_protection["reason"],
+                order_id=order_id,
+                status="warning",
+                extra={"post_order_protection": post_order_protection},
+            )
+
+            if AUTO_CLOSE_ON_PROTECTION_MISSING:
+                try:
+                    protection_recovery = emergency_close_symbol_impl(symbol)
+                except Exception as close_exc:
+                    protection_recovery = {"error": str(close_exc)}
+                    write_system_log(
+                        action="post_order_auto_close_failed",
+                        symbol=symbol,
+                        side=side,
+                        decision="ORDER_FAILED",
+                        reason=str(close_exc),
+                        order_id=order_id,
+                        status="error",
+                        extra={"post_order_protection": post_order_protection},
+                    )
+
         return ok(
             {
                 "order_sent": True,
@@ -3841,6 +4038,8 @@ async def tv_webhook(request: Request):
                 "duplicate_signal": duplicate_signal,
                 "alert_idempotency": alert_idempotency,
                 "exposure": exposure,
+                "post_order_protection": post_order_protection,
+                "protection_recovery": protection_recovery,
                 "result": result,
             }
         )
