@@ -92,6 +92,44 @@ NOTIFY_RUNTIME_BLOCKED = os.getenv("NOTIFY_RUNTIME_BLOCKED", "false").lower() ==
 CRON_SECRET = os.getenv("CRON_SECRET", "")
 BACKTEST_STORAGE_ENABLED = os.getenv("BACKTEST_STORAGE_ENABLED", "true").lower() == "true"
 
+
+# v5.x modules except multi-account/testnet-live split.
+SUPABASE_SPLIT_TABLES_ENABLED = os.getenv("SUPABASE_SPLIT_TABLES_ENABLED", "false").lower() == "true"
+SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
+SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
+SUPABASE_SYSTEM_EVENTS_TABLE = os.getenv("SUPABASE_SYSTEM_EVENTS_TABLE", "system_events")
+SUPABASE_STRATEGY_HISTORY_TABLE = os.getenv("SUPABASE_STRATEGY_HISTORY_TABLE", "strategy_state_history")
+SUPABASE_DAILY_REPORTS_TABLE = os.getenv("SUPABASE_DAILY_REPORTS_TABLE", "daily_reports")
+SUPABASE_TELEGRAM_TABLE = os.getenv("SUPABASE_TELEGRAM_TABLE", "telegram_notifications")
+SUPABASE_BACKTEST_TABLE = os.getenv("SUPABASE_BACKTEST_TABLE", "backtest_results")
+
+RECONCILIATION_LOOKBACK_DAYS = int(os.getenv("RECONCILIATION_LOOKBACK_DAYS", "7"))
+RECOVERY_AUTO_PAUSE_ON_UNKNOWN_POSITION = os.getenv("RECOVERY_AUTO_PAUSE_ON_UNKNOWN_POSITION", "false").lower() == "true"
+RECOVERY_NOTIFY_ON_STARTUP_ISSUES = os.getenv("RECOVERY_NOTIFY_ON_STARTUP_ISSUES", "true").lower() == "true"
+
+TELEGRAM_COMMANDS_ENABLED = os.getenv("TELEGRAM_COMMANDS_ENABLED", "true").lower() == "true"
+TELEGRAM_COMMANDS_ALLOW_TRADING_ACTIONS = os.getenv("TELEGRAM_COMMANDS_ALLOW_TRADING_ACTIONS", "false").lower() == "true"
+
+PROMOTION_MIN_PAPER_EVENTS = int(os.getenv("PROMOTION_MIN_PAPER_EVENTS", "20"))
+PROMOTION_MIN_MICRO_ORDERS = int(os.getenv("PROMOTION_MIN_MICRO_ORDERS", "10"))
+PROMOTION_MIN_PROFIT_FACTOR = float(os.getenv("PROMOTION_MIN_PROFIT_FACTOR", "1.2"))
+PROMOTION_MAX_REJECTION_RATE = float(os.getenv("PROMOTION_MAX_REJECTION_RATE", "0.25"))
+PROMOTION_MAX_PROTECTION_FAILURES = int(os.getenv("PROMOTION_MAX_PROTECTION_FAILURES", "0"))
+
+PAYLOAD_SCHEMA_VALIDATION_ENABLED = os.getenv("PAYLOAD_SCHEMA_VALIDATION_ENABLED", "true").lower() == "true"
+PAYLOAD_SCHEMA_REQUIRE_VERSION = os.getenv("PAYLOAD_SCHEMA_REQUIRE_VERSION", "false").lower() == "true"
+SUPPORTED_PAYLOAD_VERSIONS = [x.strip() for x in os.getenv("SUPPORTED_PAYLOAD_VERSIONS", "1.0").split(",") if x.strip()]
+
+EXECUTION_QUALITY_ENABLED = os.getenv("EXECUTION_QUALITY_ENABLED", "true").lower() == "true"
+MAX_ALLOWED_SLIPPAGE_PCT = float(os.getenv("MAX_ALLOWED_SLIPPAGE_PCT", "0"))
+
+CAPITAL_ALLOCATION_ENABLED = os.getenv("CAPITAL_ALLOCATION_ENABLED", "true").lower() == "true"
+MAX_STRATEGY_EXPOSURE_PCT = float(os.getenv("MAX_STRATEGY_EXPOSURE_PCT", "0"))
+MAX_STRATEGY_POSITION_VALUE_USDT = float(os.getenv("MAX_STRATEGY_POSITION_VALUE_USDT", "0"))
+MAX_GROUP_EXPOSURE_PCT = float(os.getenv("MAX_GROUP_EXPOSURE_PCT", "0"))
+
+STRATEGY_REVIEW_LOOKBACK_DAYS = int(os.getenv("STRATEGY_REVIEW_LOOKBACK_DAYS", "30"))
+
 HTTP_TIMEOUT = 15.0
 
 APP_DIR = Path(__file__).resolve().parent
@@ -101,7 +139,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="4.3.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="5.3.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -543,6 +581,19 @@ def write_trade_log(
         order_id=order_id,
         status=status,
     )
+
+    try:
+        write_extended_data_model_event(
+            body=body,
+            mode=mode,
+            risk_pct_used=risk_pct_used,
+            decision=decision,
+            decision_reason=decision_reason,
+            order_id=order_id,
+            status=status,
+        )
+    except Exception as exc:
+        log(f"[WARN] extended data model write failed: {exc}")
 
 
 def write_system_log(
@@ -3428,7 +3479,7 @@ def build_dashboard_v2_html(secret: str, days: int = 7) -> str:
 
     return f"""
     <!doctype html>
-    <html><head><meta charset="utf-8"><title>Trading Control Center v4.3.0</title>
+    <html><head><meta charset="utf-8"><title>Trading Control Center v5.3.0</title>
     <style>
     body{{font-family:Arial,Helvetica,sans-serif;margin:24px;background:#f6f8fb;color:#1f2937}}
     table{{width:100%;border-collapse:collapse;background:white;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:24px}}
@@ -3438,10 +3489,10 @@ def build_dashboard_v2_html(secret: str, days: int = 7) -> str:
     button.secondary{{background:#111827;color:white;border:0;border-radius:8px;padding:7px 10px;font-weight:700;margin:2px;cursor:pointer}}
     .nav a{{display:inline-block;margin:0 8px 8px 0;padding:8px 12px;border-radius:8px;background:#111827;color:white;text-decoration:none;font-size:13px}}
     </style></head><body>
-    <h1>Trading Control Center v4.3.0</h1>
+    <h1>Trading Control Center v5.3.0</h1>
     <div class="nav"><a href="/dashboard?secret={h(secret)}&days={safe_days}">Classic dashboard</a><a href="/dashboard_charts?secret={h(secret)}&days={safe_days}">Charts</a><a href="/backtest_vs_live?secret={h(secret)}&days={safe_days}">Backtest vs Live</a><a href="/risk_status?secret={h(secret)}">Risk JSON</a><a href="/strategy_state?secret={h(secret)}">Strategy JSON</a></div>
     <div class="card"><b>Runtime:</b> real_orders={h(ENABLE_REAL_ORDERS)} · telegram={h(telegram_configured())} · auto_downgrade={h(AUTO_DOWNGRADE_ENABLED)} · open_positions={h(open_risk.get('open_positions'))} · open_value={fmt_num(open_risk.get('total_position_value'))}</div>
-    <div class="card"><b>v4.3 modules:</b> daily Telegram cron · trade limits/loss streak · per-symbol limits · lifecycle · auto downgrade · backtest vs live · charts</div>
+    <div class="card"><b>v5.3 modules:</b> daily Telegram cron · trade limits/loss streak · per-symbol limits · lifecycle · auto downgrade · backtest vs live · charts</div>
     <h2>Strategy Controls</h2>{html_table(['Strategy','Symbol','Side','Mode','Risk %','Mode actions','Risk action'], control_rows)}
     <h2>Open Positions & Protection</h2>{html_table(['Symbol','Side','Size','Position Value','Unrealized PnL','Protection','Reason','Lifecycle'], open_rows)}
     <h2>Strategy Health</h2>{html_table(['Strategy','Symbol','Side','Mode','Events','Orders','Failures','Exposure Rejects','Trade Limit Rejects','Health','Score','Reasons'], health_rows)}
@@ -3793,7 +3844,7 @@ def root():
     runtime_state = load_runtime_state()
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 4.3.0</p>
+    <p>version: 5.3.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>trading_paused: {runtime_state.get("trading_paused")}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
@@ -3810,6 +3861,10 @@ def root():
     <p>auto_close_on_protection_missing: {AUTO_CLOSE_ON_PROTECTION_MISSING}</p>
     <p>strategy_admin_enabled: {STRATEGY_ADMIN_ENABLED}</p>
     <p>auto_downgrade_enabled: {AUTO_DOWNGRADE_ENABLED}</p>
+    <p>supabase_split_tables_enabled: {SUPABASE_SPLIT_TABLES_ENABLED}</p>
+    <p>payload_schema_validation_enabled: {PAYLOAD_SCHEMA_VALIDATION_ENABLED}</p>
+    <p>telegram_commands_enabled: {TELEGRAM_COMMANDS_ENABLED}</p>
+    <p>capital_allocation_enabled: {CAPITAL_ALLOCATION_ENABLED}</p>
     <p>telegram_configured: {telegram_configured()}</p>
     <p><a href="/dashboard_v2?secret=REPLACE_WITH_SECRET&days=7">Dashboard v2</a></p>
     <p>time: {now_iso()}</p>
@@ -4773,6 +4828,29 @@ async def tv_webhook(request: Request):
 
     verify_secret(request, body)
 
+    payload_validation = validate_payload_schema(body)
+    if not payload_validation["ok"]:
+        write_trade_log(
+            body=body if isinstance(body, dict) else {},
+            mode="OFF",
+            risk_pct_used=0.0,
+            decision="PAYLOAD_SCHEMA_REJECTED",
+            decision_reason=payload_validation["reason"],
+            status="rejected_by_payload_schema",
+        )
+        return ok({
+            "order_sent": False,
+            "decision": {
+                "allow_order": False,
+                "mode": "OFF",
+                "risk_pct_used": 0.0,
+                "decision": "PAYLOAD_SCHEMA_REJECTED",
+                "reason": payload_validation["reason"],
+            },
+            "payload_validation": payload_validation,
+            "msg": "Payload schema validation rejected the alert.",
+        })
+
     strategy = body.get("strategy")
     symbol = normalize_symbol(body.get("symbol", ""))
     side = normalize_side(body.get("side", ""))
@@ -5034,6 +5112,44 @@ async def tv_webhook(request: Request):
             }
         )
 
+    capital_allocation = validate_capital_allocation(body, risk_pct_used)
+    if not capital_allocation["ok"]:
+        write_trade_log(
+            body=body,
+            mode=mode,
+            risk_pct_used=risk_pct_used,
+            decision="CAPITAL_ALLOCATION_REJECTED",
+            decision_reason=capital_allocation["reason"],
+            status="rejected_by_capital_allocation_guard",
+        )
+
+        if NOTIFY_REJECTIONS:
+            safe_notify_event(
+                "🚫 Capital allocation rejected signal",
+                short_event_line(strategy, symbol, side, mode, capital_allocation["reason"]),
+                important=True,
+            )
+
+        return ok(
+            {
+                "order_sent": False,
+                "decision": {
+                    **decision,
+                    "allow_order": False,
+                    "decision": "CAPITAL_ALLOCATION_REJECTED",
+                    "reason": capital_allocation["reason"],
+                },
+                "quality": quality,
+                "price_deviation": price_deviation,
+                "duplicate_signal": duplicate_signal,
+                "alert_idempotency": alert_idempotency,
+                "exposure": exposure,
+                "trade_limits": trade_limits,
+                "capital_allocation": capital_allocation,
+                "msg": "Risk engine approved, but capital allocation guard rejected the signal.",
+            }
+        )
+
     if is_trading_paused():
         write_trade_log(
             body=body,
@@ -5066,6 +5182,7 @@ async def tv_webhook(request: Request):
                 "alert_idempotency": alert_idempotency,
                 "exposure": exposure,
                 "trade_limits": trade_limits,
+                "capital_allocation": capital_allocation,
                 "msg": "Risk engine approved, but runtime trading pause is active.",
             }
         )
@@ -5090,6 +5207,7 @@ async def tv_webhook(request: Request):
                 "alert_idempotency": alert_idempotency,
                 "exposure": exposure,
                 "trade_limits": trade_limits,
+                "capital_allocation": capital_allocation,
                 "msg": "Risk engine approved, but ENABLE_REAL_ORDERS=false",
             }
         )
@@ -5107,6 +5225,8 @@ async def tv_webhook(request: Request):
             order_id=order_id,
             status="order_sent",
         )
+
+        execution_quality = assess_execution_quality_after_order(body, result, order_id)
 
         if NOTIFY_ORDER_SENT:
             safe_notify_event(
@@ -5166,7 +5286,9 @@ async def tv_webhook(request: Request):
                 "alert_idempotency": alert_idempotency,
                 "exposure": exposure,
                 "trade_limits": trade_limits,
+                "capital_allocation": capital_allocation,
                 "post_order_protection": post_order_protection,
+                "execution_quality": execution_quality,
                 "protection_recovery": protection_recovery,
                 "result": result,
             }
@@ -5191,6 +5313,690 @@ async def tv_webhook(request: Request):
             auto_downgrade_strategy(strategy, symbol, side, "order_failed", str(err))
         raise
 
+
+
+# ============================================================
+# v5.3 EXTENSIONS: SPLIT DATA MODEL, RECONCILIATION, RECOVERY,
+# TELEGRAM COMMANDS, PROMOTION, EXECUTION QUALITY, PAYLOAD SCHEMA,
+# CAPITAL ALLOCATION, STRATEGY REVIEW
+# ============================================================
+
+def supabase_url_for_table(table_name: str) -> str:
+    return f"{SUPABASE_URL}/rest/v1/{table_name}"
+
+
+def supabase_insert_optional(table_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not (supabase_enabled() and SUPABASE_SPLIT_TABLES_ENABLED):
+        return {"ok": False, "skipped": True, "reason": "split_tables_disabled"}
+    try:
+        resp = client.post(
+            supabase_url_for_table(table_name),
+            headers=supabase_headers(),
+            json=payload,
+        )
+        if resp.status_code >= 400:
+            # Optional physical split tables are allowed to be absent during migration.
+            log(f"[WARN] Optional Supabase table insert failed {table_name}: {resp.status_code} {resp.text}")
+            return {"ok": False, "status_code": resp.status_code, "reason": resp.text[:500]}
+        return {"ok": True, "status_code": resp.status_code}
+    except Exception as exc:
+        log(f"[WARN] Optional Supabase table insert exception {table_name}: {exc}")
+        return {"ok": False, "reason": str(exc)}
+
+
+def write_extended_data_model_event(
+    body: Dict[str, Any],
+    mode: str,
+    risk_pct_used: float,
+    decision: str,
+    decision_reason: str,
+    order_id: str = "",
+    status: str = "logged",
+) -> None:
+    """Best-effort writes to optional normalized Supabase tables.
+
+    This keeps backward compatibility with trade_events. If the physical tables do
+    not exist yet, writes are ignored and the main trading flow is not affected.
+    """
+    if not SUPABASE_SPLIT_TABLES_ENABLED:
+        return
+
+    symbol = normalize_symbol(body.get("symbol", "")) if body.get("symbol") else "SYSTEM"
+    side = str(body.get("side", "")).upper()
+    strategy = str(body.get("strategy", "UNKNOWN"))
+    event_payload = {
+        "timestamp_utc": now_iso(),
+        "strategy": strategy,
+        "symbol": symbol,
+        "side": side,
+        "mode": mode,
+        "decision": decision,
+        "decision_reason": decision_reason,
+        "order_id": order_id,
+        "status": status,
+        "raw_payload": sanitize_payload(body),
+    }
+
+    if strategy == "SYSTEM_EMERGENCY" or decision.startswith("SYSTEM") or decision in {
+        "RUNTIME_PAUSED", "RUNTIME_RESUMED", "STRATEGY_STATE_UPDATED",
+        "EMERGENCY_CLOSE_SENT", "CANCEL_ALL_ORDERS_SENT", "PROTECTION_VERIFY_FAILED",
+    }:
+        supabase_insert_optional(SUPABASE_SYSTEM_EVENTS_TABLE, event_payload)
+
+    if decision in {"ACCEPTED_MICRO", "ACCEPTED_LIVE", "ORDER_FAILED"} or order_id:
+        order_payload = dict(event_payload)
+        order_payload.update({
+            "signal_price": to_float_or_none(body.get("signalPrice")),
+            "sl": to_float_or_none(body.get("sl")),
+            "tp1": to_float_or_none(body.get("tp1")),
+            "tp2": to_float_or_none(body.get("tp2")),
+            "risk_pct_used": risk_pct_used,
+        })
+        supabase_insert_optional(SUPABASE_ORDERS_TABLE, order_payload)
+
+    if decision == "STRATEGY_STATE_UPDATED":
+        supabase_insert_optional(SUPABASE_STRATEGY_HISTORY_TABLE, event_payload)
+
+
+def validate_payload_schema(body: Dict[str, Any]) -> Dict[str, Any]:
+    if not PAYLOAD_SCHEMA_VALIDATION_ENABLED:
+        return {"ok": True, "reason": "PAYLOAD_SCHEMA_VALIDATION_DISABLED", "details": {}}
+
+    if not isinstance(body, dict):
+        return {"ok": False, "reason": "PAYLOAD_NOT_OBJECT", "details": {}}
+
+    if body.get("type") == "ping":
+        return {"ok": True, "reason": "PING_PAYLOAD", "details": {}}
+
+    payload_version = body.get("payload_version") or body.get("version")
+    warnings = []
+    errors = []
+
+    if PAYLOAD_SCHEMA_REQUIRE_VERSION and not payload_version:
+        errors.append("MISSING_PAYLOAD_VERSION")
+
+    if payload_version and str(payload_version) not in SUPPORTED_PAYLOAD_VERSIONS:
+        errors.append(f"UNSUPPORTED_PAYLOAD_VERSION_{payload_version}")
+
+    required = ["strategy", "symbol", "side", "orderType", "signalPrice", "sl", "tp1", "tp2", "riskPct", "barTime"]
+    for key in required:
+        if key not in body or body.get(key) in (None, ""):
+            errors.append(f"MISSING_{key}")
+
+    if "side" in body and str(body.get("side", "")).upper() not in {"LONG", "SHORT"}:
+        errors.append("INVALID_SIDE")
+
+    if "orderType" in body and str(body.get("orderType", "Market")) != "Market":
+        errors.append("UNSUPPORTED_ORDER_TYPE")
+
+    numeric_fields = ["signalPrice", "sl", "tp1", "tp2", "riskPct"]
+    for key in numeric_fields:
+        if key in body and body.get(key) not in (None, "") and to_float_or_none(body.get(key)) is None:
+            errors.append(f"INVALID_NUMERIC_{key}")
+
+    if not payload_version:
+        warnings.append("NO_PAYLOAD_VERSION_PROVIDED_COMPAT_MODE")
+
+    return {
+        "ok": len(errors) == 0,
+        "reason": "OK" if not errors else ";".join(errors),
+        "details": {
+            "payload_version": payload_version,
+            "supported_versions": SUPPORTED_PAYLOAD_VERSIONS,
+            "warnings": warnings,
+            "errors": errors,
+            "required_fields": required,
+        },
+    }
+
+
+def estimate_strategy_exposure(strategy: str) -> Dict[str, Any]:
+    open_risk = summarize_open_risk()
+    # Current Bybit positions do not carry strategy tags, so this is conservative.
+    # The strategy-specific allocation checks use global open value as current exposure
+    # unless future normalized positions table provides exact strategy attribution.
+    return {
+        "strategy": strategy,
+        "current_strategy_position_value": float(open_risk.get("total_position_value", 0.0) or 0.0),
+        "current_total_position_value": float(open_risk.get("total_position_value", 0.0) or 0.0),
+        "open_risk": open_risk,
+    }
+
+
+def validate_capital_allocation(body: Dict[str, Any], risk_pct_used: float) -> Dict[str, Any]:
+    if not CAPITAL_ALLOCATION_ENABLED:
+        return {"ok": True, "reason": "CAPITAL_ALLOCATION_DISABLED", "details": {}}
+
+    strategy = str(body.get("strategy", "UNKNOWN"))
+    symbol = normalize_symbol(body.get("symbol", ""))
+    side = normalize_side(body.get("side", ""))
+    state = load_state()
+
+    strategy_cfg = state.get("strategies", {}).get(strategy, {})
+    side_cfg = get_side_config_copy(state, strategy, symbol, side)
+    global_cfg = state.get("global", {})
+
+    def limit_value(*keys: str, default: float = 0.0) -> float:
+        for source in (side_cfg, strategy_cfg, global_cfg):
+            for key in keys:
+                if key in source and source.get(key) not in (None, ""):
+                    try:
+                        return float(source.get(key))
+                    except Exception:
+                        continue
+        return float(default)
+
+    max_strategy_value = limit_value("max_strategy_position_value_usdt", "max_strategy_exposure_usdt", default=MAX_STRATEGY_POSITION_VALUE_USDT)
+    max_strategy_pct = limit_value("max_strategy_exposure_pct", default=MAX_STRATEGY_EXPOSURE_PCT)
+    max_group_pct = limit_value("max_group_exposure_pct", default=MAX_GROUP_EXPOSURE_PCT)
+
+    if max_strategy_value <= 0 and max_strategy_pct <= 0 and max_group_pct <= 0:
+        return {"ok": True, "reason": "CAPITAL_ALLOCATION_LIMITS_DISABLED", "details": {"strategy": strategy, "symbol": symbol}}
+
+    exposure_estimate = estimate_new_order_exposure(body, risk_pct_used)
+    if not exposure_estimate.get("ok"):
+        return exposure_estimate
+
+    allocation = estimate_strategy_exposure(strategy)
+    details = dict(exposure_estimate.get("details", {}))
+    equity = float(details.get("equity", 0.0) or 0.0)
+    new_value = float(details.get("estimated_new_position_value", 0.0) or 0.0)
+    current_strategy_value = float(allocation.get("current_strategy_position_value", 0.0) or 0.0)
+    projected_strategy_value = current_strategy_value + new_value
+    projected_strategy_pct = (projected_strategy_value / equity * 100.0) if equity > 0 else None
+
+    reasons = []
+    if max_strategy_value > 0 and projected_strategy_value > max_strategy_value:
+        reasons.append(f"MAX_STRATEGY_POSITION_VALUE_EXCEEDED_{projected_strategy_value:.4f}_MAX_{max_strategy_value:.4f}")
+    if max_strategy_pct > 0 and projected_strategy_pct is not None and projected_strategy_pct > max_strategy_pct:
+        reasons.append(f"MAX_STRATEGY_EXPOSURE_EXCEEDED_{projected_strategy_pct:.4f}%_MAX_{max_strategy_pct:.4f}%")
+    if max_group_pct > 0:
+        projected_group_pct = details.get("projected_equity_usage_pct")
+        if projected_group_pct is not None and projected_group_pct > max_group_pct:
+            reasons.append(f"MAX_GROUP_EXPOSURE_EXCEEDED_{projected_group_pct:.4f}%_MAX_{max_group_pct:.4f}%")
+
+    details.update({
+        "strategy": strategy,
+        "current_strategy_position_value": current_strategy_value,
+        "projected_strategy_position_value": projected_strategy_value,
+        "projected_strategy_exposure_pct": projected_strategy_pct,
+        "capital_allocation_limits": {
+            "max_strategy_position_value_usdt": max_strategy_value,
+            "max_strategy_exposure_pct": max_strategy_pct,
+            "max_group_exposure_pct": max_group_pct,
+        },
+        "allocation_note": "Strategy attribution is conservative until normalized positions table is fully populated.",
+    })
+
+    return {"ok": len(reasons) == 0, "reason": "OK" if not reasons else ";".join(reasons), "details": details}
+
+
+def list_open_orders(symbol: Optional[str] = None) -> list[Dict[str, Any]]:
+    params: Dict[str, Any] = {"category": "linear", "settleCoin": "USDT"}
+    if symbol:
+        params.pop("settleCoin", None)
+        params["symbol"] = normalize_symbol(symbol)
+    try:
+        resp = bybit("GET", "/v5/order/realtime", params)
+        return (resp.get("result") or {}).get("list") or []
+    except Exception as exc:
+        log(f"[WARN] list_open_orders failed: {exc}")
+        return []
+
+
+def build_reconciliation_report(days: int = RECONCILIATION_LOOKBACK_DAYS) -> Dict[str, Any]:
+    safe_days = max(1, min(int(days), 30))
+    open_positions = get_all_open_positions()
+    open_orders = list_open_orders()
+    rows = fetch_supabase_logs_since(days=safe_days, limit=10000) if supabase_enabled() else []
+
+    known_order_symbols = {normalize_symbol(r.get("symbol", "")) for r in rows if r.get("status") == "order_sent" or r.get("order_id")}
+    open_position_symbols = {normalize_symbol(p.get("symbol", "")) for p in open_positions}
+
+    unknown_positions = []
+    protection_warnings = []
+    for pos in open_positions:
+        symbol = normalize_symbol(pos.get("symbol", ""))
+        if symbol and symbol not in known_order_symbols:
+            unknown_positions.append(pos)
+        protection = validate_post_order_protection(symbol)
+        if not protection.get("ok"):
+            protection_warnings.append({"symbol": symbol, "protection": protection})
+
+    reduce_only_orders = [o for o in open_orders if str(o.get("reduceOnly", "")).lower() == "true" or o.get("reduceOnly") is True]
+    orphan_reduce_only_orders = []
+    for order in reduce_only_orders:
+        symbol = normalize_symbol(order.get("symbol", ""))
+        if symbol and symbol not in open_position_symbols:
+            orphan_reduce_only_orders.append(order)
+
+    issues = []
+    if unknown_positions:
+        issues.append("UNKNOWN_BYBIT_OPEN_POSITION")
+    if protection_warnings:
+        issues.append("OPEN_POSITION_PROTECTION_WARNING")
+    if orphan_reduce_only_orders:
+        issues.append("ORPHAN_REDUCE_ONLY_ORDERS")
+
+    return {
+        "ok": len(issues) == 0,
+        "days": safe_days,
+        "issues": issues,
+        "open_positions_count": len(open_positions),
+        "open_orders_count": len(open_orders),
+        "known_order_symbols": sorted(x for x in known_order_symbols if x),
+        "open_position_symbols": sorted(x for x in open_position_symbols if x),
+        "unknown_positions": unknown_positions,
+        "protection_warnings": protection_warnings,
+        "orphan_reduce_only_orders": orphan_reduce_only_orders,
+        "summary": {
+            "unknown_positions": len(unknown_positions),
+            "protection_warnings": len(protection_warnings),
+            "orphan_reduce_only_orders": len(orphan_reduce_only_orders),
+        },
+    }
+
+
+def build_recovery_status(days: int = RECONCILIATION_LOOKBACK_DAYS) -> Dict[str, Any]:
+    report = build_reconciliation_report(days=days)
+    actions = []
+    if report["summary"]["unknown_positions"] > 0:
+        actions.append("Review unknown Bybit positions; consider manual pause or emergency close.")
+    if report["summary"]["protection_warnings"] > 0:
+        actions.append("Review missing TP/SL protection immediately.")
+    if report["summary"]["orphan_reduce_only_orders"] > 0:
+        actions.append("Review/cancel orphan reduce-only orders.")
+    if not actions:
+        actions.append("No recovery action required.")
+    return {"ok": report["ok"], "reconciliation": report, "recommended_actions": actions}
+
+
+def run_recovery_scan(days: int = RECONCILIATION_LOOKBACK_DAYS, notify: bool = True) -> Dict[str, Any]:
+    status = build_recovery_status(days=days)
+    report = status["reconciliation"]
+    if not status["ok"]:
+        if notify and RECOVERY_NOTIFY_ON_STARTUP_ISSUES:
+            safe_notify_event(
+                "⚠️ Recovery scan warning",
+                f"Issues: {', '.join(report.get('issues', []))}\nSummary: {json.dumps(report.get('summary', {}), ensure_ascii=False)}",
+                important=True,
+            )
+        if RECOVERY_AUTO_PAUSE_ON_UNKNOWN_POSITION and report["summary"].get("unknown_positions", 0) > 0:
+            set_trading_paused(True, reason="Recovery scan detected unknown Bybit position")
+    return status
+
+
+def assess_order_execution_quality(body: Dict[str, Any], result: Dict[str, Any], order_id: str = "") -> Dict[str, Any]:
+    if not EXECUTION_QUALITY_ENABLED:
+        return {"ok": True, "reason": "EXECUTION_QUALITY_DISABLED", "details": {}}
+    symbol = normalize_symbol(body.get("symbol", ""))
+    signal_price = to_float_or_none(body.get("signalPrice"))
+    if signal_price is None or signal_price <= 0:
+        return {"ok": False, "reason": "MISSING_SIGNAL_PRICE", "details": {"symbol": symbol, "order_id": order_id}}
+    details: Dict[str, Any] = {"symbol": symbol, "order_id": order_id, "signal_price": signal_price}
+    try:
+        pos = get_position_linear(symbol)
+        avg_price = to_float_or_none(pos.get("avgPrice"))
+        mark_price = to_float_or_none(pos.get("markPrice"))
+        details.update({"avg_price": avg_price, "mark_price": mark_price, "position": pos})
+        ref_price = avg_price or mark_price
+        if ref_price and ref_price > 0:
+            slippage_pct = abs(ref_price - signal_price) / signal_price * 100.0
+            details["execution_ref_price"] = ref_price
+            details["slippage_pct"] = slippage_pct
+            details["max_allowed_slippage_pct"] = MAX_ALLOWED_SLIPPAGE_PCT
+            ok_flag = MAX_ALLOWED_SLIPPAGE_PCT <= 0 or slippage_pct <= MAX_ALLOWED_SLIPPAGE_PCT
+            reason = "OK" if ok_flag else f"SLIPPAGE_TOO_HIGH_{slippage_pct:.4f}%_MAX_{MAX_ALLOWED_SLIPPAGE_PCT:.4f}%"
+            return {"ok": ok_flag, "reason": reason, "details": details}
+        return {"ok": False, "reason": "NO_EXECUTION_REFERENCE_PRICE", "details": details}
+    except Exception as exc:
+        details["error"] = str(exc)
+        return {"ok": False, "reason": "EXECUTION_QUALITY_CHECK_FAILED", "details": details}
+
+
+def assess_execution_quality_after_order(body: Dict[str, Any], result: Dict[str, Any], order_id: str = "") -> Dict[str, Any]:
+    quality = assess_order_execution_quality(body, result, order_id)
+    try:
+        write_system_log(
+            action="execution_quality_assessed",
+            symbol=normalize_symbol(body.get("symbol", "")),
+            side=str(body.get("side", "")).upper(),
+            decision="EXECUTION_QUALITY_OK" if quality.get("ok") else "EXECUTION_QUALITY_WARNING",
+            reason=quality.get("reason", "UNKNOWN"),
+            order_id=order_id,
+            status="logged" if quality.get("ok") else "warning",
+            extra={"execution_quality": quality},
+        )
+    except Exception as exc:
+        log(f"[WARN] execution quality log failed: {exc}")
+    return quality
+
+
+def compute_promotion_status(strategy: str, symbol: str, side: str, days: int = 30) -> Dict[str, Any]:
+    symbol = normalize_symbol(symbol)
+    side = normalize_side(side)
+    safe_days = max(1, min(days, 90))
+    rows = fetch_supabase_logs_since(days=safe_days, limit=10000) if supabase_enabled() else []
+    matched = [r for r in rows if r.get("strategy") == strategy and normalize_symbol(r.get("symbol", "")) == symbol and str(r.get("side", "")).upper() == side]
+    event_count = len(matched)
+    paper_events = sum(1 for r in matched if r.get("decision") == "PAPER_LOGGED")
+    orders = sum(1 for r in matched if r.get("status") == "order_sent")
+    rejected = sum(1 for r in matched if str(r.get("decision", "")).endswith("REJECTED") or r.get("decision") == "REJECTED")
+    protection_failures = sum(1 for r in matched if r.get("decision") == "PROTECTION_VERIFY_FAILED")
+    rejection_rate = rejected / event_count if event_count else 0.0
+
+    start_ms, end_ms = utc_range_last_days(safe_days)
+    pnl_summary = summarize_closed_pnl(get_closed_pnl(start_ms, end_ms, symbol=symbol))
+    pf = pnl_summary.get("profit_factor")
+
+    ready_for_micro = paper_events >= PROMOTION_MIN_PAPER_EVENTS and rejection_rate <= PROMOTION_MAX_REJECTION_RATE and protection_failures <= PROMOTION_MAX_PROTECTION_FAILURES
+    ready_for_live = orders >= PROMOTION_MIN_MICRO_ORDERS and (pf is None or pf >= PROMOTION_MIN_PROFIT_FACTOR) and rejection_rate <= PROMOTION_MAX_REJECTION_RATE and protection_failures <= PROMOTION_MAX_PROTECTION_FAILURES
+
+    if ready_for_live:
+        status = "READY_FOR_LIVE"
+    elif ready_for_micro:
+        status = "READY_FOR_MICRO"
+    elif event_count >= max(3, PROMOTION_MIN_PAPER_EVENTS // 2):
+        status = "WATCH"
+    else:
+        status = "NOT_READY"
+
+    reasons = []
+    if paper_events < PROMOTION_MIN_PAPER_EVENTS:
+        reasons.append(f"paper_events {paper_events}/{PROMOTION_MIN_PAPER_EVENTS}")
+    if orders < PROMOTION_MIN_MICRO_ORDERS:
+        reasons.append(f"micro_orders {orders}/{PROMOTION_MIN_MICRO_ORDERS}")
+    if pf is not None and pf < PROMOTION_MIN_PROFIT_FACTOR:
+        reasons.append(f"profit_factor {pf:.2f} < {PROMOTION_MIN_PROFIT_FACTOR:.2f}")
+    if rejection_rate > PROMOTION_MAX_REJECTION_RATE:
+        reasons.append(f"rejection_rate {rejection_rate:.1%} > {PROMOTION_MAX_REJECTION_RATE:.1%}")
+    if protection_failures > PROMOTION_MAX_PROTECTION_FAILURES:
+        reasons.append(f"protection_failures {protection_failures} > {PROMOTION_MAX_PROTECTION_FAILURES}")
+
+    return {
+        "strategy": strategy,
+        "symbol": symbol,
+        "side": side,
+        "days": safe_days,
+        "status": status,
+        "ready_for_micro": ready_for_micro,
+        "ready_for_live": ready_for_live,
+        "metrics": {
+            "event_count": event_count,
+            "paper_events": paper_events,
+            "orders": orders,
+            "rejected": rejected,
+            "rejection_rate": rejection_rate,
+            "protection_failures": protection_failures,
+            "profit_factor": pf,
+            "closed_pnl": pnl_summary,
+        },
+        "reasons": reasons or ["Promotion criteria satisfied for current status."],
+    }
+
+
+def build_all_promotion_status(days: int = 30) -> Dict[str, Any]:
+    state = load_state()
+    items = []
+    for strategy, scfg in state.get("strategies", {}).items():
+        for symbol, symcfg in scfg.get("symbols", {}).items():
+            for side in ("LONG", "SHORT"):
+                if side in symcfg:
+                    items.append(compute_promotion_status(strategy, symbol, side, days=days))
+    counts: Dict[str, int] = {}
+    for item in items:
+        counts[item["status"]] = counts.get(item["status"], 0) + 1
+    return {"ok": True, "days": days, "counts": counts, "items": items}
+
+
+def build_strategy_review_report(days: int = STRATEGY_REVIEW_LOOKBACK_DAYS) -> Dict[str, Any]:
+    safe_days = max(1, min(days, 90))
+    health = build_strategy_health(days=min(safe_days, 30)) if supabase_enabled() else {"items": []}
+    promotions = build_all_promotion_status(days=safe_days)
+    backtest = build_backtest_vs_live_report(days=min(safe_days, 30))
+    recommendations = []
+
+    promotion_index = {(p["strategy"], p["symbol"], p["side"]): p for p in promotions.get("items", [])}
+    for item in health.get("items", []):
+        key = (item.get("strategy"), item.get("symbol"), item.get("side"))
+        promo = promotion_index.get(key, {})
+        hdata = item.get("health", {})
+        status = hdata.get("status")
+        mode = str(item.get("mode", "")).upper()
+        rec = "KEEP_CURRENT_MODE"
+        if status == "BAD" and mode in {"MICRO", "LIVE"}:
+            rec = "DOWNGRADE_TO_PAPER_OR_OFF"
+        elif promo.get("status") == "READY_FOR_MICRO" and mode == "PAPER":
+            rec = "CONSIDER_PROMOTION_TO_MICRO"
+        elif promo.get("status") == "READY_FOR_LIVE" and mode == "MICRO":
+            rec = "CONSIDER_PROMOTION_TO_LIVE_WITH_SMALL_RISK"
+        elif item.get("price_deviation_rejected", 0) or item.get("order_quality_rejected", 0):
+            rec = "REVIEW_ALERT_PARAMETERS_OR_LIMITS"
+        recommendations.append({
+            "strategy": item.get("strategy"),
+            "symbol": item.get("symbol"),
+            "side": item.get("side"),
+            "mode": mode,
+            "health": hdata,
+            "promotion": promo,
+            "recommendation": rec,
+            "reasons": hdata.get("reasons", []),
+        })
+
+    return {
+        "ok": True,
+        "days": safe_days,
+        "generated_at": now_iso(),
+        "summary": {
+            "health_groups": len(health.get("items", [])),
+            "promotion_counts": promotions.get("counts", {}),
+            "backtest_comparisons": len(backtest.get("comparisons", [])) if isinstance(backtest, dict) else 0,
+        },
+        "recommendations": recommendations,
+        "promotion_status": promotions,
+        "backtest_vs_live": backtest,
+    }
+
+
+def handle_telegram_command_text(text: str) -> Dict[str, Any]:
+    if not TELEGRAM_COMMANDS_ENABLED:
+        return {"ok": False, "response": "Telegram commands are disabled."}
+    cmd = (text or "").strip()
+    cmd_lower = cmd.lower()
+    try:
+        if cmd_lower in {"/status", "status"}:
+            risk = summarize_open_risk()
+            runtime = load_runtime_state()
+            response = f"Status\nreal_orders={ENABLE_REAL_ORDERS}\npaused={runtime.get('trading_paused')}\nopen_positions={risk.get('open_positions')}\nopen_value={risk.get('total_position_value'):.4f}\nunrealized={risk.get('total_unrealized_pnl'):.4f}"
+        elif cmd_lower in {"/positions", "positions"}:
+            risk = summarize_open_risk()
+            if not risk.get("by_symbol"):
+                response = "No open positions."
+            else:
+                lines = ["Open positions:"]
+                for sym, data in risk.get("by_symbol", {}).items():
+                    lines.append(f"{sym} {data.get('side')} size={data.get('size')} value={data.get('position_value'):.4f} pnl={data.get('unrealized_pnl'):.4f}")
+                response = "\n".join(lines)
+        elif cmd_lower.startswith("/report") or cmd_lower == "report":
+            rep = build_performance_report(days=1)
+            orders = rep.get("orders", {})
+            pnl = rep.get("bybit_closed_pnl", {})
+            response = f"Daily report\nevents={rep.get('event_count')}\norders_sent={orders.get('order_sent')}\nfailed={orders.get('order_failed')}\nrejected={orders.get('rejected')}\nnet_pnl={pnl.get('net_pnl')}"
+        elif cmd_lower.startswith("/reconcile"):
+            report = build_reconciliation_report(days=RECONCILIATION_LOOKBACK_DAYS)
+            response = f"Reconciliation ok={report.get('ok')} issues={report.get('issues')} summary={report.get('summary')}"
+        elif cmd_lower in {"/pause", "pause"}:
+            if not TELEGRAM_COMMANDS_ALLOW_TRADING_ACTIONS:
+                response = "Trading commands are disabled. Set TELEGRAM_COMMANDS_ALLOW_TRADING_ACTIONS=true to enable."
+            else:
+                set_trading_paused(True, reason="Telegram command pause")
+                response = "Trading paused."
+        elif cmd_lower in {"/resume", "resume"}:
+            if not TELEGRAM_COMMANDS_ALLOW_TRADING_ACTIONS:
+                response = "Trading commands are disabled. Set TELEGRAM_COMMANDS_ALLOW_TRADING_ACTIONS=true to enable."
+            else:
+                set_trading_paused(False)
+                response = "Trading resumed."
+        else:
+            response = "Supported commands: /status, /positions, /report, /reconcile. Optional trading commands: /pause, /resume."
+        return {"ok": True, "response": response}
+    except Exception as exc:
+        return {"ok": False, "response": f"Command failed: {exc}"}
+
+
+@app.get("/payload_schema")
+def payload_schema(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {
+        "ok": True,
+        "schema_validation_enabled": PAYLOAD_SCHEMA_VALIDATION_ENABLED,
+        "require_version": PAYLOAD_SCHEMA_REQUIRE_VERSION,
+        "supported_versions": SUPPORTED_PAYLOAD_VERSIONS,
+        "example": {
+            "payload_version": "1.0",
+            "secret": "***",
+            "exchange": "bybit",
+            "strategy": "structure_swing_v134",
+            "symbol": "SOLUSDT",
+            "side": "LONG",
+            "orderType": "Market",
+            "signalPrice": 84.47,
+            "sl": 83.2,
+            "tp1": 86.5,
+            "tp2": 88.0,
+            "riskPct": 0.1,
+            "tf": "15",
+            "barTime": 1779051154922,
+        },
+    }
+
+
+@app.post("/validate_payload")
+async def validate_payload_endpoint(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    return {"ok": True, "payload_validation": validate_payload_schema(body)}
+
+
+@app.get("/reconciliation_report")
+def reconciliation_report(secret: str, days: int = RECONCILIATION_LOOKBACK_DAYS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {"ok": True, "report": build_reconciliation_report(days=days)}
+
+
+@app.get("/recovery_status")
+def recovery_status(secret: str, days: int = RECONCILIATION_LOOKBACK_DAYS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {"ok": True, "recovery": build_recovery_status(days=days)}
+
+
+@app.post("/recovery_scan")
+def recovery_scan(secret: str, days: int = RECONCILIATION_LOOKBACK_DAYS, notify: bool = True):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {"ok": True, "recovery": run_recovery_scan(days=days, notify=notify)}
+
+
+@app.get("/execution_quality")
+def execution_quality(secret: str, symbol: str, signal_price: Optional[float] = None):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    body = {"symbol": symbol, "side": "LONG", "signalPrice": signal_price or get_ticker_last(normalize_symbol(symbol))}
+    return {"ok": True, "execution_quality": assess_order_execution_quality(body, {}, "manual_check")}
+
+
+@app.get("/capital_allocation_status")
+def capital_allocation_status(secret: str, strategy: Optional[str] = None):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    open_risk = summarize_open_risk()
+    state = load_state()
+    strategies = []
+    for sname in state.get("strategies", {}).keys():
+        if strategy and sname != strategy:
+            continue
+        strategies.append(estimate_strategy_exposure(sname))
+    return {
+        "ok": True,
+        "capital_allocation_enabled": CAPITAL_ALLOCATION_ENABLED,
+        "global_limits": {
+            "max_strategy_exposure_pct": MAX_STRATEGY_EXPOSURE_PCT,
+            "max_strategy_position_value_usdt": MAX_STRATEGY_POSITION_VALUE_USDT,
+            "max_group_exposure_pct": MAX_GROUP_EXPOSURE_PCT,
+        },
+        "open_risk": open_risk,
+        "strategies": strategies,
+    }
+
+
+@app.get("/promotion_status")
+def promotion_status(secret: str, strategy: str, symbol: str, side: str, days: int = 30):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {"ok": True, "promotion": compute_promotion_status(strategy, symbol, side, days=days)}
+
+
+@app.get("/promotion_all")
+def promotion_all(secret: str, days: int = 30):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_all_promotion_status(days=days)
+
+
+@app.post("/telegram_command")
+async def telegram_command(request: Request):
+    body = await request.json()
+    # Allows either normal secret or Telegram webhook-like message with configured chat id.
+    if body.get("secret"):
+        verify_secret(request, body)
+    elif str((body.get("message") or {}).get("chat", {}).get("id", "")) != str(TELEGRAM_CHAT_ID):
+        raise HTTPException(401, "Unauthorized")
+    text = body.get("text") or (body.get("message") or {}).get("text") or ""
+    result = handle_telegram_command_text(text)
+    if TELEGRAM_ENABLED and result.get("response"):
+        safe_notify_event("🤖 Command response", result["response"], important=False)
+    return result
+
+
+@app.get("/telegram_command")
+def telegram_command_get(secret: str, text: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    result = handle_telegram_command_text(text)
+    if TELEGRAM_ENABLED and result.get("response"):
+        safe_notify_event("🤖 Command response", result["response"], important=False)
+    return result
+
+
+@app.get("/strategy_review_report")
+def strategy_review_report(secret: str, days: int = STRATEGY_REVIEW_LOOKBACK_DAYS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_strategy_review_report(days=days)
+
+
+@app.get("/supabase_split_model")
+def supabase_split_model(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {
+        "ok": True,
+        "enabled": SUPABASE_SPLIT_TABLES_ENABLED,
+        "tables": {
+            "orders": SUPABASE_ORDERS_TABLE,
+            "positions": SUPABASE_POSITIONS_TABLE,
+            "system_events": SUPABASE_SYSTEM_EVENTS_TABLE,
+            "strategy_state_history": SUPABASE_STRATEGY_HISTORY_TABLE,
+            "daily_reports": SUPABASE_DAILY_REPORTS_TABLE,
+            "telegram_notifications": SUPABASE_TELEGRAM_TABLE,
+            "backtest_results": SUPABASE_BACKTEST_TABLE,
+        },
+        "note": "The application writes these tables best-effort when SUPABASE_SPLIT_TABLES_ENABLED=true. Missing tables do not break trading.",
+        "minimal_sql_hint": "Create nullable columns matching the JSON payloads, or keep SUPABASE_SPLIT_TABLES_ENABLED=false until schema migration is ready.",
+    }
 
 # ============================================================
 # ADJUST ENDPOINT
