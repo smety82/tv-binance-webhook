@@ -82,6 +82,10 @@ NOTIFY_ORDER_FAILED = os.getenv("NOTIFY_ORDER_FAILED", "true").lower() == "true"
 NOTIFY_REJECTIONS = os.getenv("NOTIFY_REJECTIONS", "false").lower() == "true"
 NOTIFY_PROTECTION_FAILED = os.getenv("NOTIFY_PROTECTION_FAILED", "true").lower() == "true"
 NOTIFY_AUTO_DOWNGRADE = os.getenv("NOTIFY_AUTO_DOWNGRADE", "true").lower() == "true"
+NOTIFY_TRADING_PAUSE = os.getenv("NOTIFY_TRADING_PAUSE", "true").lower() == "true"
+NOTIFY_EMERGENCY_ACTIONS = os.getenv("NOTIFY_EMERGENCY_ACTIONS", "true").lower() == "true"
+NOTIFY_DAILY_REPORT = os.getenv("NOTIFY_DAILY_REPORT", "true").lower() == "true"
+NOTIFY_RUNTIME_BLOCKED = os.getenv("NOTIFY_RUNTIME_BLOCKED", "false").lower() == "true"
 
 HTTP_TIMEOUT = 15.0
 
@@ -90,7 +94,7 @@ STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="3.4.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="3.5.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -1865,7 +1869,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
     </head>
     <body>
         <h1>TV Webhook ↔ Bybit Risk Engine Dashboard</h1>
-        <div class="muted">Version 3.4.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
+        <div class="muted">Version 3.5.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
         {nav}
 
         <div class="grid">
@@ -2842,6 +2846,94 @@ def notify_event(title: str, message: str, important: bool = False) -> Dict[str,
         return {"ok": False, "sent": False, "reason": str(exc)}
 
 
+def safe_notify_event(title: str, message: str, important: bool = False) -> Dict[str, Any]:
+    """Best-effort Telegram notification. Never breaks trading flow."""
+    try:
+        return notify_event(title=title, message=message, important=important)
+    except Exception as exc:
+        log(f"[WARN] safe_notify_event failed: {exc}")
+        return {"ok": False, "sent": False, "reason": str(exc)}
+
+
+def short_event_line(strategy: str, symbol: str, side: str, mode: str = "", reason: str = "") -> str:
+    parts = [str(strategy or "UNKNOWN"), normalize_symbol(symbol or ""), str(side or "").upper()]
+    if mode:
+        parts.append(f"mode={mode}")
+    if reason:
+        parts.append(f"reason={reason}")
+    return " | ".join(parts)
+
+
+def format_daily_report_message(days: int = 1) -> str:
+    safe_days = max(1, min(days, 30))
+
+    try:
+        perf = build_performance_report(days=safe_days)
+    except Exception as exc:
+        perf = {"error": str(exc), "orders": {}, "event_count": 0, "by_decision": {}, "by_symbol": {}}
+
+    try:
+        health = build_strategy_health(days=safe_days)
+    except Exception as exc:
+        health = {"error": str(exc), "status_counts": {}, "items": []}
+
+    orders = perf.get("orders", {}) or {}
+    pnl = perf.get("bybit_closed_pnl", {}) or {}
+    open_risk = perf.get("open_risk", {}) or {}
+
+    lines = [
+        f"Window: {safe_days} day(s)",
+        f"Time: {now_iso()}",
+        "",
+        "Performance:",
+        f"- events: {perf.get('event_count', 0)}",
+        f"- order_sent: {orders.get('order_sent', 0)}",
+        f"- paper_logged: {orders.get('paper_logged', 0)}",
+        f"- order_failed: {orders.get('order_failed', 0)}",
+        f"- rejected: {orders.get('rejected', 0)}",
+        f"- quality_rejected: {orders.get('order_quality_rejected', 0)}",
+        f"- price_deviation_rejected: {orders.get('price_deviation_rejected', 0)}",
+        f"- exposure_rejected: {orders.get('exposure_rejected', 0)}",
+        f"- duplicate_signal_rejected: {orders.get('duplicate_signal_rejected', 0)}",
+        f"- duplicate_alert_rejected: {orders.get('duplicate_alert_rejected', 0)}",
+        "",
+        "Closed PnL:",
+        f"- trades: {pnl.get('trades', 0)}",
+        f"- net_pnl: {fmt_num(pnl.get('net_pnl'))}",
+        f"- PF: {fmt_num(pnl.get('profit_factor'), 3)}",
+        f"- win_rate: {fmt_num(pnl.get('win_rate'), 2)}%",
+        "",
+        "Open risk:",
+        f"- open_positions: {open_risk.get('open_positions', 0)}",
+        f"- open_value: {fmt_num(open_risk.get('total_position_value'))}",
+        f"- unrealized_pnl: {fmt_num(open_risk.get('total_unrealized_pnl'))}",
+        "",
+        "Health:",
+        f"- GOOD: {(health.get('status_counts') or {}).get('GOOD', 0)}",
+        f"- WATCH: {(health.get('status_counts') or {}).get('WATCH', 0)}",
+        f"- BAD: {(health.get('status_counts') or {}).get('BAD', 0)}",
+    ]
+
+    bad_watch_items = []
+    for item in (health.get("items") or [])[:10]:
+        hdata = item.get("health", {}) or {}
+        status = hdata.get("status")
+        if status in {"BAD", "WATCH"}:
+            bad_watch_items.append(
+                f"- {item.get('strategy')} {item.get('symbol')} {item.get('side')} {item.get('mode')}: {status} score={hdata.get('score')}"
+            )
+
+    if bad_watch_items:
+        lines += ["", "Watchlist:"] + bad_watch_items[:5]
+
+    if perf.get("error"):
+        lines += ["", f"Performance report error: {perf.get('error')}"]
+    if health.get("error"):
+        lines += ["", f"Health report error: {health.get('error')}"]
+
+    return "\n".join(lines)
+
+
 def get_recent_trade_events(days: int = 1) -> list[Dict[str, Any]]:
     if supabase_enabled():
         try:
@@ -2991,7 +3083,7 @@ def auto_downgrade_strategy(
         )
 
         if NOTIFY_AUTO_DOWNGRADE:
-            notify_event(
+            safe_notify_event(
                 "⚠️ Auto downgrade executed",
                 f"{strategy} {normalize_symbol(symbol)} {normalize_side(side)}: {current_mode} → {target_mode}\nTrigger: {trigger}\nReason: {reason}",
                 important=True,
@@ -3096,7 +3188,7 @@ def build_dashboard_v2_html(secret: str, days: int = 7) -> str:
 
     return f"""
     <!doctype html>
-    <html><head><meta charset="utf-8"><title>Trading Control Center v3.4.0</title>
+    <html><head><meta charset="utf-8"><title>Trading Control Center v3.5.0</title>
     <style>
     body{{font-family:Arial,Helvetica,sans-serif;margin:24px;background:#f6f8fb;color:#1f2937}}
     table{{width:100%;border-collapse:collapse;background:white;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:24px}}
@@ -3106,7 +3198,7 @@ def build_dashboard_v2_html(secret: str, days: int = 7) -> str:
     button.secondary{{background:#111827;color:white;border:0;border-radius:8px;padding:7px 10px;font-weight:700;margin:2px;cursor:pointer}}
     .nav a{{display:inline-block;margin:0 8px 8px 0;padding:8px 12px;border-radius:8px;background:#111827;color:white;text-decoration:none;font-size:13px}}
     </style></head><body>
-    <h1>Trading Control Center v3.4.0</h1>
+    <h1>Trading Control Center v3.5.0</h1>
     <div class="nav"><a href="/dashboard?secret={h(secret)}&days={safe_days}">Classic dashboard</a><a href="/risk_status?secret={h(secret)}">Risk JSON</a><a href="/strategy_state?secret={h(secret)}">Strategy JSON</a></div>
     <div class="card"><b>Runtime:</b> real_orders={h(ENABLE_REAL_ORDERS)} · telegram={h(telegram_configured())} · auto_downgrade={h(AUTO_DOWNGRADE_ENABLED)} · open_positions={h(open_risk.get('open_positions'))} · open_value={fmt_num(open_risk.get('total_position_value'))}</div>
     <h2>Strategy Controls</h2>{html_table(['Strategy','Symbol','Side','Mode','Risk %','Mode actions','Risk action'], control_rows)}
@@ -3460,10 +3552,13 @@ def root():
     runtime_state = load_runtime_state()
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 3.4.0</p>
+    <p>version: 3.5.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>trading_paused: {runtime_state.get("trading_paused")}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
+    <p>telegram_enabled: {TELEGRAM_ENABLED}</p>
+    <p>telegram_configured: {telegram_configured()}</p>
+    <p>notify_daily_report: {NOTIFY_DAILY_REPORT}</p>
     <p>cooldown_minutes: {ORDER_SIGNAL_COOLDOWN_MINUTES}</p>
     <p>alert_idempotency_lookback_hours: {ORDER_ALERT_IDEMPOTENCY_LOOKBACK_HOURS}</p>
     <p>max_total_position_value_usdt: {MAX_TOTAL_POSITION_VALUE_USDT}</p>
@@ -3685,8 +3780,48 @@ def order_lifecycle(secret: str, symbol: Optional[str] = None, days: int = 7):
 async def notify_test(request: Request):
     body = await request.json()
     verify_secret(request, body)
-    result = notify_event("✅ Trading bot test notification", body.get("message", "Notification test OK"), important=True)
+    result = safe_notify_event("✅ Trading bot test notification", body.get("message", "Notification test OK"), important=True)
     return {"ok": True, "notify": result}
+
+
+@app.get("/telegram_status")
+def telegram_status(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {
+        "ok": True,
+        "telegram_enabled": TELEGRAM_ENABLED,
+        "telegram_configured": telegram_configured(),
+        "chat_id_set": bool(TELEGRAM_CHAT_ID),
+        "bot_token_set": bool(TELEGRAM_BOT_TOKEN),
+        "notify_order_sent": NOTIFY_ORDER_SENT,
+        "notify_order_failed": NOTIFY_ORDER_FAILED,
+        "notify_rejections": NOTIFY_REJECTIONS,
+        "notify_protection_failed": NOTIFY_PROTECTION_FAILED,
+        "notify_auto_downgrade": NOTIFY_AUTO_DOWNGRADE,
+        "notify_trading_pause": NOTIFY_TRADING_PAUSE,
+        "notify_emergency_actions": NOTIFY_EMERGENCY_ACTIONS,
+        "notify_daily_report": NOTIFY_DAILY_REPORT,
+        "notify_runtime_blocked": NOTIFY_RUNTIME_BLOCKED,
+    }
+
+
+@app.post("/telegram_daily_report")
+def telegram_daily_report(secret: str, days: int = 1):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    message = format_daily_report_message(days=days)
+    result = safe_notify_event("📊 Daily trading report", message, important=False)
+    return {"ok": True, "days": max(1, min(days, 30)), "notify": result, "message": message}
+
+
+@app.get("/telegram_daily_report")
+def telegram_daily_report_get(secret: str, days: int = 1):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    message = format_daily_report_message(days=days)
+    result = safe_notify_event("📊 Daily trading report", message, important=False)
+    return {"ok": True, "days": max(1, min(days, 30)), "notify": result, "message": message}
 
 
 @app.post("/trading_pause_on")
@@ -3705,6 +3840,13 @@ def trading_pause_on(secret: str, reason: Optional[str] = None):
         status="logged",
         extra={"runtime_state": state},
     )
+
+    if NOTIFY_TRADING_PAUSE:
+        safe_notify_event(
+            "⏸️ Trading paused",
+            f"Reason: {state.get('pause_reason') or 'Manual pause'}\nTime: {state.get('paused_at')}",
+            important=True,
+        )
 
     return {
         "ok": True,
@@ -3729,6 +3871,13 @@ def trading_pause_off(secret: str):
         status="logged",
         extra={"runtime_state": state},
     )
+
+    if NOTIFY_TRADING_PAUSE:
+        safe_notify_event(
+            "▶️ Trading resumed",
+            f"Time: {state.get('resumed_at')}",
+            important=True,
+        )
 
     return {
         "ok": True,
@@ -3757,6 +3906,13 @@ def emergency_close_all(secret: str):
 
     result = emergency_close_all_impl()
 
+    if NOTIFY_EMERGENCY_ACTIONS:
+        safe_notify_event(
+            "🚨 Emergency close ALL executed",
+            f"positions_found={result.get('positions_found')}\nTime: {now_iso()}",
+            important=True,
+        )
+
     return {
         "ok": True,
         "action": "emergency_close_all",
@@ -3770,6 +3926,13 @@ def emergency_close_symbol(secret: str, symbol: str):
         raise HTTPException(401, "Unauthorized")
 
     result = emergency_close_symbol_impl(symbol)
+
+    if NOTIFY_EMERGENCY_ACTIONS:
+        safe_notify_event(
+            "🚨 Emergency close symbol executed",
+            f"symbol={normalize_symbol(symbol)}\nclosed={result.get('closed')}\nTime: {now_iso()}",
+            important=True,
+        )
 
     return {
         "ok": True,
@@ -3795,6 +3958,13 @@ def cancel_all_orders(secret: str, symbol: Optional[str] = None):
         status="order_sent",
         extra={"response": resp},
     )
+
+    if NOTIFY_EMERGENCY_ACTIONS:
+        safe_notify_event(
+            "⚠️ Cancel all orders executed",
+            f"symbol={normalize_symbol(symbol) if symbol else 'ALL'}\nTime: {now_iso()}",
+            important=True,
+        )
 
     return {
         "ok": True,
@@ -3985,6 +4155,19 @@ def risk_status(secret: str):
         "trading_paused": runtime_state.get("trading_paused"),
         "effective_real_order_execution_enabled": ENABLE_REAL_ORDERS and not runtime_state.get("trading_paused"),
         "supabase_enabled": supabase_enabled(),
+        "telegram": {
+            "enabled": TELEGRAM_ENABLED,
+            "configured": telegram_configured(),
+            "notify_order_sent": NOTIFY_ORDER_SENT,
+            "notify_order_failed": NOTIFY_ORDER_FAILED,
+            "notify_rejections": NOTIFY_REJECTIONS,
+            "notify_protection_failed": NOTIFY_PROTECTION_FAILED,
+            "notify_auto_downgrade": NOTIFY_AUTO_DOWNGRADE,
+            "notify_trading_pause": NOTIFY_TRADING_PAUSE,
+            "notify_emergency_actions": NOTIFY_EMERGENCY_ACTIONS,
+            "notify_daily_report": NOTIFY_DAILY_REPORT,
+            "notify_runtime_blocked": NOTIFY_RUNTIME_BLOCKED,
+        },
         "order_guards": {
             "min_stop_distance_pct": ORDER_MIN_STOP_DISTANCE_PCT,
             "max_stop_distance_pct": ORDER_MAX_STOP_DISTANCE_PCT,
@@ -4364,6 +4547,13 @@ async def tv_webhook(request: Request):
             status="rejected_by_order_quality_guard",
         )
 
+        if NOTIFY_REJECTIONS:
+            safe_notify_event(
+                "🚫 Order quality rejected signal",
+                short_event_line(strategy, symbol, side, mode, quality["reason"]),
+                important=False,
+            )
+
         return ok(
             {
                 "order_sent": False,
@@ -4388,6 +4578,13 @@ async def tv_webhook(request: Request):
             decision_reason=price_deviation["reason"],
             status="rejected_by_price_deviation_guard",
         )
+
+        if NOTIFY_REJECTIONS:
+            safe_notify_event(
+                "🚫 Price deviation rejected signal",
+                short_event_line(strategy, symbol, side, mode, price_deviation["reason"]),
+                important=False,
+            )
 
         return ok(
             {
@@ -4414,6 +4611,13 @@ async def tv_webhook(request: Request):
             decision_reason=duplicate_signal["reason"],
             status="rejected_by_duplicate_signal_guard",
         )
+
+        if NOTIFY_REJECTIONS:
+            safe_notify_event(
+                "🚫 Duplicate signal rejected",
+                short_event_line(strategy, symbol, side, mode, duplicate_signal["reason"]),
+                important=False,
+            )
 
         return ok(
             {
@@ -4442,6 +4646,13 @@ async def tv_webhook(request: Request):
             status="rejected_by_alert_idempotency_guard",
         )
 
+        if NOTIFY_REJECTIONS:
+            safe_notify_event(
+                "🚫 Duplicate alert rejected",
+                short_event_line(strategy, symbol, side, mode, alert_idempotency["reason"]),
+                important=False,
+            )
+
         return ok(
             {
                 "order_sent": False,
@@ -4469,6 +4680,13 @@ async def tv_webhook(request: Request):
             decision_reason=exposure["reason"],
             status="rejected_by_exposure_guard",
         )
+
+        if NOTIFY_REJECTIONS:
+            safe_notify_event(
+                "🚫 Exposure rejected signal",
+                short_event_line(strategy, symbol, side, mode, exposure["reason"]),
+                important=True,
+            )
 
         return ok(
             {
@@ -4500,7 +4718,7 @@ async def tv_webhook(request: Request):
         )
 
         if NOTIFY_REJECTIONS:
-            notify_event(
+            safe_notify_event(
                 "🚫 Trade limit rejected signal",
                 f"{strategy} {symbol} {side}\nReason: {trade_limits['reason']}",
                 important=True,
@@ -4537,6 +4755,13 @@ async def tv_webhook(request: Request):
             decision_reason="Trading paused by runtime kill switch",
             status="blocked_by_runtime_pause",
         )
+
+        if NOTIFY_RUNTIME_BLOCKED:
+            safe_notify_event(
+                "⏸️ Signal blocked by runtime pause",
+                short_event_line(strategy, symbol, side, mode, "Trading paused by runtime kill switch"),
+                important=False,
+            )
 
         return ok(
             {
@@ -4596,7 +4821,7 @@ async def tv_webhook(request: Request):
         )
 
         if NOTIFY_ORDER_SENT:
-            notify_event(
+            safe_notify_event(
                 "✅ Order sent",
                 f"{strategy} {symbol} {side} mode={mode} risk={risk_pct_used}% order_id={order_id}",
                 important=False,
@@ -4618,7 +4843,7 @@ async def tv_webhook(request: Request):
             )
 
             if NOTIFY_PROTECTION_FAILED:
-                notify_event(
+                safe_notify_event(
                     "⚠️ Protection verification failed",
                     f"{strategy} {symbol} {side} order_id={order_id}\nReason: {post_order_protection['reason']}",
                     important=True,
@@ -4669,7 +4894,7 @@ async def tv_webhook(request: Request):
             status="error",
         )
         if NOTIFY_ORDER_FAILED:
-            notify_event(
+            safe_notify_event(
                 "❌ Order failed",
                 f"{strategy} {symbol} {side} mode={mode}\nError: {err}",
                 important=True,
