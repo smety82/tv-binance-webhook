@@ -9,6 +9,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -43,6 +44,7 @@ ORDER_MAX_STOP_DISTANCE_PCT = float(os.getenv("ORDER_MAX_STOP_DISTANCE_PCT", "8.
 ORDER_MIN_TP1_RR = float(os.getenv("ORDER_MIN_TP1_RR", "0.8"))
 ORDER_MIN_TP2_RR = float(os.getenv("ORDER_MIN_TP2_RR", "1.2"))
 ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT = float(os.getenv("ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT", "1.0"))
+ORDER_SIGNAL_COOLDOWN_MINUTES = int(os.getenv("ORDER_SIGNAL_COOLDOWN_MINUTES", "30"))
 
 HTTP_TIMEOUT = 15.0
 
@@ -51,7 +53,7 @@ STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="2.2.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="2.3.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -82,6 +84,10 @@ def now_ms() -> str:
 
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def iso_utc_seconds_ago(seconds: int) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(time.time()) - seconds))
 
 
 def hmac_sha256(key: str, value: str) -> str:
@@ -544,6 +550,45 @@ def fetch_supabase_logs_since(days: int = 1, limit: int = 5000) -> list[Dict[str
     return resp.json()
 
 
+def fetch_recent_duplicate_candidate(
+    strategy: str,
+    symbol: str,
+    side: str,
+    cooldown_minutes: int,
+) -> Optional[Dict[str, Any]]:
+    if not supabase_enabled():
+        return None
+
+    start_iso = iso_utc_seconds_ago(cooldown_minutes * 60)
+
+    params = {
+        "select": "*",
+        "strategy": f"eq.{strategy}",
+        "symbol": f"eq.{symbol}",
+        "side": f"eq.{side}",
+        "created_at": f"gte.{start_iso}",
+        "status": "eq.order_sent",
+        "order": "created_at.desc",
+        "limit": "1",
+    }
+
+    resp = client.get(
+        supabase_table_url(),
+        headers=supabase_headers(prefer=""),
+        params=params,
+    )
+
+    if resp.status_code >= 400:
+        log(f"[WARN] Supabase duplicate fetch failed: {resp.status_code} {resp.text}")
+        return None
+
+    rows = resp.json()
+    if not rows:
+        return None
+
+    return rows[0]
+
+
 def summarize_supabase_rows(rows: list[Dict[str, Any]]) -> Dict[str, Any]:
     summary: Dict[str, Any] = {
         "total_rows_sample": len(rows),
@@ -576,7 +621,7 @@ def summarize_supabase_rows(rows: list[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 # ============================================================
-# ORDER QUALITY / LIVE PRICE GUARDS
+# ORDER QUALITY / LIVE PRICE / DUPLICATE GUARDS
 # ============================================================
 
 def validate_order_quality(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -749,6 +794,62 @@ def validate_live_price_deviation(body: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def validate_duplicate_signal(body: Dict[str, Any]) -> Dict[str, Any]:
+    strategy = str(body.get("strategy", "UNKNOWN"))
+    symbol = normalize_symbol(body.get("symbol", ""))
+    side = normalize_side(body.get("side", ""))
+
+    cooldown_minutes = max(0, ORDER_SIGNAL_COOLDOWN_MINUTES)
+
+    if cooldown_minutes <= 0:
+        return {
+            "ok": True,
+            "reason": "COOLDOWN_DISABLED",
+            "details": {
+                "cooldown_minutes": cooldown_minutes,
+            },
+        }
+
+    recent = fetch_recent_duplicate_candidate(
+        strategy=strategy,
+        symbol=symbol,
+        side=side,
+        cooldown_minutes=cooldown_minutes,
+    )
+
+    if recent:
+        return {
+            "ok": False,
+            "reason": f"DUPLICATE_SIGNAL_WITHIN_{cooldown_minutes}_MINUTES",
+            "details": {
+                "strategy": strategy,
+                "symbol": symbol,
+                "side": side,
+                "cooldown_minutes": cooldown_minutes,
+                "recent_event": {
+                    "id": recent.get("id"),
+                    "created_at": recent.get("created_at"),
+                    "timestamp_utc": recent.get("timestamp_utc"),
+                    "decision": recent.get("decision"),
+                    "status": recent.get("status"),
+                    "order_id": recent.get("order_id"),
+                    "mode": recent.get("mode"),
+                },
+            },
+        }
+
+    return {
+        "ok": True,
+        "reason": "OK",
+        "details": {
+            "strategy": strategy,
+            "symbol": symbol,
+            "side": side,
+            "cooldown_minutes": cooldown_minutes,
+        },
+    }
+
+
 # ============================================================
 # REPORTING
 # ============================================================
@@ -778,6 +879,7 @@ def build_performance_report(days: int = 1) -> Dict[str, Any]:
             "runtime_paused": 0,
             "order_quality_rejected": 0,
             "price_deviation_rejected": 0,
+            "duplicate_signal_rejected": 0,
         },
         "latest_events": rows[:20],
     }
@@ -837,6 +939,9 @@ def build_performance_report(days: int = 1) -> Dict[str, Any]:
         elif decision == "ORDER_PRICE_DEVIATION_REJECTED":
             report["orders"]["price_deviation_rejected"] += 1
             report["rejections"][reason] = report["rejections"].get(reason, 0) + 1
+        elif decision == "DUPLICATE_SIGNAL_REJECTED":
+            report["orders"]["duplicate_signal_rejected"] += 1
+            report["rejections"][reason] = report["rejections"].get(reason, 0) + 1
 
         if status == "order_sent":
             report["orders"]["order_sent"] += 1
@@ -857,6 +962,7 @@ def classify_health(
     order_failed: int,
     order_quality_rejected: int,
     price_deviation_rejected: int,
+    duplicate_signal_rejected: int,
     net_pnl: Optional[float],
     profit_factor: Optional[float],
     mode: str,
@@ -874,6 +980,7 @@ def classify_health(
     error_rate = order_failed / event_count if event_count > 0 else 0.0
     quality_reject_rate = order_quality_rejected / event_count if event_count > 0 else 0.0
     price_deviation_reject_rate = price_deviation_rejected / event_count if event_count > 0 else 0.0
+    duplicate_reject_rate = duplicate_signal_rejected / event_count if event_count > 0 else 0.0
 
     score = 50
 
@@ -901,6 +1008,13 @@ def classify_health(
     elif price_deviation_reject_rate > 0:
         score -= 15
         reasons.append(f"Price deviation rejections detected: {price_deviation_rejected}")
+
+    if duplicate_reject_rate > 0.30:
+        score -= 15
+        reasons.append(f"High duplicate signal rate: {duplicate_reject_rate:.1%}")
+    elif duplicate_reject_rate > 0:
+        score -= 5
+        reasons.append(f"Duplicate signals detected: {duplicate_signal_rejected}")
 
     if error_rate > 0:
         score -= 35
@@ -991,6 +1105,7 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
                 "runtime_paused": 0,
                 "order_quality_rejected": 0,
                 "price_deviation_rejected": 0,
+                "duplicate_signal_rejected": 0,
                 "decisions": {},
                 "statuses": {},
                 "latest_created_at": None,
@@ -1017,6 +1132,8 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
             group["order_quality_rejected"] += 1
         elif decision == "ORDER_PRICE_DEVIATION_REJECTED":
             group["price_deviation_rejected"] += 1
+        elif decision == "DUPLICATE_SIGNAL_REJECTED":
+            group["duplicate_signal_rejected"] += 1
 
         if status == "order_sent":
             group["order_sent"] += 1
@@ -1042,6 +1159,7 @@ def build_strategy_health(days: int = 7) -> Dict[str, Any]:
             order_failed=int(group["order_failed"]),
             order_quality_rejected=int(group["order_quality_rejected"]),
             price_deviation_rejected=int(group["price_deviation_rejected"]),
+            duplicate_signal_rejected=int(group["duplicate_signal_rejected"]),
             net_pnl=net_pnl,
             profit_factor=profit_factor,
             mode=group["mode"],
@@ -1089,7 +1207,7 @@ def badge_class(value: str) -> str:
     v = str(value).upper()
     if v in {"GOOD", "ON", "TRUE", "PAPER_LOGGED", "ACCEPTED_MICRO", "ACCEPTED_LIVE", "ORDER_SENT", "EMERGENCY_CLOSE_SENT", "CANCEL_ALL_ORDERS_SENT"}:
         return "good"
-    if v in {"WATCH", "PAPER", "MICRO", "SYSTEM", "RUNTIME_PAUSED", "ORDER_QUALITY_REJECTED", "ORDER_PRICE_DEVIATION_REJECTED"}:
+    if v in {"WATCH", "PAPER", "MICRO", "SYSTEM", "RUNTIME_PAUSED", "ORDER_QUALITY_REJECTED", "ORDER_PRICE_DEVIATION_REJECTED", "DUPLICATE_SIGNAL_REJECTED"}:
         return "watch"
     if v in {"BAD", "OFF", "FALSE", "REJECTED", "ORDER_FAILED", "ERROR"}:
         return "bad"
@@ -1181,6 +1299,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
             h(item.get("runtime_paused", 0)),
             h(item.get("order_quality_rejected", 0)),
             h(item.get("price_deviation_rejected", 0)),
+            h(item.get("duplicate_signal_rejected", 0)),
             fmt_num(closed_data.get("net_pnl")),
             fmt_num(closed_data.get("profit_factor"), 3),
             html_badge(health_data.get("status")),
@@ -1211,6 +1330,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
         ["Runtime paused", h(perf_orders.get("runtime_paused", 0))],
         ["Order quality rejected", h(perf_orders.get("order_quality_rejected", 0))],
         ["Price deviation rejected", h(perf_orders.get("price_deviation_rejected", 0))],
+        ["Duplicate signal rejected", h(perf_orders.get("duplicate_signal_rejected", 0))],
         ["Order sent", h(perf_orders.get("order_sent", 0))],
         ["Order failed", h(perf_orders.get("order_failed", 0))],
         ["Rejected", h(perf_orders.get("rejected", 0))],
@@ -1270,7 +1390,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
         <a href="/db_logs?secret={h(secret)}&limit=20">JSON DB Logs</a>
         <a href="/risk_status?secret={h(secret)}">Risk Status</a>
         <a href="/trading_pause_status?secret={h(secret)}">Pause Status</a>
-        <a href="/order_quality_config?secret={h(secret)}">Quality Config</a>
+        <a href="/order_quality_config?secret={h(secret)}">Guard Config</a>
     </div>
     """
 
@@ -1429,7 +1549,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
     </head>
     <body>
         <h1>TV Webhook ↔ Bybit Risk Engine Dashboard</h1>
-        <div class="muted">Version 2.2.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
+        <div class="muted">Version 2.3.0 · Generated at {h(now_iso())} · Window: {safe_days} day(s)</div>
         {nav}
 
         <div class="grid">
@@ -1479,12 +1599,13 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
         </div>
 
         <div class="section card">
-            <h2>Order Quality & Price Deviation Guards</h2>
+            <h2>Order Guards</h2>
             <div class="muted">
                 Active before every MICRO/LIVE order.
                 Min stop: {ORDER_MIN_STOP_DISTANCE_PCT}% · Max stop: {ORDER_MAX_STOP_DISTANCE_PCT}% ·
                 Min TP1 RR: {ORDER_MIN_TP1_RR} · Min TP2 RR: {ORDER_MIN_TP2_RR} ·
-                Max signal/live price deviation: {ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT}%
+                Max signal/live price deviation: {ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT}% ·
+                Duplicate cooldown: {ORDER_SIGNAL_COOLDOWN_MINUTES} minutes
             </div>
         </div>
 
@@ -1525,7 +1646,7 @@ def build_dashboard_html(secret: str, days: int = 7) -> str:
 
         <div class="section">
             <h2>Strategy Health</h2>
-            {html_table(["Strategy", "Symbol", "Side", "Mode", "Events", "Paper", "Orders", "Rejects", "Failures", "Paused", "Quality Rejects", "Price Rejects", "Closed PnL", "PF", "Health", "Score", "Reasons"], health_rows)}
+            {html_table(["Strategy", "Symbol", "Side", "Mode", "Events", "Paper", "Orders", "Rejects", "Failures", "Paused", "Quality Rejects", "Price Rejects", "Duplicate Rejects", "Closed PnL", "PF", "Health", "Score", "Reasons"], health_rows)}
         </div>
 
         <div class="section">
@@ -2377,10 +2498,11 @@ def root():
     runtime_state = load_runtime_state()
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 2.2.0</p>
+    <p>version: 2.3.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>trading_paused: {runtime_state.get("trading_paused")}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
+    <p>cooldown_minutes: {ORDER_SIGNAL_COOLDOWN_MINUTES}</p>
     <p>time: {now_iso()}</p>
     <p><a href="/dashboard?secret=REPLACE_WITH_SECRET&days=7">Dashboard</a></p>
     """
@@ -2410,6 +2532,7 @@ def order_quality_config(secret: str):
             "min_tp1_rr": ORDER_MIN_TP1_RR,
             "min_tp2_rr": ORDER_MIN_TP2_RR,
             "max_signal_price_deviation_pct": ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT,
+            "duplicate_signal_cooldown_minutes": ORDER_SIGNAL_COOLDOWN_MINUTES,
         },
     }
 
@@ -2433,6 +2556,17 @@ async def test_price_deviation(request: Request):
     return {
         "ok": True,
         "price_deviation": validate_live_price_deviation(body),
+    }
+
+
+@app.post("/test_duplicate_signal")
+async def test_duplicate_signal(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+
+    return {
+        "ok": True,
+        "duplicate_signal": validate_duplicate_signal(body),
     }
 
 
@@ -2738,6 +2872,7 @@ def risk_status(secret: str):
             "min_tp1_rr": ORDER_MIN_TP1_RR,
             "min_tp2_rr": ORDER_MIN_TP2_RR,
             "max_signal_price_deviation_pct": ORDER_MAX_SIGNAL_PRICE_DEVIATION_PCT,
+            "duplicate_signal_cooldown_minutes": ORDER_SIGNAL_COOLDOWN_MINUTES,
         },
         "closed_pnl_guard": {
             "blocked": closed_pnl_reason is not None,
@@ -3131,6 +3266,33 @@ async def tv_webhook(request: Request):
             }
         )
 
+    duplicate_signal = validate_duplicate_signal(body)
+    if not duplicate_signal["ok"]:
+        write_trade_log(
+            body=body,
+            mode=mode,
+            risk_pct_used=risk_pct_used,
+            decision="DUPLICATE_SIGNAL_REJECTED",
+            decision_reason=duplicate_signal["reason"],
+            status="rejected_by_duplicate_signal_guard",
+        )
+
+        return ok(
+            {
+                "order_sent": False,
+                "decision": {
+                    **decision,
+                    "allow_order": False,
+                    "decision": "DUPLICATE_SIGNAL_REJECTED",
+                    "reason": duplicate_signal["reason"],
+                },
+                "quality": quality,
+                "price_deviation": price_deviation,
+                "duplicate_signal": duplicate_signal,
+                "msg": "Risk engine approved, but duplicate signal cooldown guard rejected the signal.",
+            }
+        )
+
     if is_trading_paused():
         write_trade_log(
             body=body,
@@ -3152,6 +3314,7 @@ async def tv_webhook(request: Request):
                 },
                 "quality": quality,
                 "price_deviation": price_deviation,
+                "duplicate_signal": duplicate_signal,
                 "msg": "Risk engine approved, but runtime trading pause is active.",
             }
         )
@@ -3172,6 +3335,7 @@ async def tv_webhook(request: Request):
                 "decision": decision,
                 "quality": quality,
                 "price_deviation": price_deviation,
+                "duplicate_signal": duplicate_signal,
                 "msg": "Risk engine approved, but ENABLE_REAL_ORDERS=false",
             }
         )
@@ -3196,6 +3360,7 @@ async def tv_webhook(request: Request):
                 "decision": decision,
                 "quality": quality,
                 "price_deviation": price_deviation,
+                "duplicate_signal": duplicate_signal,
                 "result": result,
             }
         )
