@@ -87,14 +87,21 @@ NOTIFY_EMERGENCY_ACTIONS = os.getenv("NOTIFY_EMERGENCY_ACTIONS", "true").lower()
 NOTIFY_DAILY_REPORT = os.getenv("NOTIFY_DAILY_REPORT", "true").lower() == "true"
 NOTIFY_RUNTIME_BLOCKED = os.getenv("NOTIFY_RUNTIME_BLOCKED", "false").lower() == "true"
 
+# v4.x operational controls.
+# CRON_SECRET is optional; if empty, SHARED_SECRET is accepted for cron endpoints.
+CRON_SECRET = os.getenv("CRON_SECRET", "")
+BACKTEST_STORAGE_ENABLED = os.getenv("BACKTEST_STORAGE_ENABLED", "true").lower() == "true"
+
 HTTP_TIMEOUT = 15.0
 
 APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
+BACKTEST_FILE = APP_DIR / "backtest_results.json"
+DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="3.5.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="4.3.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -2934,6 +2941,239 @@ def format_daily_report_message(days: int = 1) -> str:
     return "\n".join(lines)
 
 
+def verify_cron_secret(secret: str) -> None:
+    expected = CRON_SECRET or SHARED_SECRET
+    if secret != expected:
+        raise HTTPException(401, "Unauthorized")
+
+
+def load_daily_report_state() -> Dict[str, Any]:
+    if not DAILY_REPORT_STATE_FILE.exists():
+        return {}
+    try:
+        with DAILY_REPORT_STATE_FILE.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_daily_report_state(state: Dict[str, Any]) -> None:
+    try:
+        with DAILY_REPORT_STATE_FILE.open("w", encoding="utf-8") as file:
+            json.dump(state, file, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        log(f"[WARN] daily report state save failed: {exc}")
+
+
+def send_daily_report_once(days: int = 1, force: bool = False) -> Dict[str, Any]:
+    today_key = time.strftime("%Y-%m-%d", time.gmtime())
+    state = load_daily_report_state()
+    last_sent = state.get("last_sent_date")
+
+    if not force and last_sent == today_key:
+        return {
+            "ok": True,
+            "sent": False,
+            "reason": "ALREADY_SENT_TODAY",
+            "last_sent_date": last_sent,
+        }
+
+    message = format_daily_report_message(days=days)
+    notify = safe_notify_event("📊 Daily trading report", message, important=False)
+
+    if notify.get("sent"):
+        state["last_sent_date"] = today_key
+        state["last_sent_at"] = now_iso()
+        state["last_days"] = max(1, min(days, 30))
+        save_daily_report_state(state)
+
+    return {
+        "ok": True,
+        "sent": bool(notify.get("sent")),
+        "notify": notify,
+        "date": today_key,
+        "message": message,
+    }
+
+
+def load_backtest_results() -> list[Dict[str, Any]]:
+    if not BACKTEST_FILE.exists():
+        return []
+    try:
+        with BACKTEST_FILE.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+        if isinstance(data, dict):
+            data = data.get("rows", [])
+        return data if isinstance(data, list) else []
+    except Exception as exc:
+        log(f"[WARN] backtest load failed: {exc}")
+        return []
+
+
+def save_backtest_results(rows: list[Dict[str, Any]]) -> None:
+    if not BACKTEST_STORAGE_ENABLED:
+        raise HTTPException(400, "Backtest storage is disabled")
+    payload = {"updated_at": now_iso(), "rows": rows}
+    with BACKTEST_FILE.open("w", encoding="utf-8") as file:
+        json.dump(payload, file, ensure_ascii=False, indent=2)
+
+
+def normalize_backtest_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    strategy = str(row.get("strategy") or row.get("Strategy") or "UNKNOWN")
+    symbol = normalize_symbol(row.get("symbol") or row.get("Symbol") or "")
+    side = str(row.get("side") or row.get("Side") or "BOTH").upper()
+
+    def f(*names: str) -> Optional[float]:
+        for name in names:
+            if name in row:
+                return to_float_or_none(row.get(name))
+        return None
+
+    return {
+        "strategy": strategy,
+        "symbol": symbol,
+        "side": side,
+        "trades": f("trades", "Trades", "closed_trades"),
+        "net_pnl": f("net_pnl", "Net PnL", "net_profit", "Net Profit"),
+        "profit_factor": f("profit_factor", "PF", "Profit Factor"),
+        "win_rate": f("win_rate", "Win Rate", "win_rate_pct"),
+        "max_drawdown": f("max_drawdown", "Max Drawdown"),
+        "raw": row,
+    }
+
+
+def backtest_key(strategy: str, symbol: str, side: str) -> str:
+    return f"{strategy}|{normalize_symbol(symbol)}|{str(side).upper()}"
+
+
+def build_live_performance_index(days: int = 30) -> Dict[str, Dict[str, Any]]:
+    health = build_strategy_health(days=days) if supabase_enabled() else {"items": []}
+    index: Dict[str, Dict[str, Any]] = {}
+    for item in health.get("items", []):
+        key = backtest_key(item.get("strategy", "UNKNOWN"), item.get("symbol", ""), item.get("side", "BOTH"))
+        closed = item.get("closed_pnl_by_symbol", {}) or {}
+        index[key] = {
+            "strategy": item.get("strategy"),
+            "symbol": item.get("symbol"),
+            "side": item.get("side"),
+            "mode": item.get("mode"),
+            "events": item.get("event_count"),
+            "orders": item.get("order_sent"),
+            "failures": item.get("order_failed"),
+            "net_pnl": closed.get("net_pnl"),
+            "profit_factor": closed.get("profit_factor"),
+            "trades": closed.get("trades"),
+            "win_rate": closed.get("win_rate"),
+            "health": item.get("health", {}),
+        }
+    return index
+
+
+def build_backtest_vs_live_report(days: int = 30) -> Dict[str, Any]:
+    safe_days = max(1, min(days, 90))
+    backtest_rows = [normalize_backtest_row(r) for r in load_backtest_results()]
+    live_index = build_live_performance_index(days=safe_days)
+    comparisons = []
+
+    for bt in backtest_rows:
+        key = backtest_key(bt["strategy"], bt["symbol"], bt["side"] if bt["side"] != "BOTH" else "LONG")
+        live = live_index.get(key)
+        if live is None and bt["side"] == "BOTH":
+            live_candidates = [item for item in live_index.values() if str(item.get("strategy")) == bt["strategy"] and normalize_symbol(item.get("symbol", "")) == bt["symbol"]]
+            if live_candidates:
+                live = {
+                    "strategy": bt["strategy"],
+                    "symbol": bt["symbol"],
+                    "side": "BOTH",
+                    "mode": ",".join(sorted(set(str(x.get("mode")) for x in live_candidates))),
+                    "events": sum(int(x.get("events") or 0) for x in live_candidates),
+                    "orders": sum(int(x.get("orders") or 0) for x in live_candidates),
+                    "failures": sum(int(x.get("failures") or 0) for x in live_candidates),
+                    "net_pnl": sum(float(x.get("net_pnl") or 0) for x in live_candidates),
+                    "profit_factor": None,
+                    "trades": sum(int(x.get("trades") or 0) for x in live_candidates),
+                    "win_rate": None,
+                    "health": {},
+                }
+
+        bt_pf = bt.get("profit_factor")
+        live_pf = live.get("profit_factor") if live else None
+        bt_pnl = bt.get("net_pnl")
+        live_pnl = live.get("net_pnl") if live else None
+
+        comparisons.append({
+            "strategy": bt["strategy"],
+            "symbol": bt["symbol"],
+            "side": bt["side"],
+            "backtest": bt,
+            "live": live,
+            "deltas": {
+                "net_pnl_delta": (float(live_pnl) - float(bt_pnl)) if live_pnl is not None and bt_pnl is not None else None,
+                "profit_factor_delta": (float(live_pf) - float(bt_pf)) if live_pf is not None and bt_pf is not None else None,
+            },
+            "status": "NO_LIVE_DATA" if live is None else "MATCHED",
+        })
+
+    return {"ok": True, "days": safe_days, "backtest_rows": len(backtest_rows), "live_groups": len(live_index), "comparisons": comparisons}
+
+
+def build_data_model_export(days: int = 30) -> Dict[str, Any]:
+    rows = get_recent_trade_events(days=max(1, min(days, 90)))
+    orders = []
+    system_events = []
+    notifications = []
+    for row in rows:
+        strategy = str(row.get("strategy") or "")
+        decision = str(row.get("decision") or "")
+        status = str(row.get("status") or "")
+        if status == "order_sent" or decision in {"ACCEPTED_MICRO", "ACCEPTED_LIVE", "ORDER_FAILED"}:
+            orders.append(row)
+        if strategy.startswith("SYSTEM") or decision in {"RUNTIME_PAUSED", "RUNTIME_RESUMED", "EMERGENCY_CLOSE_SENT", "CANCEL_ALL_ORDERS_SENT"}:
+            system_events.append(row)
+        if "TELEGRAM" in decision.upper() or "notify" in str(row).lower():
+            notifications.append(row)
+    return {
+        "ok": True,
+        "note": "Logical export derived from trade_events. Physical Supabase split tables can be added later without breaking compatibility.",
+        "trade_events": rows,
+        "orders": orders,
+        "system_events": system_events,
+        "telegram_notifications": notifications,
+        "positions_snapshot": summarize_open_risk(),
+        "strategy_state_snapshot": load_state(),
+    }
+
+
+def build_dashboard_charts_html(secret: str, days: int = 30) -> str:
+    safe_days = max(1, min(days, 90))
+    perf = build_performance_report(days=min(safe_days, 30)) if supabase_enabled() else {"orders": {}, "by_symbol": {}, "by_decision": {}}
+    orders = perf.get("orders", {}) or {}
+    by_symbol = perf.get("by_symbol", {}) or {}
+    by_decision = perf.get("by_decision", {}) or {}
+
+    def bars(title: str, data: Dict[str, Any]) -> str:
+        if not data:
+            return f"<div class='card'><h2>{h(title)}</h2><p>No data</p></div>"
+        max_val = max(float(v or 0) for v in data.values()) or 1.0
+        rows = []
+        for key, value in sorted(data.items(), key=lambda kv: float(kv[1] or 0), reverse=True):
+            width = max(2.0, float(value or 0) / max_val * 100.0)
+            rows.append(f"<div class='barrow'><div class='barlabel'>{h(key)}</div><div class='barwrap'><div class='bar' style='width:{width:.2f}%'></div></div><div class='barvalue'>{h(value)}</div></div>")
+        return f"<div class='card'><h2>{h(title)}</h2>{''.join(rows)}</div>"
+
+    return f"""
+    <!doctype html><html><head><meta charset='utf-8'><title>Trading Charts v4.3.0</title>
+    <style>body{{font-family:Arial,Helvetica,sans-serif;margin:24px;background:#f6f8fb;color:#111827}}.card{{background:white;border-radius:12px;padding:16px;margin-bottom:18px;box-shadow:0 1px 4px rgba(0,0,0,.08)}}.barrow{{display:grid;grid-template-columns:220px 1fr 80px;gap:10px;align-items:center;margin:8px 0}}.barwrap{{height:18px;background:#e5e7eb;border-radius:999px;overflow:hidden}}.bar{{height:18px;background:#111827;border-radius:999px}}.barlabel,.barvalue{{font-size:13px}}a{{display:inline-block;margin:0 8px 8px 0;padding:8px 12px;border-radius:8px;background:#111827;color:white;text-decoration:none;font-size:13px}}</style>
+    </head><body><h1>Trading Dashboard Charts v4.3.0</h1>
+    <p><a href='/dashboard_v2?secret={h(secret)}&days=7'>Back to dashboard v2</a></p>
+    {bars('Order counters', orders)}
+    {bars('Decisions', by_decision)}
+    {bars('Symbols', by_symbol)}
+    </body></html>
+    """
+
+
 def get_recent_trade_events(days: int = 1) -> list[Dict[str, Any]]:
     if supabase_enabled():
         try:
@@ -3188,7 +3428,7 @@ def build_dashboard_v2_html(secret: str, days: int = 7) -> str:
 
     return f"""
     <!doctype html>
-    <html><head><meta charset="utf-8"><title>Trading Control Center v3.5.0</title>
+    <html><head><meta charset="utf-8"><title>Trading Control Center v4.3.0</title>
     <style>
     body{{font-family:Arial,Helvetica,sans-serif;margin:24px;background:#f6f8fb;color:#1f2937}}
     table{{width:100%;border-collapse:collapse;background:white;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:24px}}
@@ -3198,9 +3438,10 @@ def build_dashboard_v2_html(secret: str, days: int = 7) -> str:
     button.secondary{{background:#111827;color:white;border:0;border-radius:8px;padding:7px 10px;font-weight:700;margin:2px;cursor:pointer}}
     .nav a{{display:inline-block;margin:0 8px 8px 0;padding:8px 12px;border-radius:8px;background:#111827;color:white;text-decoration:none;font-size:13px}}
     </style></head><body>
-    <h1>Trading Control Center v3.5.0</h1>
-    <div class="nav"><a href="/dashboard?secret={h(secret)}&days={safe_days}">Classic dashboard</a><a href="/risk_status?secret={h(secret)}">Risk JSON</a><a href="/strategy_state?secret={h(secret)}">Strategy JSON</a></div>
+    <h1>Trading Control Center v4.3.0</h1>
+    <div class="nav"><a href="/dashboard?secret={h(secret)}&days={safe_days}">Classic dashboard</a><a href="/dashboard_charts?secret={h(secret)}&days={safe_days}">Charts</a><a href="/backtest_vs_live?secret={h(secret)}&days={safe_days}">Backtest vs Live</a><a href="/risk_status?secret={h(secret)}">Risk JSON</a><a href="/strategy_state?secret={h(secret)}">Strategy JSON</a></div>
     <div class="card"><b>Runtime:</b> real_orders={h(ENABLE_REAL_ORDERS)} · telegram={h(telegram_configured())} · auto_downgrade={h(AUTO_DOWNGRADE_ENABLED)} · open_positions={h(open_risk.get('open_positions'))} · open_value={fmt_num(open_risk.get('total_position_value'))}</div>
+    <div class="card"><b>v4.3 modules:</b> daily Telegram cron · trade limits/loss streak · per-symbol limits · lifecycle · auto downgrade · backtest vs live · charts</div>
     <h2>Strategy Controls</h2>{html_table(['Strategy','Symbol','Side','Mode','Risk %','Mode actions','Risk action'], control_rows)}
     <h2>Open Positions & Protection</h2>{html_table(['Symbol','Side','Size','Position Value','Unrealized PnL','Protection','Reason','Lifecycle'], open_rows)}
     <h2>Strategy Health</h2>{html_table(['Strategy','Symbol','Side','Mode','Events','Orders','Failures','Exposure Rejects','Trade Limit Rejects','Health','Score','Reasons'], health_rows)}
@@ -3552,7 +3793,7 @@ def root():
     runtime_state = load_runtime_state()
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 3.5.0</p>
+    <p>version: 4.3.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>trading_paused: {runtime_state.get("trading_paused")}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
@@ -3822,6 +4063,53 @@ def telegram_daily_report_get(secret: str, days: int = 1):
     message = format_daily_report_message(days=days)
     result = safe_notify_event("📊 Daily trading report", message, important=False)
     return {"ok": True, "days": max(1, min(days, 30)), "notify": result, "message": message}
+
+
+@app.get("/cron_daily_report")
+def cron_daily_report(secret: str, days: int = 1, force: bool = False):
+    verify_cron_secret(secret)
+    return send_daily_report_once(days=days, force=force)
+
+
+@app.post("/cron_daily_report")
+def cron_daily_report_post(secret: str, days: int = 1, force: bool = False):
+    verify_cron_secret(secret)
+    return send_daily_report_once(days=days, force=force)
+
+
+@app.post("/backtest_import")
+async def backtest_import(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    rows = body.get("rows")
+    if rows is None and isinstance(body.get("data"), list):
+        rows = body.get("data")
+    if not isinstance(rows, list):
+        raise HTTPException(400, "Expected JSON body with rows: [...]")
+    normalized = [normalize_backtest_row(row if isinstance(row, dict) else {"raw": row}) for row in rows]
+    save_backtest_results(normalized)
+    return {"ok": True, "count": len(normalized), "rows": normalized[:10]}
+
+
+@app.get("/backtest_vs_live")
+def backtest_vs_live(secret: str, days: int = 30):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_backtest_vs_live_report(days=days)
+
+
+@app.get("/data_model_export")
+def data_model_export(secret: str, days: int = 30):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_data_model_export(days=days)
+
+
+@app.get("/dashboard_charts", response_class=HTMLResponse)
+def dashboard_charts(secret: str, days: int = 30):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return HTMLResponse(content=build_dashboard_charts_html(secret=secret, days=days), media_type="text/html")
 
 
 @app.post("/trading_pause_on")
