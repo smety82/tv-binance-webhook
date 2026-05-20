@@ -16,11 +16,11 @@
         "SOLUSDT": {
           "LONG": {
             "mode": "MICRO",
-            "risk_pct": 0.10
+            "risk_pct": 0.1
           },
           "SHORT": {
             "mode": "MICRO",
-            "risk_pct": 0.10
+            "risk_pct": 0.1
           }
         },
         "MANAUSDT": {
@@ -30,7 +30,7 @@
           },
           "SHORT": {
             "mode": "OFF",
-            "risk_pct": 0.00
+            "risk_pct": 0.0
           }
         },
         "APEUSDT": {
@@ -40,7 +40,7 @@
           },
           "SHORT": {
             "mode": "OFF",
-            "risk_pct": 0.00
+            "risk_pct": 0.0
           }
         }
       }
@@ -76,6 +76,21 @@
           "SHORT": {
             "mode": "OFF",
             "risk_pct": 0.05
+          }
+        }
+      }
+    },
+    "intraday_trend_pullback_icp_v13": {
+      "enabled": true,
+      "symbols": {
+        "ICPUSDT": {
+          "LONG": {
+            "mode": "PAPER",
+            "risk_pct": 0.05
+          },
+          "SHORT": {
+            "mode": "OFF",
+            "risk_pct": 0.0
           }
         }
       }
