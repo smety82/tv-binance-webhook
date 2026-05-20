@@ -139,7 +139,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="5.3.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="6.5.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -3844,7 +3844,7 @@ def root():
     runtime_state = load_runtime_state()
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 5.3.0</p>
+    <p>version: 6.5.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>trading_paused: {runtime_state.get("trading_paused")}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
@@ -5949,13 +5949,15 @@ def promotion_all(secret: str, days: int = 30):
 @app.post("/telegram_command")
 async def telegram_command(request: Request):
     body = await request.json()
-    # Allows either normal secret or Telegram webhook-like message with configured chat id.
     if body.get("secret"):
         verify_secret(request, body)
-    elif str((body.get("message") or {}).get("chat", {}).get("id", "")) != str(TELEGRAM_CHAT_ID):
-        raise HTTPException(401, "Unauthorized")
+        source_chat_id = str(body.get("chat_id") or TELEGRAM_CHAT_ID)
+    else:
+        source_chat_id = str((body.get("message") or {}).get("chat", {}).get("id", ""))
+        if not telegram_user_allowed(source_chat_id):
+            raise HTTPException(401, "Unauthorized Telegram user")
     text = body.get("text") or (body.get("message") or {}).get("text") or ""
-    result = handle_telegram_command_text(text)
+    result = handle_telegram_command_text_secure(text, source_chat_id)
     if TELEGRAM_ENABLED and result.get("response"):
         safe_notify_event("🤖 Command response", result["response"], important=False)
     return result
@@ -5965,7 +5967,7 @@ async def telegram_command(request: Request):
 def telegram_command_get(secret: str, text: str):
     if secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    result = handle_telegram_command_text(text)
+    result = handle_telegram_command_text_secure(text, str(TELEGRAM_CHAT_ID))
     if TELEGRAM_ENABLED and result.get("response"):
         safe_notify_event("🤖 Command response", result["response"], important=False)
     return result
@@ -6094,3 +6096,694 @@ async def adjust(request: Request):
         return ok({"msg": "sl set"})
 
     raise HTTPException(400, f"Unknown action: {action}")
+
+# ============================================================
+# v6.5.0 EXTENSIONS
+# Order hardening, safer auto-close, audit/compliance, replay,
+# portfolio/correlation risk, monitoring, config validation,
+# and lightweight control panel.
+# ============================================================
+
+import uuid
+
+APP_FEATURE_LEVEL = "6.5.0"
+
+SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
+SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
+SUPABASE_SYSTEM_EVENTS_TABLE = os.getenv("SUPABASE_SYSTEM_EVENTS_TABLE", "system_events")
+SUPABASE_STATE_HISTORY_TABLE = os.getenv("SUPABASE_STATE_HISTORY_TABLE", "strategy_state_history")
+SUPABASE_DAILY_REPORTS_TABLE = os.getenv("SUPABASE_DAILY_REPORTS_TABLE", "daily_reports")
+SUPABASE_TELEGRAM_TABLE = os.getenv("SUPABASE_TELEGRAM_TABLE", "telegram_notifications")
+SUPABASE_BACKTEST_TABLE = os.getenv("SUPABASE_BACKTEST_TABLE", "backtest_results")
+SUPABASE_SPLIT_WRITE_ENABLED = os.getenv("SUPABASE_SPLIT_WRITE_ENABLED", "false").lower() == "true"
+AUDIT_LOG_ENABLED = os.getenv("AUDIT_LOG_ENABLED", "true").lower() == "true"
+AUDIT_PAYLOAD_HASH_ENABLED = os.getenv("AUDIT_PAYLOAD_HASH_ENABLED", "true").lower() == "true"
+
+BYBIT_RETRY_ENABLED = os.getenv("BYBIT_RETRY_ENABLED", "true").lower() == "true"
+BYBIT_RETRY_ATTEMPTS = int(os.getenv("BYBIT_RETRY_ATTEMPTS", "3"))
+BYBIT_RETRY_SLEEP_SEC = float(os.getenv("BYBIT_RETRY_SLEEP_SEC", "0.35"))
+ORDER_VERIFY_AFTER_ENTRY = os.getenv("ORDER_VERIFY_AFTER_ENTRY", "true").lower() == "true"
+ORDER_VERIFY_SLEEP_SEC = float(os.getenv("ORDER_VERIFY_SLEEP_SEC", "0.5"))
+ORDER_VERIFY_RETRIES = int(os.getenv("ORDER_VERIFY_RETRIES", "4"))
+
+SAFE_AUTO_CLOSE_ENABLED = os.getenv("SAFE_AUTO_CLOSE_ENABLED", "false").lower() == "true"
+SAFE_AUTO_CLOSE_REQUIRE_PROTECTION_MISSING = os.getenv("SAFE_AUTO_CLOSE_REQUIRE_PROTECTION_MISSING", "true").lower() == "true"
+SAFE_AUTO_CLOSE_MAX_POSITION_VALUE_USDT = float(os.getenv("SAFE_AUTO_CLOSE_MAX_POSITION_VALUE_USDT", "50"))
+SAFE_AUTO_CLOSE_DOUBLE_CHECK_SLEEP_SEC = float(os.getenv("SAFE_AUTO_CLOSE_DOUBLE_CHECK_SLEEP_SEC", "1.0"))
+
+TELEGRAM_ALLOWED_USER_IDS = [x.strip() for x in os.getenv("TELEGRAM_ALLOWED_USER_IDS", str(TELEGRAM_CHAT_ID)).split(",") if x.strip()]
+TELEGRAM_CONFIRM_TTL_SEC = int(os.getenv("TELEGRAM_CONFIRM_TTL_SEC", "180"))
+TELEGRAM_COMMAND_RATE_LIMIT_SEC = float(os.getenv("TELEGRAM_COMMAND_RATE_LIMIT_SEC", "1.5"))
+_pending_telegram_confirms: Dict[str, Dict[str, Any]] = {}
+_last_telegram_command_at: Dict[str, float] = {}
+
+REPLAY_MAX_EVENTS = int(os.getenv("REPLAY_MAX_EVENTS", "250"))
+
+CORRELATION_GUARD_ENABLED = os.getenv("CORRELATION_GUARD_ENABLED", "false").lower() == "true"
+CORRELATION_GROUPS_JSON = os.getenv("CORRELATION_GROUPS_JSON", "{}")
+
+MARKET_REGIME_FILTER_ENABLED = os.getenv("MARKET_REGIME_FILTER_ENABLED", "false").lower() == "true"
+MARKET_MAX_1M_MOVE_PCT = float(os.getenv("MARKET_MAX_1M_MOVE_PCT", "3.0"))
+MARKET_MAX_SPREAD_PCT = float(os.getenv("MARKET_MAX_SPREAD_PCT", "0.35"))
+MARKET_NEWS_BLACKOUT_UTC = os.getenv("MARKET_NEWS_BLACKOUT_UTC", "")
+
+SIGNAL_STALE_HOURS = float(os.getenv("SIGNAL_STALE_HOURS", "24"))
+
+
+def json_hash(data: Any) -> str:
+    try:
+        raw = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        raw = str(data)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def supabase_url_for_table(table: str) -> str:
+    return f"{SUPABASE_URL}/rest/v1/{table}"
+
+
+def supabase_optional_insert(table: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not supabase_enabled():
+        return {"ok": False, "reason": "SUPABASE_DISABLED"}
+    try:
+        resp = client.post(supabase_url_for_table(table), headers=supabase_headers(), json=payload)
+        if resp.status_code >= 400:
+            log(f"[WARN] optional Supabase insert failed table={table}: {resp.status_code} {resp.text}")
+            return {"ok": False, "status_code": resp.status_code, "reason": resp.text}
+        return {"ok": True, "table": table}
+    except Exception as exc:
+        log(f"[WARN] optional Supabase insert exception table={table}: {exc}")
+        return {"ok": False, "table": table, "reason": str(exc)}
+
+
+def write_audit_event(event_type: str, payload: Dict[str, Any], status: str = "logged") -> Dict[str, Any]:
+    if not AUDIT_LOG_ENABLED:
+        return {"ok": False, "reason": "AUDIT_DISABLED"}
+    record = {
+        "timestamp_utc": now_iso(),
+        "event_type": event_type,
+        "status": status,
+        "payload_hash": json_hash(payload) if AUDIT_PAYLOAD_HASH_ENABLED else None,
+        "payload": sanitize_payload(payload) if isinstance(payload, dict) else {"value": str(payload)},
+    }
+    return supabase_optional_insert(SUPABASE_SYSTEM_EVENTS_TABLE, record)
+
+
+_V65_BASE_BYBIT = bybit
+
+def bybit(method: str, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    attempts = max(1, BYBIT_RETRY_ATTEMPTS if BYBIT_RETRY_ENABLED else 1)
+    last_exc = None
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = _V65_BASE_BYBIT(method, path, params)
+            ret_code = resp.get("retCode")
+            if ret_code in {10000, 10002, 10006, 10016} and attempt < attempts:
+                log(f"[WARN] Bybit transient retCode={ret_code}, retry {attempt}/{attempts}")
+                time.sleep(BYBIT_RETRY_SLEEP_SEC * attempt)
+                continue
+            return resp
+        except HTTPException as exc:
+            last_exc = exc
+            if attempt >= attempts or exc.status_code not in {408, 409, 425, 429, 500, 502, 503, 504}:
+                raise
+            log(f"[WARN] Bybit HTTPException retry {attempt}/{attempts}: {exc.detail}")
+            time.sleep(BYBIT_RETRY_SLEEP_SEC * attempt)
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= attempts:
+                raise
+            log(f"[WARN] Bybit exception retry {attempt}/{attempts}: {exc}")
+            time.sleep(BYBIT_RETRY_SLEEP_SEC * attempt)
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("Bybit request failed without exception")
+
+
+_V65_BASE_WRITE_TRADE_LOG = write_trade_log
+
+def write_trade_log(body: Dict[str, Any], mode: str, risk_pct_used: float, decision: str, decision_reason: str, order_id: str = "", status: str = "logged") -> None:
+    _V65_BASE_WRITE_TRADE_LOG(body, mode, risk_pct_used, decision, decision_reason, order_id, status)
+    try:
+        audit_payload = {"body": sanitize_payload(body), "mode": mode, "risk_pct_used": risk_pct_used, "decision": decision, "decision_reason": decision_reason, "order_id": order_id, "status": status}
+        write_audit_event("trade_decision", audit_payload, status=status)
+        if SUPABASE_SPLIT_WRITE_ENABLED:
+            if order_id:
+                supabase_optional_insert(SUPABASE_ORDERS_TABLE, {"timestamp_utc": now_iso(), "strategy": body.get("strategy", "UNKNOWN"), "symbol": normalize_symbol(body.get("symbol", "")), "side": str(body.get("side", "")).upper(), "mode": mode, "order_id": order_id, "decision": decision, "status": status, "raw_payload": sanitize_payload(body)})
+            if str(body.get("strategy", "")).startswith("SYSTEM") or mode == "SYSTEM":
+                supabase_optional_insert(SUPABASE_SYSTEM_EVENTS_TABLE, {"timestamp_utc": now_iso(), "event_type": decision, "status": status, "payload": audit_payload})
+    except Exception as exc:
+        log(f"[WARN] extended write_trade_log failed: {exc}")
+
+
+def strategy_state_snapshot(reason: str, source: str = "system", before: Optional[Dict[str, Any]] = None, after: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    before_state = before if before is not None else load_state()
+    after_state = after if after is not None else before_state
+    version_id = str(uuid.uuid4())
+    payload = {"timestamp_utc": now_iso(), "version_id": version_id, "source": source, "reason": reason, "before_hash": json_hash(before_state), "after_hash": json_hash(after_state), "before_state": before_state, "after_state": after_state}
+    supabase_optional_insert(SUPABASE_STATE_HISTORY_TABLE, payload)
+    write_audit_event("strategy_state_snapshot", payload)
+    return {"ok": True, "version_id": version_id, "before_hash": payload["before_hash"], "after_hash": payload["after_hash"]}
+
+
+_V65_BASE_SET_STRATEGY_SIDE_CONFIG = set_strategy_side_config
+
+def set_strategy_side_config(strategy: str, symbol: str, side: str, mode: Optional[str] = None, risk_pct: Optional[float] = None, extra_updates: Optional[Dict[str, Any]] = None, reason: str = "api_update") -> Dict[str, Any]:
+    before = load_state()
+    result = _V65_BASE_SET_STRATEGY_SIDE_CONFIG(strategy, symbol, side, mode, risk_pct, extra_updates, reason)
+    try:
+        after = load_state()
+        result["state_version"] = strategy_state_snapshot(reason=reason, source="strategy_side_update", before=before, after=after)
+    except Exception as exc:
+        result["state_version_error"] = str(exc)
+    return result
+
+
+def fetch_strategy_state_history(limit: int = 20) -> list[Dict[str, Any]]:
+    if not supabase_enabled():
+        return []
+    params = {"select": "*", "order": "timestamp_utc.desc", "limit": str(max(1, min(limit, 200)))}
+    resp = client.get(supabase_url_for_table(SUPABASE_STATE_HISTORY_TABLE), headers=supabase_headers(prefer=""), params=params)
+    if resp.status_code >= 400:
+        return []
+    rows = resp.json()
+    return rows if isinstance(rows, list) else []
+
+
+@app.get("/strategy_state_history")
+def strategy_state_history(secret: str, limit: int = 20):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {"ok": True, "history": fetch_strategy_state_history(limit=limit)}
+
+
+@app.post("/strategy_state_rollback")
+async def strategy_state_rollback(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    require_strategy_admin()
+    version_id = str(body.get("version_id", ""))
+    if not version_id:
+        raise HTTPException(400, "version_id required")
+    selected = next((r for r in fetch_strategy_state_history(limit=200) if str(r.get("version_id")) == version_id), None)
+    if not selected:
+        raise HTTPException(404, "version_id not found in recent history")
+    target_state = selected.get("before_state") or selected.get("after_state")
+    if not isinstance(target_state, dict):
+        raise HTTPException(400, "Selected history row does not contain a usable state")
+    before = load_state()
+    save_state(target_state)
+    snap = strategy_state_snapshot("rollback", source="strategy_state_rollback", before=before, after=target_state)
+    safe_notify_event("↩️ Strategy state rollback", f"Rolled back to version {version_id}\nnew_version={snap.get('version_id')}", important=True)
+    return {"ok": True, "rolled_back_to": version_id, "new_version": snap, "state": target_state}
+
+
+def load_correlation_groups() -> Dict[str, Any]:
+    try:
+        data = json.loads(CORRELATION_GROUPS_JSON or "{}")
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def validate_portfolio_correlation_guard(symbol: str, projected_total_position_value: Optional[float] = None, equity: Optional[float] = None) -> Dict[str, Any]:
+    if not CORRELATION_GUARD_ENABLED:
+        return {"ok": True, "reason": "CORRELATION_GUARD_DISABLED", "details": {"groups": load_correlation_groups()}}
+    symbol = normalize_symbol(symbol)
+    groups = load_correlation_groups()
+    open_risk = summarize_open_risk()
+    by_symbol = open_risk.get("by_symbol", {})
+    equity = equity if equity is not None else get_equity_usdt()
+    reasons = []
+    details = {}
+    for group_name, cfg in groups.items():
+        symbols = [normalize_symbol(s) for s in cfg.get("symbols", [])]
+        if symbol not in symbols:
+            continue
+        open_symbols = [s for s in symbols if s in by_symbol]
+        group_value = sum(float(by_symbol.get(s, {}).get("position_value", 0.0) or 0.0) for s in symbols)
+        if projected_total_position_value is not None and symbol not in by_symbol:
+            current_total = float(open_risk.get("total_position_value", 0.0) or 0.0)
+            estimated_new = max(0.0, projected_total_position_value - current_total)
+            group_value += estimated_new
+            open_symbols.append(symbol)
+        group_exposure_pct = (group_value / equity * 100.0) if equity and equity > 0 else None
+        max_open = int(cfg.get("max_open_positions", 999) or 999)
+        max_pct = float(cfg.get("max_group_exposure_pct", 0) or 0)
+        details[group_name] = {"symbols": symbols, "open_symbols": open_symbols, "group_value": group_value, "group_exposure_pct": group_exposure_pct, "max_open_positions": max_open, "max_group_exposure_pct": max_pct}
+        if len(set(open_symbols)) > max_open:
+            reasons.append(f"CORRELATION_MAX_OPEN_EXCEEDED_{group_name}_{len(set(open_symbols))}_MAX_{max_open}")
+        if max_pct > 0 and group_exposure_pct is not None and group_exposure_pct > max_pct:
+            reasons.append(f"CORRELATION_GROUP_EXPOSURE_EXCEEDED_{group_name}_{group_exposure_pct:.4f}%_MAX_{max_pct:.4f}%")
+    return {"ok": not reasons, "reason": "OK" if not reasons else ";".join(reasons), "details": details}
+
+
+def validate_market_regime(symbol: str) -> Dict[str, Any]:
+    if not MARKET_REGIME_FILTER_ENABLED:
+        return {"ok": True, "reason": "MARKET_REGIME_FILTER_DISABLED"}
+    symbol = normalize_symbol(symbol)
+    reasons = []
+    details: Dict[str, Any] = {"symbol": symbol}
+    try:
+        ticker = bybit("GET", "/v5/market/tickers", {"category": "linear", "symbol": symbol})
+        items = (ticker.get("result") or {}).get("list") or []
+        item = items[0] if items else {}
+        bid = to_float_or_none(item.get("bid1Price"))
+        ask = to_float_or_none(item.get("ask1Price"))
+        last = to_float_or_none(item.get("lastPrice"))
+        if bid and ask and last and last > 0:
+            spread_pct = (ask - bid) / last * 100.0
+            details["spread_pct"] = spread_pct
+            if spread_pct > MARKET_MAX_SPREAD_PCT:
+                reasons.append(f"MARKET_SPREAD_TOO_WIDE_{spread_pct:.4f}%_MAX_{MARKET_MAX_SPREAD_PCT:.4f}%")
+        k = bybit("GET", "/v5/market/kline", {"category": "linear", "symbol": symbol, "interval": "1", "limit": 2})
+        klines = (k.get("result") or {}).get("list") or []
+        if len(klines) >= 2:
+            newest = klines[0]
+            older = klines[1]
+            new_close = float(newest[4])
+            old_close = float(older[4])
+            if old_close > 0:
+                move_pct = abs(new_close - old_close) / old_close * 100.0
+                details["move_1m_pct"] = move_pct
+                if move_pct > MARKET_MAX_1M_MOVE_PCT:
+                    reasons.append(f"MARKET_1M_MOVE_TOO_HIGH_{move_pct:.4f}%_MAX_{MARKET_MAX_1M_MOVE_PCT:.4f}%")
+    except Exception as exc:
+        details["error"] = str(exc)
+    return {"ok": not reasons, "reason": "OK" if not reasons else ";".join(reasons), "details": details}
+
+
+_V65_BASE_VALIDATE_EXPOSURE = validate_pre_trade_exposure
+
+def validate_pre_trade_exposure(body: Dict[str, Any], risk_pct_used: float) -> Dict[str, Any]:
+    base = _V65_BASE_VALIDATE_EXPOSURE(body, risk_pct_used)
+    if not base.get("ok"):
+        return base
+    symbol = normalize_symbol(body.get("symbol", ""))
+    details = base.get("details") or {}
+    market = validate_market_regime(symbol)
+    corr = validate_portfolio_correlation_guard(symbol, details.get("projected_total_position_value"), details.get("equity"))
+    base["market_regime"] = market
+    base["correlation_guard"] = corr
+    if not market.get("ok"):
+        return {"ok": False, "reason": market.get("reason", "MARKET_REGIME_REJECTED"), "details": details, "market_regime": market, "correlation_guard": corr}
+    if not corr.get("ok"):
+        return {"ok": False, "reason": corr.get("reason", "CORRELATION_GUARD_REJECTED"), "details": details, "market_regime": market, "correlation_guard": corr}
+    return base
+
+
+def get_order_status(symbol: str, order_id: str = "", order_link_id: str = "") -> Dict[str, Any]:
+    symbol = normalize_symbol(symbol)
+    params: Dict[str, Any] = {"category": "linear", "symbol": symbol}
+    if order_id:
+        params["orderId"] = order_id
+    if order_link_id:
+        params["orderLinkId"] = order_link_id
+    try:
+        return bybit("GET", "/v5/order/realtime", params)
+    except Exception as exc:
+        return {"retCode": -1, "retMsg": str(exc), "result": {"list": []}}
+
+
+_V65_BASE_EXECUTE_BYBIT_TRADE = execute_bybit_trade
+
+def execute_bybit_trade(body: Dict[str, Any], risk_pct_used: float) -> Dict[str, Any]:
+    exec_id = str(uuid.uuid4())
+    write_audit_event("execution_started", {"exec_id": exec_id, "body": sanitize_payload(body), "risk_pct_used": risk_pct_used})
+    last_exc = None
+    attempts = max(1, BYBIT_RETRY_ATTEMPTS if BYBIT_RETRY_ENABLED else 1)
+    for attempt in range(1, attempts + 1):
+        try:
+            result = _V65_BASE_EXECUTE_BYBIT_TRADE(body, risk_pct_used)
+            result["execution_id"] = exec_id
+            result["execution_attempt"] = attempt
+            symbol = normalize_symbol(body.get("symbol", ""))
+            order_id = result.get("order_id", "")
+            if ORDER_VERIFY_AFTER_ENTRY and order_id:
+                status = {}
+                for _ in range(max(1, ORDER_VERIFY_RETRIES)):
+                    time.sleep(ORDER_VERIFY_SLEEP_SEC)
+                    status = get_order_status(symbol=symbol, order_id=order_id)
+                    rows = (status.get("result") or {}).get("list") or []
+                    if rows:
+                        break
+                result["entry_order_status"] = status
+            write_audit_event("execution_completed", {"exec_id": exec_id, "result": result}, status="order_sent")
+            return result
+        except Exception as exc:
+            last_exc = exc
+            write_audit_event("execution_attempt_failed", {"exec_id": exec_id, "attempt": attempt, "error": str(exc)}, status="error")
+            if attempt >= attempts:
+                break
+            time.sleep(BYBIT_RETRY_SLEEP_SEC * attempt)
+    write_audit_event("execution_failed", {"exec_id": exec_id, "error": str(last_exc)}, status="error")
+    raise last_exc if last_exc else RuntimeError("execution failed")
+
+
+def safer_auto_close_check(symbol: str) -> Dict[str, Any]:
+    symbol = normalize_symbol(symbol)
+    pos1 = get_position_linear(symbol)
+    size1 = abs(float(pos1.get("size", "0") or 0.0))
+    value1 = float(pos1.get("positionValue", "0") or 0.0)
+    if size1 <= 0:
+        return {"ok": False, "allowed": False, "reason": "NO_OPEN_POSITION", "position": pos1}
+    if SAFE_AUTO_CLOSE_MAX_POSITION_VALUE_USDT > 0 and value1 > SAFE_AUTO_CLOSE_MAX_POSITION_VALUE_USDT:
+        return {"ok": False, "allowed": False, "reason": f"POSITION_VALUE_TOO_LARGE_FOR_SAFE_AUTO_CLOSE_{value1:.4f}_MAX_{SAFE_AUTO_CLOSE_MAX_POSITION_VALUE_USDT:.4f}", "position": pos1}
+    protection = validate_post_order_protection(symbol)
+    if SAFE_AUTO_CLOSE_REQUIRE_PROTECTION_MISSING and protection.get("ok"):
+        return {"ok": False, "allowed": False, "reason": "PROTECTION_PRESENT_AUTO_CLOSE_NOT_ALLOWED", "protection": protection}
+    time.sleep(SAFE_AUTO_CLOSE_DOUBLE_CHECK_SLEEP_SEC)
+    pos2 = get_position_linear(symbol)
+    size2 = abs(float(pos2.get("size", "0") or 0.0))
+    if size2 <= 0:
+        return {"ok": False, "allowed": False, "reason": "POSITION_CLOSED_DURING_DOUBLE_CHECK", "position": pos2}
+    if abs(size2 - size1) > max(0.000001, size1 * 0.05):
+        return {"ok": False, "allowed": False, "reason": "POSITION_SIZE_CHANGED_DURING_DOUBLE_CHECK", "before": pos1, "after": pos2}
+    return {"ok": True, "allowed": True, "reason": "SAFE_AUTO_CLOSE_ALLOWED", "position": pos2, "protection": protection}
+
+
+@app.post("/safe_auto_close_symbol")
+def safe_auto_close_symbol(secret: str, symbol: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    if not SAFE_AUTO_CLOSE_ENABLED:
+        raise HTTPException(400, "SAFE_AUTO_CLOSE_ENABLED=false")
+    check = safer_auto_close_check(symbol)
+    if not check.get("allowed"):
+        safe_notify_event("⚠️ Safe auto-close blocked", f"{normalize_symbol(symbol)}: {check.get('reason')}", important=True)
+        return {"ok": False, "check": check}
+    result = emergency_close_symbol_impl(symbol)
+    post = get_position_linear(symbol)
+    safe_notify_event("🚨 Safe auto-close executed", f"{normalize_symbol(symbol)} closed. result={result.get('closed')} remaining_size={post.get('size')}", important=True)
+    return {"ok": True, "check": check, "result": result, "post_position": post}
+
+
+def telegram_user_allowed(chat_id: Any) -> bool:
+    cid = str(chat_id or "")
+    return cid and (cid in TELEGRAM_ALLOWED_USER_IDS or cid == str(TELEGRAM_CHAT_ID))
+
+
+def telegram_rate_limited(chat_id: str) -> bool:
+    now = time.time()
+    last = _last_telegram_command_at.get(chat_id, 0)
+    if now - last < TELEGRAM_COMMAND_RATE_LIMIT_SEC:
+        return True
+    _last_telegram_command_at[chat_id] = now
+    return False
+
+
+def create_telegram_confirm(chat_id: str, action: str, payload: Dict[str, Any]) -> str:
+    token = str(uuid.uuid4())[:8]
+    _pending_telegram_confirms[token] = {"chat_id": chat_id, "action": action, "payload": payload, "expires_at": time.time() + TELEGRAM_CONFIRM_TTL_SEC}
+    return token
+
+
+def handle_telegram_command_text_secure(text: str, chat_id: str) -> Dict[str, Any]:
+    if not telegram_user_allowed(chat_id):
+        return {"ok": False, "response": "Unauthorized Telegram user."}
+    if telegram_rate_limited(str(chat_id)):
+        return {"ok": False, "response": "Rate limit: wait a moment before sending another command."}
+    cmd = (text or "").strip()
+    cmd_lower = cmd.lower()
+    write_audit_event("telegram_command", {"chat_id": chat_id, "text": cmd})
+    if cmd_lower.startswith("/confirm"):
+        parts = cmd.split()
+        token = parts[1] if len(parts) > 1 else ""
+        item = _pending_telegram_confirms.get(token)
+        if not item or item.get("chat_id") != str(chat_id) or item.get("expires_at", 0) < time.time():
+            return {"ok": False, "response": "Invalid or expired confirm token."}
+        action = item.get("action")
+        payload = item.get("payload") or {}
+        del _pending_telegram_confirms[token]
+        if action == "pause":
+            set_trading_paused(True, reason="Telegram confirmed pause")
+            return {"ok": True, "response": "Trading paused."}
+        if action == "resume":
+            set_trading_paused(False)
+            return {"ok": True, "response": "Trading resumed."}
+        if action == "close_symbol":
+            result = emergency_close_symbol_impl(payload.get("symbol", ""))
+            return {"ok": True, "response": f"Close executed for {payload.get('symbol')}: {result.get('closed')}", "result": result}
+        return {"ok": False, "response": f"Unknown confirmation action: {action}"}
+    if cmd_lower in {"/pause", "pause"}:
+        token = create_telegram_confirm(str(chat_id), "pause", {})
+        return {"ok": True, "response": f"Confirm trading pause with: /confirm {token}"}
+    if cmd_lower in {"/resume", "resume"}:
+        token = create_telegram_confirm(str(chat_id), "resume", {})
+        return {"ok": True, "response": f"Confirm trading resume with: /confirm {token}"}
+    if cmd_lower.startswith("/close"):
+        parts = cmd.split()
+        if len(parts) < 2:
+            return {"ok": False, "response": "Usage: /close SYMBOL"}
+        symbol = normalize_symbol(parts[1])
+        token = create_telegram_confirm(str(chat_id), "close_symbol", {"symbol": symbol})
+        return {"ok": True, "response": f"Confirm emergency close {symbol} with: /confirm {token}"}
+    return handle_telegram_command_text(cmd)
+
+
+@app.get("/telegram_security_status")
+def telegram_security_status(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {"ok": True, "allowed_user_ids": TELEGRAM_ALLOWED_USER_IDS, "pending_confirms": len(_pending_telegram_confirms), "rate_limit_sec": TELEGRAM_COMMAND_RATE_LIMIT_SEC}
+
+
+def evaluate_payload_without_order(payload: Dict[str, Any]) -> Dict[str, Any]:
+    body = dict(payload)
+    if "symbol" in body:
+        body["symbol"] = normalize_symbol(body.get("symbol", ""))
+    if "side" in body:
+        try:
+            body["side"] = normalize_side(body.get("side", ""))
+        except Exception as exc:
+            return {"ok": False, "stage": "normalize", "reason": str(exc)}
+    validation = validate_payload_schema(body) if "validate_payload_schema" in globals() else {"ok": True}
+    if not validation.get("ok", True):
+        return {"ok": False, "stage": "payload_schema", "payload_validation": validation}
+    try:
+        decision = risk_engine_decision(body)
+        result: Dict[str, Any] = {"ok": True, "decision": decision}
+        if decision.get("allow_order"):
+            risk_pct_used = float(decision.get("risk_pct_used") or 0.0)
+            result["quality"] = validate_order_quality(body)
+            if result["quality"].get("ok"):
+                result["price_deviation"] = validate_live_price_deviation(body)
+            if result.get("price_deviation", {}).get("ok"):
+                result["duplicate_signal"] = validate_duplicate_signal(body)
+            if result.get("duplicate_signal", {}).get("ok"):
+                result["alert_idempotency"] = validate_alert_idempotency(body)
+            if result.get("alert_idempotency", {}).get("ok"):
+                result["exposure"] = validate_pre_trade_exposure(body, risk_pct_used)
+        return result
+    except Exception as exc:
+        return {"ok": False, "stage": "simulation", "reason": str(exc)}
+
+
+@app.post("/simulation_replay")
+async def simulation_replay(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    payloads = body.get("payloads")
+    if not isinstance(payloads, list):
+        raise HTTPException(400, "payloads list required")
+    out = [evaluate_payload_without_order(p) for p in payloads[:REPLAY_MAX_EVENTS] if isinstance(p, dict)]
+    return {"ok": True, "count": len(out), "results": out}
+
+
+@app.get("/simulation_replay_recent")
+def simulation_replay_recent(secret: str, days: int = 30, limit: int = 100):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    rows = fetch_supabase_logs_since(days=max(1, min(days, 90)), limit=max(1, min(limit, REPLAY_MAX_EVENTS))) if supabase_enabled() else []
+    payloads = []
+    for row in rows:
+        raw = row.get("raw_payload") or {}
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = {}
+        if isinstance(raw, dict) and raw.get("strategy"):
+            raw["secret"] = SHARED_SECRET
+            payloads.append(raw)
+    results = [evaluate_payload_without_order(p) for p in payloads]
+    summary = {"would_allow": 0, "blocked": 0, "paper": 0}
+    for r in results:
+        d = r.get("decision", {})
+        if d.get("allow_order"):
+            summary["would_allow"] += 1
+        elif d.get("mode") == "PAPER":
+            summary["paper"] += 1
+        else:
+            summary["blocked"] += 1
+    return {"ok": True, "days": days, "count": len(results), "summary": summary, "results": results[:100]}
+
+
+def check_supabase_health() -> Dict[str, Any]:
+    if not supabase_enabled():
+        return {"ok": False, "reason": "SUPABASE_DISABLED"}
+    try:
+        rows = fetch_supabase_logs(limit=1)
+        return {"ok": True, "sample_count": len(rows)}
+    except Exception as exc:
+        return {"ok": False, "reason": str(exc)}
+
+
+def check_bybit_health() -> Dict[str, Any]:
+    try:
+        server = _V65_BASE_BYBIT("GET", "/v5/market/time", {})
+        wallet_ok = True
+        equity = None
+        try:
+            equity = get_equity_usdt()
+        except Exception:
+            wallet_ok = False
+        return {"ok": True, "server_time": server, "wallet_ok": wallet_ok, "equity": equity}
+    except Exception as exc:
+        return {"ok": False, "reason": str(exc)}
+
+
+def last_signal_age_hours() -> Optional[float]:
+    try:
+        rows = fetch_supabase_logs(limit=100) if supabase_enabled() else []
+        for row in rows:
+            if row.get("strategy") not in {None, "SYSTEM", "SYSTEM_EMERGENCY"}:
+                ts = row.get("created_at") or row.get("timestamp_utc")
+                if ts:
+                    import datetime as _dt
+                    dt = _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                    return (time.time() - dt.timestamp()) / 3600.0
+    except Exception:
+        pass
+    return None
+
+
+@app.get("/production_health")
+def production_health(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    signal_age = last_signal_age_hours()
+    stale = signal_age is not None and signal_age > SIGNAL_STALE_HOURS
+    health = {"ok": True, "version": APP_FEATURE_LEVEL, "bybit": check_bybit_health(), "supabase": check_supabase_health(), "telegram": {"configured": telegram_configured(), "enabled": TELEGRAM_ENABLED}, "runtime": load_runtime_state(), "last_signal_age_hours": signal_age, "signal_stale": stale, "threshold_hours": SIGNAL_STALE_HOURS}
+    health["ok"] = bool(health["bybit"].get("ok")) and (not supabase_enabled() or bool(health["supabase"].get("ok")))
+    return health
+
+
+@app.post("/production_health_notify")
+def production_health_notify(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    health = production_health(secret)
+    if not health.get("ok") or health.get("signal_stale"):
+        safe_notify_event("⚠️ Production health warning", json.dumps(health, ensure_ascii=False)[:3000], important=True)
+    return {"ok": True, "health": health}
+
+
+def validate_runtime_config() -> Dict[str, Any]:
+    issues = []
+    warnings = []
+    state = load_state()
+    global_cfg = state.get("global", {})
+    if not global_cfg.get("enabled", False):
+        warnings.append("GLOBAL_DISABLED")
+    for st_name, st_cfg in (state.get("strategies") or {}).items():
+        if not isinstance(st_cfg, dict):
+            issues.append(f"STRATEGY_CONFIG_NOT_OBJECT_{st_name}")
+            continue
+        symbols = st_cfg.get("symbols") or {}
+        if not symbols:
+            warnings.append(f"STRATEGY_HAS_NO_SYMBOLS_{st_name}")
+        for sym, sym_cfg in symbols.items():
+            nsym = normalize_symbol(sym)
+            if nsym != sym:
+                warnings.append(f"SYMBOL_NOT_NORMALIZED_{sym}_SHOULD_BE_{nsym}")
+            for side in ["LONG", "SHORT"]:
+                sc = (sym_cfg or {}).get(side)
+                if not sc:
+                    warnings.append(f"SIDE_MISSING_{st_name}_{sym}_{side}")
+                    continue
+                mode = str(sc.get("mode", "OFF")).upper()
+                risk_pct = float(sc.get("risk_pct", 0) or 0)
+                if mode not in {"OFF", "PAPER", "MICRO", "LIVE"}:
+                    issues.append(f"INVALID_MODE_{st_name}_{sym}_{side}_{mode}")
+                if mode in {"MICRO", "LIVE"} and risk_pct <= 0:
+                    issues.append(f"ACTIVE_MODE_WITH_ZERO_RISK_{st_name}_{sym}_{side}")
+                if risk_pct > 1.0:
+                    warnings.append(f"RISK_PCT_HIGH_{st_name}_{sym}_{side}_{risk_pct}")
+    env_checks = {"ENABLE_REAL_ORDERS": ENABLE_REAL_ORDERS, "SUPABASE_ENABLED": supabase_enabled(), "TELEGRAM_CONFIGURED": telegram_configured(), "EXPOSURE_LIMITS_ENABLED": exposure_limits_enabled(), "CORRELATION_GUARD_ENABLED": CORRELATION_GUARD_ENABLED, "MARKET_REGIME_FILTER_ENABLED": MARKET_REGIME_FILTER_ENABLED}
+    if ENABLE_REAL_ORDERS and not supabase_enabled():
+        warnings.append("REAL_ORDERS_WITHOUT_SUPABASE")
+    if TELEGRAM_ENABLED and not telegram_configured():
+        issues.append("TELEGRAM_ENABLED_BUT_NOT_CONFIGURED")
+    return {"ok": not issues, "issues": issues, "warnings": warnings, "env": env_checks}
+
+
+@app.get("/config_validation")
+def config_validation(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return validate_runtime_config()
+
+
+@app.get("/config_validation_dashboard", response_class=HTMLResponse)
+def config_validation_dashboard(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = validate_runtime_config()
+    rows = []
+    for issue in data.get("issues", []):
+        rows.append(f"<tr><td><span class='bad'>ISSUE</span></td><td>{h(issue)}</td></tr>")
+    for warn in data.get("warnings", []):
+        rows.append(f"<tr><td><span class='watch'>WARNING</span></td><td>{h(warn)}</td></tr>")
+    if not rows:
+        rows.append("<tr><td><span class='good'>OK</span></td><td>No blocking configuration issues found.</td></tr>")
+    return HTMLResponse(f"""
+    <html><head><title>Config Validation</title><style>
+    body{{font-family:Arial;margin:24px;background:#f6f8fb;color:#111827}} table{{border-collapse:collapse;width:100%;background:white}} td,th{{border-bottom:1px solid #e5e7eb;padding:10px}} .bad{{color:#991b1b;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .good{{color:#166534;font-weight:700}} pre{{background:white;padding:12px;border-radius:8px}}
+    </style></head><body><h1>Configuration Validation v6.5.0</h1><table><tr><th>Level</th><th>Message</th></tr>{''.join(rows)}</table><h2>Environment</h2><pre>{h(data.get('env'))}</pre><p><a href='/dashboard_v2?secret={h(secret)}&days=7'>Back to dashboard</a></p></body></html>
+    """)
+
+
+@app.get("/control_panel", response_class=HTMLResponse)
+def control_panel(secret: str, days: int = 7):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    risk = summarize_open_risk()
+    runtime = load_runtime_state()
+    config = validate_runtime_config()
+    prod = production_health(secret)
+    return HTMLResponse(f"""
+    <html><head><title>Trading Control Panel</title><style>
+    body{{font-family:Arial;margin:0;background:#0f172a;color:#e5e7eb}} header{{padding:20px;background:#111827}} main{{padding:20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}} .card{{background:#1f2937;border:1px solid #374151;border-radius:14px;padding:16px;box-shadow:0 4px 14px rgba(0,0,0,.25)}} a,button{{display:inline-block;margin:4px;padding:8px 10px;border-radius:8px;background:#2563eb;color:white;text-decoration:none;border:0}} .danger{{background:#991b1b}} .warn{{background:#92400e}} .good{{background:#166534}} .muted{{color:#9ca3af}} pre{{white-space:pre-wrap;background:#111827;padding:10px;border-radius:8px}}
+    </style></head><body><header><h1>Trading Control Panel v6.5.0</h1><div class='muted'>Lightweight frontend separated from the main dashboard logic.</div></header><main>
+    <section class='card'><h2>Runtime</h2><p>real_orders={ENABLE_REAL_ORDERS}</p><p>paused={h(runtime.get('trading_paused'))}</p><a class='warn' href='/trading_pause_on?secret={h(secret)}&reason=Control%20panel%20pause'>Pause</a><a class='good' href='/trading_pause_off?secret={h(secret)}'>Resume</a></section>
+    <section class='card'><h2>Open Risk</h2><p>positions={h(risk.get('open_positions'))}</p><p>value={fmt_num(risk.get('total_position_value'))}</p><p>unrealized={fmt_num(risk.get('total_unrealized_pnl'))}</p><a href='/open_risk_summary?secret={h(secret)}'>JSON</a></section>
+    <section class='card'><h2>Health</h2><p>production_ok={h(prod.get('ok'))}</p><p>config_ok={h(config.get('ok'))}</p><a href='/production_health?secret={h(secret)}'>Production health</a><a href='/config_validation_dashboard?secret={h(secret)}'>Config validation</a></section>
+    <section class='card'><h2>Dashboards</h2><a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard v2</a><a href='/dashboard_charts?secret={h(secret)}&days=30'>Charts</a><a href='/strategy_review_report?secret={h(secret)}&days=30'>Strategy review</a></section>
+    <section class='card'><h2>Emergency</h2><a class='danger' href='/emergency_close_all?secret={h(secret)}'>Close all positions</a><a class='warn' href='/cancel_all_orders?secret={h(secret)}'>Cancel all orders</a></section>
+    </main></body></html>
+    """)
+
+
+@app.get("/supabase_physical_schema_sql")
+def supabase_physical_schema_sql(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    sql = """
+-- Optional v6.5.0 physical split tables. Run manually in Supabase SQL editor if needed.
+create table if not exists orders (id bigserial primary key, created_at timestamptz default now(), timestamp_utc text, strategy text, symbol text, side text, mode text, order_id text, decision text, status text, raw_payload jsonb);
+create table if not exists positions (id bigserial primary key, created_at timestamptz default now(), timestamp_utc text, symbol text, side text, size numeric, position_value numeric, unrealized_pnl numeric, raw_position jsonb);
+create table if not exists system_events (id bigserial primary key, created_at timestamptz default now(), timestamp_utc text, event_type text, status text, payload_hash text, payload jsonb);
+create table if not exists strategy_state_history (id bigserial primary key, created_at timestamptz default now(), timestamp_utc text, version_id text, source text, reason text, before_hash text, after_hash text, before_state jsonb, after_state jsonb);
+create table if not exists daily_reports (id bigserial primary key, created_at timestamptz default now(), timestamp_utc text, days integer, report jsonb);
+create table if not exists telegram_notifications (id bigserial primary key, created_at timestamptz default now(), timestamp_utc text, title text, message text, status text, response jsonb);
+create table if not exists backtest_results (id bigserial primary key, created_at timestamptz default now(), timestamp_utc text, strategy text, symbol text, side text, source text, metrics jsonb, raw_payload jsonb);
+"""
+    return {"ok": True, "sql": sql}
+
+
+@app.get("/version")
+def version(secret: Optional[str] = None):
+    if secret is not None and secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel"]}
