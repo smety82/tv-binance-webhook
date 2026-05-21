@@ -109,6 +109,21 @@
           }
         }
       }
+    },
+    "trend_continuation_movr_v11": {
+      "enabled": true,
+      "symbols": {
+        "MOVRUSDT": {
+          "LONG": {
+            "mode": "PAPER",
+            "risk_pct": 0.05
+          },
+          "SHORT": {
+            "mode": "OFF",
+            "risk_pct": 0.0
+          }
+        }
+      }
     }
   }
 }
