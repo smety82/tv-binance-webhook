@@ -7299,7 +7299,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "7.6.0"
+APP_FEATURE_LEVEL = "8.4.0"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8720,4 +8720,791 @@ def v7_control_center(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst"]}
+
+
+# ============================================================
+# v8.0.0 - v8.4.0 BYBIT UNIVERSE SCANNER + MINI BACKTEST ENGINE
+# ============================================================
+# Purpose:
+# - discover opportunities across many Bybit symbols without manually creating TV alerts
+# - run lightweight Python strategy scans and mini-backtests
+# - produce watchlists and AI-style opportunity summaries
+# - keep execution safe: no direct orders, no automatic promotion without approval workflow
+
+UNIVERSE_SCANNER_ENABLED = os.getenv("UNIVERSE_SCANNER_ENABLED", "true").lower() == "true"
+UNIVERSE_CATEGORY = os.getenv("UNIVERSE_CATEGORY", "linear")
+UNIVERSE_QUOTE = os.getenv("UNIVERSE_QUOTE", "USDT")
+UNIVERSE_MIN_TURNOVER_24H = float(os.getenv("UNIVERSE_MIN_TURNOVER_24H", "1000000"))
+UNIVERSE_MIN_VOLUME_24H = float(os.getenv("UNIVERSE_MIN_VOLUME_24H", "0"))
+UNIVERSE_MAX_SYMBOLS = int(os.getenv("UNIVERSE_MAX_SYMBOLS", "80"))
+UNIVERSE_EXCLUDE_SYMBOLS = {x.strip().upper() for x in os.getenv("UNIVERSE_EXCLUDE_SYMBOLS", "").split(",") if x.strip()}
+UNIVERSE_CACHE_TTL_SEC = int(os.getenv("UNIVERSE_CACHE_TTL_SEC", "900"))
+
+SCANNER_DEFAULT_INTERVAL = os.getenv("SCANNER_DEFAULT_INTERVAL", "15")
+SCANNER_KLINE_LIMIT = int(os.getenv("SCANNER_KLINE_LIMIT", "300"))
+SCANNER_TOP_N = int(os.getenv("SCANNER_TOP_N", "40"))
+SCANNER_MIN_OPPORTUNITY_SCORE = float(os.getenv("SCANNER_MIN_OPPORTUNITY_SCORE", "60"))
+
+MINI_BACKTEST_ENABLED = os.getenv("MINI_BACKTEST_ENABLED", "true").lower() == "true"
+MINI_BACKTEST_DEFAULT_DAYS = int(os.getenv("MINI_BACKTEST_DEFAULT_DAYS", "60"))
+MINI_BACKTEST_MAX_SYMBOLS = int(os.getenv("MINI_BACKTEST_MAX_SYMBOLS", "30"))
+MINI_BACKTEST_KLINE_LIMIT = int(os.getenv("MINI_BACKTEST_KLINE_LIMIT", "1000"))
+MINI_BACKTEST_MIN_TRADES = int(os.getenv("MINI_BACKTEST_MIN_TRADES", "15"))
+MINI_BACKTEST_MIN_PF = float(os.getenv("MINI_BACKTEST_MIN_PF", "1.15"))
+MINI_BACKTEST_TOP_N = int(os.getenv("MINI_BACKTEST_TOP_N", "20"))
+
+AUTO_PAPER_CANDIDATE_MIN_SCORE = float(os.getenv("AUTO_PAPER_CANDIDATE_MIN_SCORE", "75"))
+AUTO_PAPER_CANDIDATE_MIN_PF = float(os.getenv("AUTO_PAPER_CANDIDATE_MIN_PF", "1.20"))
+AUTO_PAPER_CANDIDATE_MIN_TRADES = int(os.getenv("AUTO_PAPER_CANDIDATE_MIN_TRADES", "20"))
+AUTO_PAPER_CANDIDATE_REQUIRE_APPROVAL = os.getenv("AUTO_PAPER_CANDIDATE_REQUIRE_APPROVAL", "true").lower() == "true"
+
+UNIVERSE_CACHE_FILE = APP_DIR / "bybit_universe_cache.json"
+SCANNER_RESULTS_FILE = APP_DIR / "multi_symbol_scanner_results.json"
+MINI_BACKTEST_RESULTS_FILE = APP_DIR / "mini_backtest_results.json"
+OPPORTUNITY_WATCHLIST_FILE = APP_DIR / "opportunity_watchlist.json"
+
+V8_STRATEGY_FAMILIES = [
+    "trend_continuation",
+    "momentum_breakout",
+    "trend_pullback",
+]
+
+
+def v8_float(x: Any, default: float = 0.0) -> float:
+    try:
+        if x is None or x == "":
+            return default
+        return float(x)
+    except Exception:
+        return default
+
+
+def v8_int(x: Any, default: int = 0) -> int:
+    try:
+        if x is None or x == "":
+            return default
+        return int(float(x))
+    except Exception:
+        return default
+
+
+def v8_now_ts() -> int:
+    return int(time.time())
+
+
+def v8_interval_to_ms(interval: str) -> int:
+    s = str(interval).strip().lower()
+    if s.endswith("m"):
+        return int(float(s[:-1]) * 60_000)
+    if s.endswith("h"):
+        return int(float(s[:-1]) * 3_600_000)
+    if s.endswith("d"):
+        return int(float(s[:-1]) * 86_400_000)
+    return int(float(s) * 60_000)
+
+
+def v8_public_bybit_get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # Public endpoints do not require signing; this reduces risk of signature/permission noise.
+    url = BYBIT_BASE + path
+    try:
+        resp = client.get(url, params={k: v for k, v in (params or {}).items() if v is not None})
+        if resp.status_code >= 400:
+            return {"retCode": resp.status_code, "retMsg": resp.text, "result": {}}
+        return resp.json()
+    except Exception as exc:
+        return {"retCode": -1, "retMsg": str(exc), "result": {}}
+
+
+def bybit_get_all_linear_instruments() -> Dict[str, Dict[str, Any]]:
+    cursor = None
+    out: Dict[str, Dict[str, Any]] = {}
+    for _ in range(20):
+        params = {"category": UNIVERSE_CATEGORY, "limit": 1000, "cursor": cursor}
+        resp = v8_public_bybit_get("/v5/market/instruments-info", params)
+        if resp.get("retCode") != 0:
+            break
+        result = resp.get("result") or {}
+        for item in result.get("list") or []:
+            sym = str(item.get("symbol", "")).upper()
+            if sym:
+                out[sym] = item
+        cursor = result.get("nextPageCursor")
+        if not cursor:
+            break
+    return out
+
+
+def bybit_get_all_linear_tickers() -> Dict[str, Dict[str, Any]]:
+    resp = v8_public_bybit_get("/v5/market/tickers", {"category": UNIVERSE_CATEGORY})
+    out: Dict[str, Dict[str, Any]] = {}
+    if resp.get("retCode") != 0:
+        return out
+    for item in ((resp.get("result") or {}).get("list") or []):
+        sym = str(item.get("symbol", "")).upper()
+        if sym:
+            out[sym] = item
+    return out
+
+
+def build_bybit_universe(force: bool = False, max_symbols: int = UNIVERSE_MAX_SYMBOLS) -> Dict[str, Any]:
+    if not UNIVERSE_SCANNER_ENABLED:
+        return {"ok": False, "reason": "UNIVERSE_SCANNER_DISABLED", "items": []}
+    if not force:
+        cached = read_json_file(UNIVERSE_CACHE_FILE, {})
+        if cached and (v8_now_ts() - v8_int(cached.get("created_ts"), 0)) <= UNIVERSE_CACHE_TTL_SEC:
+            return cached
+
+    instruments = bybit_get_all_linear_instruments()
+    tickers = bybit_get_all_linear_tickers()
+    items = []
+    for sym, inst in instruments.items():
+        if not sym.endswith(UNIVERSE_QUOTE):
+            continue
+        if sym in UNIVERSE_EXCLUDE_SYMBOLS:
+            continue
+        status = str(inst.get("status", "")).lower()
+        if status not in {"trading", ""}:
+            continue
+        ticker = tickers.get(sym) or {}
+        turnover24h = v8_float(ticker.get("turnover24h"), 0.0)
+        volume24h = v8_float(ticker.get("volume24h"), 0.0)
+        last_price = v8_float(ticker.get("lastPrice"), 0.0)
+        bid1 = v8_float(ticker.get("bid1Price"), 0.0)
+        ask1 = v8_float(ticker.get("ask1Price"), 0.0)
+        if turnover24h < UNIVERSE_MIN_TURNOVER_24H:
+            continue
+        if volume24h < UNIVERSE_MIN_VOLUME_24H:
+            continue
+        spread_pct = None
+        if bid1 > 0 and ask1 > 0 and last_price > 0:
+            spread_pct = abs(ask1 - bid1) / last_price * 100.0
+        lot = inst.get("lotSizeFilter") or {}
+        pricef = inst.get("priceFilter") or {}
+        liquidity_score = min(100.0, 20.0 + math.log10(max(turnover24h, 1.0)) * 10.0)
+        spread_penalty = min(25.0, (spread_pct or 0.0) * 50.0)
+        score = max(0.0, min(100.0, liquidity_score - spread_penalty))
+        items.append({
+            "symbol": sym,
+            "status": inst.get("status"),
+            "last_price": last_price,
+            "turnover24h": turnover24h,
+            "volume24h": volume24h,
+            "price_change_pct_24h": v8_float(ticker.get("price24hPcnt"), 0.0) * 100.0,
+            "spread_pct": spread_pct,
+            "min_qty": v8_float(lot.get("minOrderQty"), 0.0),
+            "qty_step": v8_float(lot.get("qtyStep"), 0.0),
+            "tick_size": v8_float(pricef.get("tickSize"), 0.0),
+            "liquidity_score": round(score, 2),
+        })
+    items.sort(key=lambda x: (x.get("liquidity_score", 0), x.get("turnover24h", 0)), reverse=True)
+    items = items[:max_symbols]
+    result = {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "created_ts": v8_now_ts(),
+        "category": UNIVERSE_CATEGORY,
+        "quote": UNIVERSE_QUOTE,
+        "min_turnover_24h": UNIVERSE_MIN_TURNOVER_24H,
+        "count": len(items),
+        "items": items,
+    }
+    write_json_file(UNIVERSE_CACHE_FILE, result)
+    return result
+
+
+def fetch_bybit_klines(symbol: str, interval: str = SCANNER_DEFAULT_INTERVAL, limit: int = SCANNER_KLINE_LIMIT, start_ms: Optional[int] = None) -> list:
+    params: Dict[str, Any] = {"category": UNIVERSE_CATEGORY, "symbol": symbol.upper(), "interval": str(interval), "limit": limit}
+    if start_ms:
+        params["start"] = start_ms
+    resp = v8_public_bybit_get("/v5/market/kline", params)
+    if resp.get("retCode") != 0:
+        return []
+    raw = (resp.get("result") or {}).get("list") or []
+    candles = []
+    for row in raw:
+        try:
+            candles.append({
+                "start_ms": int(row[0]),
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume": float(row[5]),
+                "turnover": float(row[6]) if len(row) > 6 else 0.0,
+            })
+        except Exception:
+            continue
+    candles.sort(key=lambda x: x["start_ms"])
+    return candles
+
+
+def v8_ema(values: list, length: int) -> list:
+    if not values:
+        return []
+    alpha = 2.0 / (length + 1.0)
+    out = []
+    ema = float(values[0])
+    for v in values:
+        ema = alpha * float(v) + (1.0 - alpha) * ema
+        out.append(ema)
+    return out
+
+
+def v8_sma(values: list, length: int) -> list:
+    out = []
+    s = 0.0
+    q = []
+    for v in values:
+        v = float(v)
+        q.append(v)
+        s += v
+        if len(q) > length:
+            s -= q.pop(0)
+        out.append(s / len(q))
+    return out
+
+
+def v8_rsi(values: list, length: int = 14) -> list:
+    if not values:
+        return []
+    gains = [0.0]
+    losses = [0.0]
+    for i in range(1, len(values)):
+        ch = float(values[i]) - float(values[i - 1])
+        gains.append(max(ch, 0.0))
+        losses.append(max(-ch, 0.0))
+    avg_gain = v8_ema(gains, length)
+    avg_loss = v8_ema(losses, length)
+    out = []
+    for g, l in zip(avg_gain, avg_loss):
+        if l == 0:
+            out.append(100.0 if g > 0 else 50.0)
+        else:
+            rs = g / l
+            out.append(100.0 - 100.0 / (1.0 + rs))
+    return out
+
+
+def v8_atr(candles: list, length: int = 14) -> list:
+    if not candles:
+        return []
+    tr = []
+    prev_close = candles[0]["close"]
+    for c in candles:
+        trv = max(c["high"] - c["low"], abs(c["high"] - prev_close), abs(c["low"] - prev_close))
+        tr.append(trv)
+        prev_close = c["close"]
+    return v8_ema(tr, length)
+
+
+def v8_adx(candles: list, length: int = 14) -> Dict[str, list]:
+    if not candles:
+        return {"adx": [], "plus_di": [], "minus_di": []}
+    plus_dm = [0.0]
+    minus_dm = [0.0]
+    tr = [candles[0]["high"] - candles[0]["low"]]
+    for i in range(1, len(candles)):
+        up = candles[i]["high"] - candles[i - 1]["high"]
+        down = candles[i - 1]["low"] - candles[i]["low"]
+        plus_dm.append(up if up > down and up > 0 else 0.0)
+        minus_dm.append(down if down > up and down > 0 else 0.0)
+        tr.append(max(candles[i]["high"] - candles[i]["low"], abs(candles[i]["high"] - candles[i - 1]["close"]), abs(candles[i]["low"] - candles[i - 1]["close"])))
+    tr_sm = v8_ema(tr, length)
+    plus_sm = v8_ema(plus_dm, length)
+    minus_sm = v8_ema(minus_dm, length)
+    plus_di, minus_di, dx = [], [], []
+    for t, p, m in zip(tr_sm, plus_sm, minus_sm):
+        if t <= 0:
+            plus_di.append(0.0); minus_di.append(0.0); dx.append(0.0)
+        else:
+            pd = 100.0 * p / t
+            md = 100.0 * m / t
+            plus_di.append(pd); minus_di.append(md)
+            dx.append(100.0 * abs(pd - md) / (pd + md) if (pd + md) > 0 else 0.0)
+    return {"adx": v8_ema(dx, length), "plus_di": plus_di, "minus_di": minus_di}
+
+
+def prepare_indicators(candles: list) -> Dict[str, list]:
+    closes = [c["close"] for c in candles]
+    vols = [c["volume"] for c in candles]
+    adx_pack = v8_adx(candles, 14)
+    return {
+        "close": closes,
+        "volume": vols,
+        "ema20": v8_ema(closes, 20),
+        "ema50": v8_ema(closes, 50),
+        "ema200": v8_ema(closes, 200),
+        "vol20": v8_sma(vols, 20),
+        "rsi14": v8_rsi(closes, 14),
+        "atr14": v8_atr(candles, 14),
+        "adx14": adx_pack["adx"],
+        "plus_di": adx_pack["plus_di"],
+        "minus_di": adx_pack["minus_di"],
+    }
+
+
+def candle_body_pct(c: Dict[str, Any]) -> float:
+    rng = c["high"] - c["low"]
+    if rng <= 0:
+        return 0.0
+    return abs(c["close"] - c["open"]) / rng * 100.0
+
+
+def v8_signal_for_family(candles: list, ind: Dict[str, list], i: int, family: str) -> Optional[Dict[str, Any]]:
+    if i < 220 or i >= len(candles):
+        return None
+    c = candles[i]
+    close = c["close"]
+    atr = ind["atr14"][i]
+    if close <= 0 or atr <= 0:
+        return None
+    atr_pct = atr / close * 100.0
+    if atr_pct < 0.10 or atr_pct > 8.0:
+        return None
+    ema20 = ind["ema20"][i]
+    ema50 = ind["ema50"][i]
+    ema200 = ind["ema200"][i]
+    rsi = ind["rsi14"][i]
+    adx = ind["adx14"][i]
+    plus_di = ind["plus_di"][i]
+    minus_di = ind["minus_di"][i]
+    vol20 = ind["vol20"][i]
+    vol = c["volume"]
+    body = candle_body_pct(c)
+    is_green = c["close"] > c["open"]
+    recent_low8 = min(x["low"] for x in candles[max(0, i - 8): i + 1])
+    recent_high20 = max(x["high"] for x in candles[max(0, i - 20): i]) if i >= 20 else 0.0
+    prev_high = candles[i - 1]["high"] if i > 0 else c["high"]
+
+    if family == "trend_continuation":
+        ok = (
+            close > ema200 and ema20 > ema50 and ema50 > ind["ema50"][max(0, i - 5)]
+            and adx >= 20.0 and plus_di >= minus_di
+            and vol >= vol20 * 1.35
+            and (recent_low8 <= ema20 or recent_low8 <= ema50)
+            and close > ema20 and close > candles[i - 1]["close"]
+            and 50.0 <= rsi <= 72.0
+            and is_green and body >= 35.0
+        )
+        if not ok:
+            return None
+        sl = close - atr * 1.5
+        return {"family": family, "side": "LONG", "entry": close, "sl": sl, "tp1": close + (close - sl), "tp2": close + (close - sl) * 2.1}
+
+    if family == "momentum_breakout":
+        break_level = recent_high20 * 1.0003
+        ok = (
+            close > ema50 and ema20 > ema50 and close > break_level
+            and vol >= vol20 * 1.20
+            and 55.0 <= rsi <= 78.0
+            and is_green and body >= 45.0
+            and abs(close - ema20) / close * 100.0 <= 1.20
+        )
+        if not ok:
+            return None
+        sl = close - atr * 1.4
+        return {"family": family, "side": "LONG", "entry": close, "sl": sl, "tp1": close + (close - sl), "tp2": close + (close - sl) * 2.4}
+
+    if family == "trend_pullback":
+        ok = (
+            close > ema50 and ema20 > ema50 and close > ema200
+            and adx >= 20.0 and plus_di >= minus_di
+            and vol >= vol20 * 1.10
+            and (c["low"] <= ema20 or c["low"] <= ema50 or recent_low8 <= ema20)
+            and close > ema20 and close > prev_high
+            and 45.0 <= rsi <= 75.0
+            and is_green and body >= 35.0
+        )
+        if not ok:
+            return None
+        sl = close - atr * 1.6
+        return {"family": family, "side": "LONG", "entry": close, "sl": sl, "tp1": close + (close - sl), "tp2": close + (close - sl) * 2.1}
+    return None
+
+
+def score_current_opportunity(candles: list, family: str) -> Dict[str, Any]:
+    if len(candles) < 220:
+        return {"ok": False, "reason": "NOT_ENOUGH_CANDLES", "score": 0}
+    ind = prepare_indicators(candles)
+    i = len(candles) - 1
+    c = candles[i]
+    close = c["close"]
+    ema20, ema50, ema200 = ind["ema20"][i], ind["ema50"][i], ind["ema200"][i]
+    rsi, atr, adx = ind["rsi14"][i], ind["atr14"][i], ind["adx14"][i]
+    vol, vol20 = c["volume"], ind["vol20"][i]
+    atr_pct = atr / close * 100.0 if close else 0.0
+    trend_score = 0.0
+    if close > ema200: trend_score += 25
+    if ema20 > ema50: trend_score += 25
+    if ema50 > ind["ema50"][max(0, i - 5)]: trend_score += 20
+    if ind["plus_di"][i] >= ind["minus_di"][i]: trend_score += 10
+    trend_score += min(20.0, max(0.0, adx))
+    momentum_score = max(0.0, 100.0 - abs(rsi - 60.0) * 2.5)
+    volume_score = min(100.0, (vol / max(vol20, 1e-9)) * 55.0)
+    vol_score = 100.0 if 0.10 <= atr_pct <= 6.0 else max(0.0, 70.0 - abs(atr_pct - 3.0) * 10.0)
+    signal = v8_signal_for_family(candles, ind, i, family)
+    trigger_bonus = 20.0 if signal else 0.0
+    score = min(100.0, trend_score * 0.30 + momentum_score * 0.20 + volume_score * 0.20 + vol_score * 0.15 + trigger_bonus)
+    if score >= 90:
+        rec = "MICRO_REVIEW_CANDIDATE"
+    elif score >= 75:
+        rec = "STRONG_PAPER_CANDIDATE"
+    elif score >= 60:
+        rec = "PAPER_CANDIDATE"
+    elif score >= 40:
+        rec = "WATCH"
+    else:
+        rec = "IGNORE"
+    return {
+        "ok": True,
+        "family": family,
+        "score": round(score, 2),
+        "recommendation": rec,
+        "signal_now": bool(signal),
+        "signal": signal,
+        "details": {
+            "close": close,
+            "ema20": ema20,
+            "ema50": ema50,
+            "ema200": ema200,
+            "rsi": round(rsi, 2),
+            "adx": round(adx, 2),
+            "atr_pct": round(atr_pct, 3),
+            "volume_ratio": round(vol / max(vol20, 1e-9), 3),
+            "trend_score": round(trend_score, 2),
+            "momentum_score": round(momentum_score, 2),
+            "volume_score": round(volume_score, 2),
+            "volatility_score": round(vol_score, 2),
+        },
+    }
+
+
+def run_strategy_mini_backtest(candles: list, family: str, same_candle_rule: str = "SL_FIRST") -> Dict[str, Any]:
+    if len(candles) < 230:
+        return {"ok": False, "reason": "NOT_ENOUGH_CANDLES", "family": family}
+    ind = prepare_indicators(candles)
+    trades = []
+    i = 220
+    while i < len(candles) - 2:
+        sig = v8_signal_for_family(candles, ind, i, family)
+        if not sig:
+            i += 1
+            continue
+        entry, sl, tp1, tp2 = sig["entry"], sig["sl"], sig["tp1"], sig["tp2"]
+        risk = entry - sl
+        if risk <= 0:
+            i += 1
+            continue
+        tp1_hit = False
+        terminal = None
+        terminal_i = None
+        for j in range(i + 1, len(candles)):
+            cj = candles[j]
+            sl_hit = cj["low"] <= sl
+            tp1_now = cj["high"] >= tp1
+            tp2_now = cj["high"] >= tp2
+            if not tp1_hit:
+                if sl_hit and tp1_now and same_candle_rule == "SL_FIRST":
+                    terminal = "LOSS_SL"; terminal_i = j; break
+                if sl_hit:
+                    terminal = "LOSS_SL"; terminal_i = j; break
+                if tp2_now:
+                    terminal = "WIN_TP2"; terminal_i = j; break
+                if tp1_now:
+                    tp1_hit = True
+                    continue
+            else:
+                if sl_hit and tp2_now and same_candle_rule == "SL_FIRST":
+                    terminal = "PARTIAL_TP1_THEN_SL"; terminal_i = j; break
+                if tp2_now:
+                    terminal = "WIN_TP2"; terminal_i = j; break
+                if sl_hit:
+                    terminal = "PARTIAL_TP1_THEN_SL"; terminal_i = j; break
+        if terminal is None:
+            terminal = "OPEN"
+            terminal_i = len(candles) - 1
+            r = 0.0
+        elif terminal == "LOSS_SL":
+            r = -1.0
+        elif terminal == "WIN_TP2":
+            tp1_r = (tp1 - entry) / risk
+            tp2_r = (tp2 - entry) / risk
+            r = 0.5 * tp1_r + 0.5 * tp2_r
+        else:
+            r = 0.0  # 50% at +1R and 50% at -1R = approx 0R
+        trades.append({
+            "entry_i": i,
+            "exit_i": terminal_i,
+            "entry_time": candles[i]["start_ms"],
+            "exit_time": candles[terminal_i]["start_ms"] if terminal_i is not None else None,
+            "status": terminal,
+            "r": r,
+            "entry": entry,
+            "sl": sl,
+            "tp1": tp1,
+            "tp2": tp2,
+        })
+        i = max(i + 1, (terminal_i or i) + 1)
+    closed = [t for t in trades if t["status"] != "OPEN"]
+    wins = [t for t in closed if t["r"] > 0]
+    losses = [t for t in closed if t["r"] < 0]
+    gross_profit = sum(t["r"] for t in wins)
+    gross_loss = abs(sum(t["r"] for t in losses))
+    pf = gross_profit / gross_loss if gross_loss > 0 else (None if gross_profit == 0 else 999.0)
+    total_r = sum(t["r"] for t in closed)
+    avg_r = total_r / len(closed) if closed else None
+    return {
+        "ok": True,
+        "family": family,
+        "trade_count": len(closed),
+        "open_count": len(trades) - len(closed),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": len(wins) / len(closed) * 100.0 if closed else None,
+        "profit_factor": pf,
+        "total_r": total_r,
+        "average_r": avg_r,
+        "by_status": {s: sum(1 for t in trades if t["status"] == s) for s in sorted({t["status"] for t in trades})},
+        "latest_trades": trades[-10:],
+    }
+
+
+def run_multi_symbol_strategy_scan(max_symbols: int = SCANNER_TOP_N, interval: str = SCANNER_DEFAULT_INTERVAL, families: Optional[list] = None) -> Dict[str, Any]:
+    universe = build_bybit_universe(force=False, max_symbols=max_symbols)
+    families = families or V8_STRATEGY_FAMILIES
+    rows = []
+    for item in universe.get("items") or []:
+        sym = item.get("symbol")
+        candles = fetch_bybit_klines(sym, interval=interval, limit=SCANNER_KLINE_LIMIT)
+        if len(candles) < 220:
+            continue
+        for fam in families:
+            res = score_current_opportunity(candles, fam)
+            if not res.get("ok"):
+                continue
+            row = {
+                "symbol": sym,
+                "interval": interval,
+                "family": fam,
+                "score": res.get("score"),
+                "recommendation": res.get("recommendation"),
+                "signal_now": res.get("signal_now"),
+                "liquidity_score": item.get("liquidity_score"),
+                "turnover24h": item.get("turnover24h"),
+                "details": res.get("details"),
+                "signal": res.get("signal"),
+            }
+            rows.append(row)
+    rows.sort(key=lambda x: (x.get("signal_now") is True, x.get("score") or 0, x.get("turnover24h") or 0), reverse=True)
+    result = {"ok": True, "version": APP_FEATURE_LEVEL, "created_at": now_iso(), "interval": interval, "count": len(rows), "top": rows[:100]}
+    write_json_file(SCANNER_RESULTS_FILE, result)
+    return result
+
+
+def run_python_mini_backtests(max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL, families: Optional[list] = None, kline_limit: int = MINI_BACKTEST_KLINE_LIMIT) -> Dict[str, Any]:
+    if not MINI_BACKTEST_ENABLED:
+        return {"ok": False, "reason": "MINI_BACKTEST_DISABLED"}
+    universe = build_bybit_universe(force=False, max_symbols=max_symbols)
+    families = families or V8_STRATEGY_FAMILIES
+    rows = []
+    for item in universe.get("items") or []:
+        sym = item.get("symbol")
+        candles = fetch_bybit_klines(sym, interval=interval, limit=kline_limit)
+        if len(candles) < 230:
+            continue
+        for fam in families:
+            bt = run_strategy_mini_backtest(candles, fam)
+            if not bt.get("ok"):
+                continue
+            pf = bt.get("profit_factor")
+            trades = bt.get("trade_count") or 0
+            score_current = score_current_opportunity(candles, fam)
+            candidate = bool(pf is not None and pf >= MINI_BACKTEST_MIN_PF and trades >= MINI_BACKTEST_MIN_TRADES)
+            rows.append({
+                "symbol": sym,
+                "interval": interval,
+                "family": fam,
+                "candidate": candidate,
+                "profit_factor": pf,
+                "trade_count": trades,
+                "win_rate": bt.get("win_rate"),
+                "total_r": bt.get("total_r"),
+                "average_r": bt.get("average_r"),
+                "current_score": score_current.get("score") if score_current.get("ok") else None,
+                "current_recommendation": score_current.get("recommendation") if score_current.get("ok") else None,
+                "signal_now": score_current.get("signal_now") if score_current.get("ok") else False,
+                "liquidity_score": item.get("liquidity_score"),
+                "turnover24h": item.get("turnover24h"),
+                "by_status": bt.get("by_status"),
+            })
+    rows.sort(key=lambda x: (x.get("candidate") is True, x.get("profit_factor") or 0, x.get("current_score") or 0), reverse=True)
+    result = {"ok": True, "version": APP_FEATURE_LEVEL, "created_at": now_iso(), "interval": interval, "count": len(rows), "top": rows[:MINI_BACKTEST_TOP_N], "rows": rows}
+    write_json_file(MINI_BACKTEST_RESULTS_FILE, result)
+    return result
+
+
+def build_auto_paper_candidate_plan(max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL, force_backtest: bool = False) -> Dict[str, Any]:
+    data = read_json_file(MINI_BACKTEST_RESULTS_FILE, {})
+    if force_backtest or not data or not data.get("rows"):
+        data = run_python_mini_backtests(max_symbols=max_symbols, interval=interval)
+    state = load_strategy_state()
+    existing = set()
+    for strat, scfg in (state.get("strategies") or {}).items():
+        for sym, symcfg in (scfg.get("symbols") or {}).items():
+            for side, sidecfg in (symcfg or {}).items():
+                if str(sidecfg.get("mode", "OFF")).upper() != "OFF":
+                    existing.add((strat, sym.upper(), side.upper()))
+    plans = []
+    for row in data.get("rows") or []:
+        pf = row.get("profit_factor")
+        trades = row.get("trade_count") or 0
+        score = row.get("current_score") or 0
+        if pf is None or pf < AUTO_PAPER_CANDIDATE_MIN_PF or trades < AUTO_PAPER_CANDIDATE_MIN_TRADES or score < AUTO_PAPER_CANDIDATE_MIN_SCORE:
+            continue
+        strategy_name = f"auto_{row.get('family')}_{str(row.get('symbol')).lower()}_v1"
+        key = (strategy_name, str(row.get("symbol")).upper(), "LONG")
+        action = "ALREADY_ACTIVE" if key in existing else "ADD_PAPER_CANDIDATE"
+        plans.append({
+            "action": action,
+            "strategy": strategy_name,
+            "symbol": row.get("symbol"),
+            "side": "LONG",
+            "target_mode": "PAPER",
+            "risk_pct": 0.05,
+            "family": row.get("family"),
+            "profit_factor": pf,
+            "trade_count": trades,
+            "win_rate": row.get("win_rate"),
+            "current_score": score,
+            "current_recommendation": row.get("current_recommendation"),
+            "requires_approval": AUTO_PAPER_CANDIDATE_REQUIRE_APPROVAL,
+        })
+    result = {"ok": True, "version": APP_FEATURE_LEVEL, "created_at": now_iso(), "count": len(plans), "plans": plans[:50]}
+    write_json_file(OPPORTUNITY_WATCHLIST_FILE, result)
+    return result
+
+
+def build_ai_market_opportunity_analyst(max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL, force_backtest: bool = False) -> Dict[str, Any]:
+    bt = read_json_file(MINI_BACKTEST_RESULTS_FILE, {})
+    if force_backtest or not bt or not bt.get("rows"):
+        bt = run_python_mini_backtests(max_symbols=max_symbols, interval=interval)
+    plan = build_auto_paper_candidate_plan(max_symbols=max_symbols, interval=interval, force_backtest=False)
+    top_candidates = plan.get("plans") or []
+    risk = build_ai_risk_supervisor_report(days=PAPER_OUTCOME_DEFAULT_DAYS, limit=PAPER_OUTCOME_MAX_EVENTS, include_plan=False).get("risk") or {}
+    summary = "No strong new paper candidates found."
+    if top_candidates:
+        summary = f"Found {len(top_candidates)} potential PAPER candidates. Top: {top_candidates[0].get('symbol')} {top_candidates[0].get('family')} PF={fmt_num(top_candidates[0].get('profit_factor'))}, score={fmt_num(top_candidates[0].get('current_score'))}."
+    if risk.get("level") in {"HIGH", "ELEVATED"}:
+        summary += f" Portfolio risk is {risk.get('level')}; do not promote to MICRO without review."
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "portfolio_risk": risk,
+        "summary": summary,
+        "top_candidates": top_candidates[:20],
+        "mini_backtest_top": (bt.get("top") or [])[:20],
+        "recommended_next_action": "Review top candidates, add only to PAPER with approval. No direct AI order execution.",
+    }
+
+
+@app.get("/bybit_universe")
+def bybit_universe(secret: str, force: bool = False, max_symbols: int = UNIVERSE_MAX_SYMBOLS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_bybit_universe(force=force, max_symbols=max_symbols)
+
+
+@app.get("/bybit_universe_dashboard", response_class=HTMLResponse)
+def bybit_universe_dashboard(secret: str, force: bool = False, max_symbols: int = UNIVERSE_MAX_SYMBOLS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = build_bybit_universe(force=force, max_symbols=max_symbols)
+    rows = "".join([f"<tr><td>{h(x.get('symbol'))}</td><td>{fmt_num(x.get('last_price'))}</td><td>{fmt_num(x.get('turnover24h'))}</td><td>{fmt_num(x.get('spread_pct'))}</td><td>{fmt_num(x.get('liquidity_score'))}</td></tr>" for x in data.get("items", [])[:100]])
+    return HTMLResponse(f"""
+    <html><head><title>Bybit Universe Scanner</title><style>body{{font-family:Arial;margin:20px;background:#f6f8fb}} table{{border-collapse:collapse;width:100%;background:white}} th{{background:#111827;color:white}} td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}</style></head>
+    <body><h1>Bybit Universe Scanner v8.0</h1><p>Count: {data.get('count')} | Min turnover: {fmt_num(data.get('min_turnover_24h'))}</p><table><tr><th>Symbol</th><th>Last</th><th>Turnover 24h</th><th>Spread %</th><th>Liquidity score</th></tr>{rows}</table>
+    <p><a href='/multi_symbol_strategy_scan_dashboard?secret={h(secret)}&max_symbols=40'>Strategy scanner</a> · <a href='/mini_backtest_dashboard?secret={h(secret)}&max_symbols=25'>Mini backtest</a></p></body></html>
+    """)
+
+
+@app.get("/multi_symbol_strategy_scan")
+def multi_symbol_strategy_scan(secret: str, max_symbols: int = SCANNER_TOP_N, interval: str = SCANNER_DEFAULT_INTERVAL):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return run_multi_symbol_strategy_scan(max_symbols=max_symbols, interval=interval)
+
+
+@app.get("/multi_symbol_strategy_scan_dashboard", response_class=HTMLResponse)
+def multi_symbol_strategy_scan_dashboard(secret: str, max_symbols: int = SCANNER_TOP_N, interval: str = SCANNER_DEFAULT_INTERVAL):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = run_multi_symbol_strategy_scan(max_symbols=max_symbols, interval=interval)
+    rows = "".join([f"<tr><td>{h(x.get('symbol'))}</td><td>{h(x.get('family'))}</td><td>{fmt_num(x.get('score'))}</td><td>{h(x.get('recommendation'))}</td><td>{'YES' if x.get('signal_now') else 'NO'}</td><td>{fmt_num(x.get('turnover24h'))}</td></tr>" for x in data.get("top", [])[:100]])
+    return HTMLResponse(f"""
+    <html><head><title>Multi-Symbol Strategy Scanner</title><style>body{{font-family:Arial;margin:20px;background:#f6f8fb}} table{{border-collapse:collapse;width:100%;background:white}} th{{background:#111827;color:white}} td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}</style></head>
+    <body><h1>Multi-Symbol Strategy Scanner v8.1</h1><p>Interval: {h(interval)} | Rows: {data.get('count')}</p><table><tr><th>Symbol</th><th>Family</th><th>Score</th><th>Recommendation</th><th>Signal now</th><th>Turnover 24h</th></tr>{rows}</table>
+    <p><a href='/mini_backtest_dashboard?secret={h(secret)}&max_symbols=25'>Mini backtest</a> · <a href='/ai_market_opportunity_analyst?secret={h(secret)}'>AI opportunity analyst JSON</a></p></body></html>
+    """)
+
+
+@app.get("/mini_backtest_run")
+def mini_backtest_run(secret: str, max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL, kline_limit: int = MINI_BACKTEST_KLINE_LIMIT):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return run_python_mini_backtests(max_symbols=max_symbols, interval=interval, kline_limit=kline_limit)
+
+
+@app.get("/mini_backtest_dashboard", response_class=HTMLResponse)
+def mini_backtest_dashboard(secret: str, max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = run_python_mini_backtests(max_symbols=max_symbols, interval=interval)
+    rows = "".join([f"<tr><td>{h(x.get('symbol'))}</td><td>{h(x.get('family'))}</td><td>{fmt_num(x.get('profit_factor'))}</td><td>{x.get('trade_count')}</td><td>{fmt_num(x.get('win_rate'))}</td><td>{fmt_num(x.get('average_r'))}</td><td>{fmt_num(x.get('current_score'))}</td><td>{'YES' if x.get('candidate') else 'NO'}</td></tr>" for x in data.get("rows", [])[:100]])
+    return HTMLResponse(f"""
+    <html><head><title>Python Mini Backtest Engine</title><style>body{{font-family:Arial;margin:20px;background:#f6f8fb}} table{{border-collapse:collapse;width:100%;background:white}} th{{background:#111827;color:white}} td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}</style></head>
+    <body><h1>Python Mini Backtest Engine v8.3</h1><p>Interval: {h(interval)} | Rows: {data.get('count')}</p><table><tr><th>Symbol</th><th>Family</th><th>PF</th><th>Trades</th><th>Win %</th><th>Avg R</th><th>Current score</th><th>Candidate</th></tr>{rows}</table>
+    <p><a href='/auto_paper_candidate_plan?secret={h(secret)}'>Auto paper candidate plan</a> · <a href='/ai_market_opportunity_dashboard?secret={h(secret)}'>AI opportunity dashboard</a></p></body></html>
+    """)
+
+
+@app.get("/auto_paper_candidate_plan")
+def auto_paper_candidate_plan(secret: str, max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL, force_backtest: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_auto_paper_candidate_plan(max_symbols=max_symbols, interval=interval, force_backtest=force_backtest)
+
+
+@app.get("/ai_market_opportunity_analyst")
+def ai_market_opportunity_analyst(secret: str, max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL, force_backtest: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_ai_market_opportunity_analyst(max_symbols=max_symbols, interval=interval, force_backtest=force_backtest)
+
+
+@app.get("/ai_market_opportunity_dashboard", response_class=HTMLResponse)
+def ai_market_opportunity_dashboard(secret: str, max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = build_ai_market_opportunity_analyst(max_symbols=max_symbols, interval=interval, force_backtest=False)
+    rows = "".join([f"<tr><td>{h(x.get('symbol'))}</td><td>{h(x.get('family'))}</td><td>{fmt_num(x.get('profit_factor'))}</td><td>{x.get('trade_count')}</td><td>{fmt_num(x.get('current_score'))}</td><td>{h(x.get('action'))}</td></tr>" for x in data.get("top_candidates", [])[:50]])
+    return HTMLResponse(f"""
+    <html><head><title>AI Market Opportunity Analyst</title><style>body{{font-family:Arial;margin:20px;background:#f6f8fb}} .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}} table{{border-collapse:collapse;width:100%;background:white}} th{{background:#111827;color:white}} td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}</style></head>
+    <body><h1>AI Market Opportunity Analyst v8.4</h1><div class='card'><b>Summary:</b> {h(data.get('summary'))}<br><b>Recommended action:</b> {h(data.get('recommended_next_action'))}</div><table><tr><th>Symbol</th><th>Family</th><th>PF</th><th>Trades</th><th>Score</th><th>Action</th></tr>{rows}</table>
+    <p><a href='/bybit_universe_dashboard?secret={h(secret)}'>Universe</a> · <a href='/mini_backtest_dashboard?secret={h(secret)}'>Mini backtest</a> · <a href='/v7_control_center?secret={h(secret)}'>v7 Control Center</a></p></body></html>
+    """)
+
+
+@app.get("/telegram_market_opportunity_report")
+def telegram_market_opportunity_report(secret: str, max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL, force_backtest: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = build_ai_market_opportunity_analyst(max_symbols=max_symbols, interval=interval, force_backtest=force_backtest)
+    lines = ["🧠 Market Opportunity Analyst", data.get("summary", "")]
+    for x in (data.get("top_candidates") or [])[:10]:
+        lines.append(f"{x.get('symbol')} {x.get('family')} PF={fmt_num(x.get('profit_factor'))} trades={x.get('trade_count')} score={fmt_num(x.get('current_score'))} action={x.get('action')}")
+    notify = safe_notify_event("🧠 Market opportunity report", "\n".join(lines), important=False)
+    return {"ok": True, "sent": bool(notify.get("sent")), "notify": notify, "report": data}
+
