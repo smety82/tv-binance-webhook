@@ -148,11 +148,10 @@ PAPER_DECISION_KEEP_AVG_R = float(os.getenv("PAPER_DECISION_KEEP_AVG_R", "0.05")
 PAPER_DECISION_PROMOTE_AVG_R = float(os.getenv("PAPER_DECISION_PROMOTE_AVG_R", "0.15"))
 PAPER_DECISION_PROMOTE_BACKTEST_PF = float(os.getenv("PAPER_DECISION_PROMOTE_BACKTEST_PF", "1.15"))
 PAPER_MONITOR_REPORT_MIN_HOURS = float(os.getenv("PAPER_MONITOR_REPORT_MIN_HOURS", "12"))
-PAPER_MONITOR_STATE_FILE = APP_DIR / "paper_monitor_state.json"
-
 HTTP_TIMEOUT = 15.0
 
 APP_DIR = Path(__file__).resolve().parent
+PAPER_MONITOR_STATE_FILE = APP_DIR / "paper_monitor_state.json"
 STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
