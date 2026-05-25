@@ -130,6 +130,15 @@ MAX_GROUP_EXPOSURE_PCT = float(os.getenv("MAX_GROUP_EXPOSURE_PCT", "0"))
 
 STRATEGY_REVIEW_LOOKBACK_DAYS = int(os.getenv("STRATEGY_REVIEW_LOOKBACK_DAYS", "30"))
 
+# v6.7.0 PAPER trade outcome tracker.
+# Computes whether a PAPER signal would have hit TP1/TP2/SL using Bybit kline data.
+PAPER_OUTCOME_ENABLED = os.getenv("PAPER_OUTCOME_ENABLED", "true").lower() == "true"
+PAPER_OUTCOME_DEFAULT_DAYS = int(os.getenv("PAPER_OUTCOME_DEFAULT_DAYS", "7"))
+PAPER_OUTCOME_MAX_EVENTS = int(os.getenv("PAPER_OUTCOME_MAX_EVENTS", "300"))
+PAPER_OUTCOME_TP1_QTY_PCT = float(os.getenv("PAPER_OUTCOME_TP1_QTY_PCT", "50"))
+PAPER_OUTCOME_SAME_CANDLE_RULE = os.getenv("PAPER_OUTCOME_SAME_CANDLE_RULE", "SL_FIRST").upper()
+PAPER_OUTCOME_DEFAULT_INTERVAL = os.getenv("PAPER_OUTCOME_DEFAULT_INTERVAL", "15")
+
 HTTP_TIMEOUT = 15.0
 
 APP_DIR = Path(__file__).resolve().parent
@@ -139,7 +148,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="6.5.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="6.7.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -3844,7 +3853,7 @@ def root():
     runtime_state = load_runtime_state()
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 6.5.0</p>
+    <p>version: 6.7.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>trading_paused: {runtime_state.get("trading_paused")}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
@@ -5314,6 +5323,507 @@ async def tv_webhook(request: Request):
         raise
 
 
+# ============================================================
+# v6.7.0 PAPER TRADE OUTCOME TRACKER
+# ============================================================
+
+def interval_to_ms(interval: Any) -> int:
+    """Convert Bybit/TradingView interval to milliseconds."""
+    text = str(interval or PAPER_OUTCOME_DEFAULT_INTERVAL).strip().upper()
+    mapping = {
+        "1": 60_000,
+        "3": 3 * 60_000,
+        "5": 5 * 60_000,
+        "15": 15 * 60_000,
+        "30": 30 * 60_000,
+        "60": 60 * 60_000,
+        "120": 2 * 60 * 60_000,
+        "240": 4 * 60 * 60_000,
+        "360": 6 * 60 * 60_000,
+        "720": 12 * 60 * 60_000,
+        "D": 24 * 60 * 60_000,
+        "1D": 24 * 60 * 60_000,
+        "W": 7 * 24 * 60 * 60_000,
+        "1W": 7 * 24 * 60 * 60_000,
+    }
+    if text in mapping:
+        return mapping[text]
+    try:
+        return int(float(text)) * 60_000
+    except Exception:
+        return int(PAPER_OUTCOME_DEFAULT_INTERVAL) * 60_000
+
+
+def normalize_interval_for_bybit(interval: Any) -> str:
+    text = str(interval or PAPER_OUTCOME_DEFAULT_INTERVAL).strip().upper()
+    if text in {"1D", "D"}:
+        return "D"
+    if text in {"1W", "W"}:
+        return "W"
+    if text.endswith("M") and text[:-1].isdigit():
+        return text[:-1]
+    if text.endswith("H") and text[:-1].isdigit():
+        return str(int(text[:-1]) * 60)
+    return text
+
+
+def parse_raw_payload(raw_payload: Any) -> Dict[str, Any]:
+    if isinstance(raw_payload, dict):
+        return raw_payload
+    if isinstance(raw_payload, str) and raw_payload.strip():
+        try:
+            parsed = json.loads(raw_payload)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def event_numeric(row: Dict[str, Any], key: str, raw_payload: Dict[str, Any], payload_key: Optional[str] = None) -> Optional[float]:
+    candidates = []
+    if key in row:
+        candidates.append(row.get(key))
+    if payload_key and payload_key in raw_payload:
+        candidates.append(raw_payload.get(payload_key))
+    if key in raw_payload:
+        candidates.append(raw_payload.get(key))
+    for value in candidates:
+        converted = to_float_or_none(value)
+        if converted is not None:
+            return converted
+    return None
+
+
+def get_public_klines(symbol: str, interval: Any, start_ms: int, end_ms: int, limit: int = 1000) -> list[Dict[str, Any]]:
+    """Fetch public Bybit linear klines and return ascending candles."""
+    symbol = normalize_symbol(symbol)
+    bybit_interval = normalize_interval_for_bybit(interval)
+    safe_limit = max(1, min(int(limit), 1000))
+    all_rows: list[Dict[str, Any]] = []
+    current_start = int(start_ms)
+    hard_end = int(end_ms)
+    interval_ms = interval_to_ms(bybit_interval)
+    max_pages = 20
+
+    for _ in range(max_pages):
+        if current_start >= hard_end:
+            break
+        params = {
+            "category": "linear",
+            "symbol": symbol,
+            "interval": bybit_interval,
+            "start": current_start,
+            "end": hard_end,
+            "limit": safe_limit,
+        }
+        resp = bybit("GET", "/v5/market/kline", params)
+        rows = (resp.get("result") or {}).get("list") or []
+        if not rows:
+            break
+        parsed_rows = []
+        for row in rows:
+            try:
+                parsed_rows.append({
+                    "start_ms": int(row[0]),
+                    "open": float(row[1]),
+                    "high": float(row[2]),
+                    "low": float(row[3]),
+                    "close": float(row[4]),
+                    "volume": float(row[5]) if len(row) > 5 and row[5] not in (None, "") else None,
+                    "turnover": float(row[6]) if len(row) > 6 and row[6] not in (None, "") else None,
+                })
+            except Exception:
+                continue
+        parsed_rows.sort(key=lambda x: x["start_ms"])
+        if not parsed_rows:
+            break
+        all_rows.extend(parsed_rows)
+        next_start = parsed_rows[-1]["start_ms"] + interval_ms
+        if next_start <= current_start:
+            break
+        current_start = next_start
+        if len(parsed_rows) < safe_limit:
+            break
+
+    # Deduplicate by candle start.
+    dedup: Dict[int, Dict[str, Any]] = {}
+    for row in all_rows:
+        if start_ms <= row["start_ms"] <= end_ms:
+            dedup[row["start_ms"]] = row
+    return [dedup[k] for k in sorted(dedup)]
+
+
+def extract_paper_event(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    raw = parse_raw_payload(row.get("raw_payload"))
+    strategy = row.get("strategy") or raw.get("strategy")
+    symbol = normalize_symbol(row.get("symbol") or raw.get("symbol") or "")
+    side = str(row.get("side") or raw.get("side") or "").upper()
+    mode = str(row.get("mode") or "").upper()
+    decision = str(row.get("decision") or "").upper()
+    status = str(row.get("status") or "")
+
+    if mode != "PAPER" or decision != "PAPER_LOGGED":
+        return None
+    if side not in {"LONG", "SHORT"} or not symbol:
+        return None
+
+    signal_price = event_numeric(row, "signal_price", raw, "signalPrice")
+    sl = event_numeric(row, "sl", raw, "sl")
+    tp1 = event_numeric(row, "tp1", raw, "tp1")
+    tp2 = event_numeric(row, "tp2", raw, "tp2")
+    if signal_price is None or sl is None or tp1 is None or tp2 is None:
+        return None
+
+    tf = raw.get("tf") or raw.get("timeframe") or PAPER_OUTCOME_DEFAULT_INTERVAL
+    bar_time_raw = raw.get("barTime") or raw.get("bar_time")
+    bar_time_ms = None
+    if bar_time_raw is not None:
+        try:
+            bar_time_ms = int(float(bar_time_raw))
+        except Exception:
+            bar_time_ms = None
+    if bar_time_ms is None:
+        created_at = row.get("created_at") or row.get("timestamp_utc") or row.get("timestamp")
+        try:
+            # ISO UTC string parse without external dependencies.
+            cleaned = str(created_at).replace("Z", "+00:00")
+            import datetime as _dt
+            bar_time_ms = int(_dt.datetime.fromisoformat(cleaned).timestamp() * 1000)
+        except Exception:
+            bar_time_ms = int(time.time() * 1000)
+
+    return {
+        "id": row.get("id"),
+        "created_at": row.get("created_at") or row.get("timestamp_utc") or row.get("timestamp"),
+        "strategy": strategy,
+        "symbol": symbol,
+        "side": side,
+        "mode": mode,
+        "status": status,
+        "decision": decision,
+        "signal_price": float(signal_price),
+        "sl": float(sl),
+        "tp1": float(tp1),
+        "tp2": float(tp2),
+        "tf": str(tf),
+        "bar_time_ms": int(bar_time_ms),
+        "raw_payload": raw,
+    }
+
+
+def evaluate_paper_trade(event: Dict[str, Any], end_ms: Optional[int] = None) -> Dict[str, Any]:
+    """Evaluate if a PAPER signal would have hit TP/SL using Bybit candles.
+
+    Assumptions:
+    - Entry is approximated by signal_price.
+    - Evaluation starts after the signal bar closes.
+    - TP1 and TP2 are partial exits using PAPER_OUTCOME_TP1_QTY_PCT.
+    - If SL and target are hit in the same candle, PAPER_OUTCOME_SAME_CANDLE_RULE decides.
+    """
+    if not PAPER_OUTCOME_ENABLED:
+        return {"ok": False, "status": "DISABLED", "reason": "PAPER_OUTCOME_DISABLED", "event": event}
+
+    symbol = event["symbol"]
+    side = event["side"]
+    interval = event.get("tf") or PAPER_OUTCOME_DEFAULT_INTERVAL
+    interval_ms = interval_to_ms(interval)
+    start_ms = int(event["bar_time_ms"]) + interval_ms
+    actual_end_ms = int(end_ms or time.time() * 1000)
+
+    if actual_end_ms <= start_ms:
+        return {"ok": True, "status": "OPEN", "reason": "NO_CANDLES_AFTER_SIGNAL", "event": event, "candles_checked": 0}
+
+    try:
+        candles = get_public_klines(symbol, interval, start_ms, actual_end_ms, limit=1000)
+    except Exception as exc:
+        return {"ok": False, "status": "ERROR", "reason": f"KLINE_FETCH_FAILED: {exc}", "event": event}
+
+    entry = float(event["signal_price"])
+    sl = float(event["sl"])
+    tp1 = float(event["tp1"])
+    tp2 = float(event["tp2"])
+    q1 = max(0.0, min(PAPER_OUTCOME_TP1_QTY_PCT / 100.0, 0.99))
+    q2 = 1.0 - q1
+
+    if side == "LONG":
+        risk = entry - sl
+        tp1_r = (tp1 - entry) / risk if risk > 0 else None
+        tp2_r = (tp2 - entry) / risk if risk > 0 else None
+    else:
+        risk = sl - entry
+        tp1_r = (entry - tp1) / risk if risk > 0 else None
+        tp2_r = (entry - tp2) / risk if risk > 0 else None
+
+    if risk <= 0 or tp1_r is None or tp2_r is None:
+        return {"ok": False, "status": "INVALID", "reason": "INVALID_RISK_OR_TARGET_STRUCTURE", "event": event}
+
+    tp1_hit = False
+    tp1_hit_at = None
+    terminal_status = "OPEN"
+    terminal_reason = "NO_TP_OR_SL_HIT_YET"
+    terminal_at = None
+    terminal_candle = None
+    estimated_r = None
+
+    for candle in candles:
+        high = float(candle["high"])
+        low = float(candle["low"])
+        start = int(candle["start_ms"])
+
+        if side == "LONG":
+            hit_sl = low <= sl
+            hit_tp1 = high >= tp1
+            hit_tp2 = high >= tp2
+        else:
+            hit_sl = high >= sl
+            hit_tp1 = low <= tp1
+            hit_tp2 = low <= tp2
+
+        if not tp1_hit:
+            if hit_sl and (hit_tp1 or hit_tp2):
+                if PAPER_OUTCOME_SAME_CANDLE_RULE == "TARGET_FIRST":
+                    if hit_tp2:
+                        tp1_hit = True
+                        tp1_hit_at = start
+                        terminal_status = "WIN_TP2"
+                        terminal_reason = "TP2_AND_SL_SAME_CANDLE_TARGET_FIRST"
+                        estimated_r = q1 * tp1_r + q2 * tp2_r
+                    else:
+                        tp1_hit = True
+                        tp1_hit_at = start
+                        terminal_status = "PARTIAL_TP1_THEN_SL"
+                        terminal_reason = "TP1_AND_SL_SAME_CANDLE_TARGET_FIRST"
+                        estimated_r = q1 * tp1_r + q2 * (-1.0)
+                else:
+                    terminal_status = "LOSS_SL"
+                    terminal_reason = "SL_AND_TARGET_SAME_CANDLE_SL_FIRST"
+                    estimated_r = -1.0
+                terminal_at = start
+                terminal_candle = candle
+                break
+            if hit_sl:
+                terminal_status = "LOSS_SL"
+                terminal_reason = "SL_HIT_BEFORE_TP1"
+                estimated_r = -1.0
+                terminal_at = start
+                terminal_candle = candle
+                break
+            if hit_tp2:
+                tp1_hit = True
+                tp1_hit_at = start
+                terminal_status = "WIN_TP2"
+                terminal_reason = "TP2_HIT_BEFORE_SL"
+                estimated_r = q1 * tp1_r + q2 * tp2_r
+                terminal_at = start
+                terminal_candle = candle
+                break
+            if hit_tp1:
+                tp1_hit = True
+                tp1_hit_at = start
+                continue
+        else:
+            if hit_sl and hit_tp2:
+                if PAPER_OUTCOME_SAME_CANDLE_RULE == "TARGET_FIRST":
+                    terminal_status = "WIN_TP2"
+                    terminal_reason = "AFTER_TP1_TP2_AND_SL_SAME_CANDLE_TARGET_FIRST"
+                    estimated_r = q1 * tp1_r + q2 * tp2_r
+                else:
+                    terminal_status = "PARTIAL_TP1_THEN_SL"
+                    terminal_reason = "AFTER_TP1_TP2_AND_SL_SAME_CANDLE_SL_FIRST"
+                    estimated_r = q1 * tp1_r + q2 * (-1.0)
+                terminal_at = start
+                terminal_candle = candle
+                break
+            if hit_tp2:
+                terminal_status = "WIN_TP2"
+                terminal_reason = "TP2_HIT_AFTER_TP1"
+                estimated_r = q1 * tp1_r + q2 * tp2_r
+                terminal_at = start
+                terminal_candle = candle
+                break
+            if hit_sl:
+                terminal_status = "PARTIAL_TP1_THEN_SL"
+                terminal_reason = "SL_HIT_AFTER_TP1"
+                estimated_r = q1 * tp1_r + q2 * (-1.0)
+                terminal_at = start
+                terminal_candle = candle
+                break
+
+    if terminal_status == "OPEN" and tp1_hit:
+        terminal_status = "OPEN_AFTER_TP1"
+        terminal_reason = "TP1_HIT_BUT_TP2_OR_SL_NOT_YET"
+        estimated_r = q1 * tp1_r
+
+    estimated_pnl_usdt = None
+    if estimated_r is not None:
+        risk_pct_requested = event_numeric({}, "riskPct", event.get("raw_payload", {}), "riskPct") or 0.0
+        # Only an estimate: uses current equity fetched live. This keeps the endpoint lightweight.
+        try:
+            equity = get_equity_usdt()
+            estimated_pnl_usdt = equity * (risk_pct_requested / 100.0) * estimated_r
+        except Exception:
+            estimated_pnl_usdt = None
+
+    return {
+        "ok": True,
+        "status": terminal_status,
+        "reason": terminal_reason,
+        "event": event,
+        "candles_checked": len(candles),
+        "tp1_hit": tp1_hit,
+        "tp1_hit_at_ms": tp1_hit_at,
+        "terminal_at_ms": terminal_at,
+        "terminal_candle": terminal_candle,
+        "r_multiple": estimated_r,
+        "estimated_pnl_usdt": estimated_pnl_usdt,
+        "assumptions": {
+            "entry_price": entry,
+            "risk_distance": risk,
+            "tp1_r": tp1_r,
+            "tp2_r": tp2_r,
+            "tp1_qty_pct": PAPER_OUTCOME_TP1_QTY_PCT,
+            "same_candle_rule": PAPER_OUTCOME_SAME_CANDLE_RULE,
+            "interval": interval,
+            "evaluation_start_ms": start_ms,
+            "evaluation_end_ms": actual_end_ms,
+        },
+    }
+
+
+def fetch_paper_events_for_outcome(days: int, limit: int) -> list[Dict[str, Any]]:
+    safe_days = max(1, min(int(days), 60))
+    safe_limit = max(1, min(int(limit), max(1, PAPER_OUTCOME_MAX_EVENTS)))
+    if supabase_enabled():
+        rows = fetch_supabase_logs_since(days=safe_days, limit=safe_limit * 3)
+    else:
+        rows = read_trade_log_rows(limit=safe_limit * 3)
+    events = []
+    for row in rows:
+        event = extract_paper_event(row)
+        if event:
+            events.append(event)
+        if len(events) >= safe_limit:
+            break
+    return events
+
+
+def summarize_paper_outcomes(outcomes: list[Dict[str, Any]]) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "total": len(outcomes),
+        "by_status": {},
+        "by_strategy_symbol": {},
+        "closed_count": 0,
+        "open_count": 0,
+        "wins": 0,
+        "losses": 0,
+        "partial_then_sl": 0,
+        "total_r": 0.0,
+        "average_r_closed": None,
+        "estimated_pnl_usdt": 0.0,
+    }
+    closed_r_count = 0
+    for item in outcomes:
+        status = item.get("status", "UNKNOWN")
+        summary["by_status"][status] = summary["by_status"].get(status, 0) + 1
+        event = item.get("event") or {}
+        key = f"{event.get('strategy')}|{event.get('symbol')}|{event.get('side')}"
+        if key not in summary["by_strategy_symbol"]:
+            summary["by_strategy_symbol"][key] = {"strategy": event.get("strategy"), "symbol": event.get("symbol"), "side": event.get("side"), "count": 0, "by_status": {}, "total_r": 0.0, "closed_count": 0, "average_r_closed": None}
+        group = summary["by_strategy_symbol"][key]
+        group["count"] += 1
+        group["by_status"][status] = group["by_status"].get(status, 0) + 1
+        if status in {"OPEN", "OPEN_AFTER_TP1"}:
+            summary["open_count"] += 1
+        else:
+            summary["closed_count"] += 1
+        if status == "WIN_TP2":
+            summary["wins"] += 1
+        elif status == "LOSS_SL":
+            summary["losses"] += 1
+        elif status == "PARTIAL_TP1_THEN_SL":
+            summary["partial_then_sl"] += 1
+        r_val = item.get("r_multiple")
+        if r_val is not None and status not in {"OPEN"}:
+            try:
+                rv = float(r_val)
+                summary["total_r"] += rv
+                group["total_r"] += rv
+                closed_r_count += 1
+                group["closed_count"] += 1
+            except Exception:
+                pass
+        pnl = item.get("estimated_pnl_usdt")
+        if pnl is not None:
+            try:
+                summary["estimated_pnl_usdt"] += float(pnl)
+            except Exception:
+                pass
+    if closed_r_count:
+        summary["average_r_closed"] = summary["total_r"] / closed_r_count
+    for group in summary["by_strategy_symbol"].values():
+        if group["closed_count"]:
+            group["average_r_closed"] = group["total_r"] / group["closed_count"]
+    return summary
+
+
+@app.get("/paper_outcome_scan")
+def paper_outcome_scan(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = 100):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    events = fetch_paper_events_for_outcome(days=days, limit=limit)
+    outcomes = [evaluate_paper_trade(event) for event in events]
+    return {"ok": True, "days": days, "count": len(outcomes), "summary": summarize_paper_outcomes(outcomes), "outcomes": outcomes}
+
+
+@app.get("/paper_outcome_summary")
+def paper_outcome_summary(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = 300):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    events = fetch_paper_events_for_outcome(days=days, limit=limit)
+    outcomes = [evaluate_paper_trade(event) for event in events]
+    return {"ok": True, "days": days, "count": len(outcomes), "summary": summarize_paper_outcomes(outcomes)}
+
+
+@app.get("/paper_outcome_open")
+def paper_outcome_open(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = 300):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    events = fetch_paper_events_for_outcome(days=days, limit=limit)
+    outcomes = [evaluate_paper_trade(event) for event in events]
+    open_items = [x for x in outcomes if x.get("status") in {"OPEN", "OPEN_AFTER_TP1"}]
+    return {"ok": True, "days": days, "count": len(open_items), "open_outcomes": open_items}
+
+
+@app.get("/paper_outcome_event")
+def paper_outcome_event(secret: str, event_id: int, days: int = 30):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    events = fetch_paper_events_for_outcome(days=days, limit=PAPER_OUTCOME_MAX_EVENTS)
+    for event in events:
+        try:
+            if int(event.get("id")) == int(event_id):
+                return {"ok": True, "outcome": evaluate_paper_trade(event)}
+        except Exception:
+            continue
+    return {"ok": False, "error": "paper event not found in selected window", "event_id": event_id, "days": days}
+
+
+@app.get("/paper_outcome_config")
+def paper_outcome_config(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {
+        "ok": True,
+        "paper_outcome": {
+            "enabled": PAPER_OUTCOME_ENABLED,
+            "default_days": PAPER_OUTCOME_DEFAULT_DAYS,
+            "max_events": PAPER_OUTCOME_MAX_EVENTS,
+            "tp1_qty_pct": PAPER_OUTCOME_TP1_QTY_PCT,
+            "same_candle_rule": PAPER_OUTCOME_SAME_CANDLE_RULE,
+            "default_interval": PAPER_OUTCOME_DEFAULT_INTERVAL,
+        },
+    }
+
 
 # ============================================================
 # v5.3 EXTENSIONS: SPLIT DATA MODEL, RECONCILIATION, RECOVERY,
@@ -6098,7 +6608,7 @@ async def adjust(request: Request):
     raise HTTPException(400, f"Unknown action: {action}")
 
 # ============================================================
-# v6.5.0 EXTENSIONS
+# v6.5.0 / v6.7.0 EXTENSIONS
 # Order hardening, safer auto-close, audit/compliance, replay,
 # portfolio/correlation risk, monitoring, config validation,
 # and lightweight control panel.
@@ -6106,7 +6616,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "6.5.0"
+APP_FEATURE_LEVEL = "6.7.0"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -6740,7 +7250,7 @@ def config_validation_dashboard(secret: str):
     return HTMLResponse(f"""
     <html><head><title>Config Validation</title><style>
     body{{font-family:Arial;margin:24px;background:#f6f8fb;color:#111827}} table{{border-collapse:collapse;width:100%;background:white}} td,th{{border-bottom:1px solid #e5e7eb;padding:10px}} .bad{{color:#991b1b;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .good{{color:#166534;font-weight:700}} pre{{background:white;padding:12px;border-radius:8px}}
-    </style></head><body><h1>Configuration Validation v6.5.0</h1><table><tr><th>Level</th><th>Message</th></tr>{''.join(rows)}</table><h2>Environment</h2><pre>{h(data.get('env'))}</pre><p><a href='/dashboard_v2?secret={h(secret)}&days=7'>Back to dashboard</a></p></body></html>
+    </style></head><body><h1>Configuration Validation v6.7.0</h1><table><tr><th>Level</th><th>Message</th></tr>{''.join(rows)}</table><h2>Environment</h2><pre>{h(data.get('env'))}</pre><p><a href='/dashboard_v2?secret={h(secret)}&days=7'>Back to dashboard</a></p></body></html>
     """)
 
 
@@ -6755,7 +7265,7 @@ def control_panel(secret: str, days: int = 7):
     return HTMLResponse(f"""
     <html><head><title>Trading Control Panel</title><style>
     body{{font-family:Arial;margin:0;background:#0f172a;color:#e5e7eb}} header{{padding:20px;background:#111827}} main{{padding:20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}} .card{{background:#1f2937;border:1px solid #374151;border-radius:14px;padding:16px;box-shadow:0 4px 14px rgba(0,0,0,.25)}} a,button{{display:inline-block;margin:4px;padding:8px 10px;border-radius:8px;background:#2563eb;color:white;text-decoration:none;border:0}} .danger{{background:#991b1b}} .warn{{background:#92400e}} .good{{background:#166534}} .muted{{color:#9ca3af}} pre{{white-space:pre-wrap;background:#111827;padding:10px;border-radius:8px}}
-    </style></head><body><header><h1>Trading Control Panel v6.5.0</h1><div class='muted'>Lightweight frontend separated from the main dashboard logic.</div></header><main>
+    </style></head><body><header><h1>Trading Control Panel v6.7.0</h1><div class='muted'>Lightweight frontend separated from the main dashboard logic.</div></header><main>
     <section class='card'><h2>Runtime</h2><p>real_orders={ENABLE_REAL_ORDERS}</p><p>paused={h(runtime.get('trading_paused'))}</p><a class='warn' href='/trading_pause_on?secret={h(secret)}&reason=Control%20panel%20pause'>Pause</a><a class='good' href='/trading_pause_off?secret={h(secret)}'>Resume</a></section>
     <section class='card'><h2>Open Risk</h2><p>positions={h(risk.get('open_positions'))}</p><p>value={fmt_num(risk.get('total_position_value'))}</p><p>unrealized={fmt_num(risk.get('total_unrealized_pnl'))}</p><a href='/open_risk_summary?secret={h(secret)}'>JSON</a></section>
     <section class='card'><h2>Health</h2><p>production_ok={h(prod.get('ok'))}</p><p>config_ok={h(config.get('ok'))}</p><a href='/production_health?secret={h(secret)}'>Production health</a><a href='/config_validation_dashboard?secret={h(secret)}'>Config validation</a></section>
@@ -6770,7 +7280,7 @@ def supabase_physical_schema_sql(secret: str):
     if secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
     sql = """
--- Optional v6.5.0 physical split tables. Run manually in Supabase SQL editor if needed.
+-- Optional v6.7.0 physical split tables. Run manually in Supabase SQL editor if needed.
 create table if not exists orders (id bigserial primary key, created_at timestamptz default now(), timestamp_utc text, strategy text, symbol text, side text, mode text, order_id text, decision text, status text, raw_payload jsonb);
 create table if not exists positions (id bigserial primary key, created_at timestamptz default now(), timestamp_utc text, symbol text, side text, size numeric, position_value numeric, unrealized_pnl numeric, raw_position jsonb);
 create table if not exists system_events (id bigserial primary key, created_at timestamptz default now(), timestamp_utc text, event_type text, status text, payload_hash text, payload jsonb);
@@ -6786,4 +7296,4 @@ create table if not exists backtest_results (id bigserial primary key, created_a
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker"]}
