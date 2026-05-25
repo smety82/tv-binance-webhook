@@ -158,7 +158,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="6.8.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="6.8.2")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -3117,6 +3117,75 @@ def backtest_key(strategy: str, symbol: str, side: str) -> str:
     return f"{strategy}|{normalize_symbol(symbol)}|{str(side).upper()}"
 
 
+def merge_backtest_rows(existing_rows: list[Dict[str, Any]], incoming_rows: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    """Upsert backtest benchmarks by strategy|symbol|side.
+
+    This intentionally keeps the file-backed registry simple and Render-friendly.
+    The newest incoming row wins for the same strategy/symbol/side.
+    """
+    index: Dict[str, Dict[str, Any]] = {}
+    order: list[str] = []
+
+    for raw in existing_rows:
+        row = normalize_backtest_row(raw if isinstance(raw, dict) else {"raw": raw})
+        key = backtest_key(row.get("strategy", "UNKNOWN"), row.get("symbol", ""), row.get("side", "BOTH"))
+        if key not in index:
+            order.append(key)
+        index[key] = row
+
+    for raw in incoming_rows:
+        row = normalize_backtest_row(raw if isinstance(raw, dict) else {"raw": raw})
+        row["updated_at"] = now_iso()
+        key = backtest_key(row.get("strategy", "UNKNOWN"), row.get("symbol", ""), row.get("side", "BOTH"))
+        if key not in index:
+            order.append(key)
+        index[key] = row
+
+    return [index[k] for k in order if k in index]
+
+
+def build_backtest_registry() -> Dict[str, Any]:
+    rows = [normalize_backtest_row(r if isinstance(r, dict) else {"raw": r}) for r in load_backtest_results()]
+    rows_sorted = sorted(rows, key=lambda r: (str(r.get("strategy")), str(r.get("symbol")), str(r.get("side"))))
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "count": len(rows_sorted),
+        "file": str(BACKTEST_FILE),
+        "rows": rows_sorted,
+    }
+
+
+def paper_vs_backtest_status(avg_r: Optional[float], closed: int, bt_pf: Optional[float]) -> str:
+    if closed < PAPER_DECISION_MIN_SAMPLE_KEEP:
+        return "TOO_EARLY"
+    if bt_pf is None:
+        return "NO_BACKTEST"
+    if avg_r is None:
+        return "NO_PAPER_R"
+    if bt_pf >= PAPER_DECISION_PROMOTE_BACKTEST_PF and avg_r < 0:
+        return "UNDERPERFORMING"
+    if bt_pf >= PAPER_DECISION_PROMOTE_BACKTEST_PF and avg_r >= PAPER_DECISION_KEEP_AVG_R:
+        return "ALIGNED_OK"
+    if bt_pf < 1.0:
+        return "BACKTEST_WEAK"
+    return "WATCH"
+
+
+def build_default_candidate_backtest_rows() -> list[Dict[str, Any]]:
+    """Manual benchmark seed based on currently selected TradingView tester results.
+
+    These are not used automatically unless imported through /backtest_manual_import
+    or /backtest_seed_known_candidates.
+    """
+    return [
+        {"strategy": "trend_continuation_avax_v11", "symbol": "AVAXUSDT", "side": "LONG", "profit_factor": 1.49, "trades": 66, "win_rate": 54.55, "source": "manual_tradingview"},
+        {"strategy": "trend_continuation_movr_v11", "symbol": "MOVRUSDT", "side": "LONG", "profit_factor": 1.85, "trades": 80, "win_rate": 51.25, "source": "manual_tradingview"},
+        {"strategy": "momentum_breakout_sol_v11", "symbol": "SOLUSDT", "side": "LONG", "profit_factor": 1.41, "trades": 38, "win_rate": 55.26, "source": "manual_tradingview"},
+        {"strategy": "intraday_trend_pullback_icp_v13", "symbol": "ICPUSDT", "side": "LONG", "profit_factor": 1.38, "trades": 30, "win_rate": 50.00, "source": "manual_tradingview"},
+    ]
+
+
 def build_live_performance_index(days: int = 30) -> Dict[str, Dict[str, Any]]:
     health = build_strategy_health(days=days) if supabase_enabled() else {"items": []}
     index: Dict[str, Dict[str, Any]] = {}
@@ -4163,6 +4232,71 @@ async def backtest_import(request: Request):
     normalized = [normalize_backtest_row(row if isinstance(row, dict) else {"raw": row}) for row in rows]
     save_backtest_results(normalized)
     return {"ok": True, "count": len(normalized), "rows": normalized[:10]}
+
+
+@app.get("/backtest_registry")
+def backtest_registry(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_backtest_registry()
+
+
+@app.post("/backtest_manual_import")
+async def backtest_manual_import(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    rows = body.get("items") or body.get("rows") or body.get("data")
+    if not isinstance(rows, list):
+        raise HTTPException(400, "Expected JSON body with items/rows: [...]")
+
+    mode = str(body.get("mode", "upsert")).lower()
+    normalized = [normalize_backtest_row(row if isinstance(row, dict) else {"raw": row}) for row in rows]
+    for row in normalized:
+        row["updated_at"] = now_iso()
+        row["source"] = row.get("source") or "manual"
+
+    if mode == "replace":
+        final_rows = normalized
+    elif mode == "upsert":
+        final_rows = merge_backtest_rows(load_backtest_results(), normalized)
+    else:
+        raise HTTPException(400, "mode must be 'upsert' or 'replace'")
+
+    save_backtest_results(final_rows)
+    return {
+        "ok": True,
+        "mode": mode,
+        "imported": len(normalized),
+        "total_registry_rows": len(final_rows),
+        "rows": normalized,
+        "registry": final_rows,
+    }
+
+
+@app.post("/backtest_seed_known_candidates")
+async def backtest_seed_known_candidates(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    rows = build_default_candidate_backtest_rows()
+    final_rows = merge_backtest_rows(load_backtest_results(), rows)
+    save_backtest_results(final_rows)
+    return {
+        "ok": True,
+        "seeded": len(rows),
+        "total_registry_rows": len(final_rows),
+        "rows": rows,
+    }
+
+
+@app.post("/backtest_registry_clear")
+async def backtest_registry_clear(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    confirm = str(body.get("confirm", "")).upper()
+    if confirm != "CLEAR_BACKTEST_REGISTRY":
+        raise HTTPException(400, "confirm must be CLEAR_BACKTEST_REGISTRY")
+    save_backtest_results([])
+    return {"ok": True, "cleared": True, "count": 0}
 
 
 @app.get("/backtest_vs_live")
@@ -6000,6 +6134,13 @@ def build_paper_outcome_decision_report(days: int = PAPER_OUTCOME_DEFAULT_DAYS, 
     for key, group in sorted((summary.get("by_strategy_symbol") or {}).items()):
         bt = bt_index.get(key)
         decision = classify_paper_candidate(group, bt)
+        metrics = decision.get("metrics", {}) if isinstance(decision, dict) else {}
+        alignment_status = paper_vs_backtest_status(
+            to_float_or_none(metrics.get("average_r_closed")),
+            int(metrics.get("closed_count") or 0),
+            to_float_or_none(metrics.get("backtest_profit_factor")),
+        )
+        decision["backtest_alignment_status"] = alignment_status
         decisions.append({
             "key": key,
             "strategy": group.get("strategy"),
@@ -6084,12 +6225,12 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
           <td>{h(item.get('strategy'))}</td><td>{h(item.get('symbol'))}</td><td>{h(item.get('side'))}</td>
           <td><span class='{cls}'>{h(d.get('status'))}</span></td>
           <td>{h(m.get('closed_count'))}</td><td>{fmt_num(m.get('average_r_closed'))}</td><td>{fmt_num(m.get('total_r'))}</td>
-          <td>{fmt_num(m.get('win_rate_closed_pct'))}%</td><td>{fmt_num(m.get('backtest_profit_factor'))}</td>
+          <td>{fmt_num(m.get('win_rate_closed_pct'))}%</td><td>{fmt_num(m.get('backtest_profit_factor'))}</td><td>{h(d.get('backtest_alignment_status'))}</td>
           <td>{h(d.get('action'))}</td>
         </tr>
         """)
     if not rows:
-        rows.append("<tr><td colspan='10'>No PAPER candidates found in selected window.</td></tr>")
+        rows.append("<tr><td colspan='11'>No PAPER candidates found in selected window.</td></tr>")
     return HTMLResponse(f"""
     <html><head><title>Candidate Monitor</title><style>
     body{{font-family:Arial;margin:24px;background:#f6f8fb;color:#111827}}
@@ -6098,10 +6239,10 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor v6.8.0</h1>
+    <h1>Candidate Strategy Monitor v6.8.2</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
-    <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>Action</th></tr>{''.join(rows)}</table>
-    <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
+    <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
+    <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
     </body></html>
     """)
 
@@ -6124,6 +6265,7 @@ def paper_backtest_alignment(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS
                 "paper_closed": x.get("decision", {}).get("metrics", {}).get("closed_count"),
                 "backtest_profit_factor": x.get("decision", {}).get("metrics", {}).get("backtest_profit_factor"),
                 "decision_status": x.get("decision", {}).get("status"),
+                "backtest_alignment_status": x.get("decision", {}).get("backtest_alignment_status"),
             }
             for x in report.get("decisions", [])
         ],
@@ -6963,7 +7105,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "6.8.0"
+APP_FEATURE_LEVEL = "6.8.2"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -7643,4 +7785,4 @@ create table if not exists backtest_results (id bigserial primary key, created_a
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "cron_paper_outcome_report"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report"]}
