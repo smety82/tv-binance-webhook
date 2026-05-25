@@ -6287,7 +6287,7 @@ def paper_backtest_alignment(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS
 def candidate_backtest_template(secret: str):
     if secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    state = load_strategy_state()
+    state = load_state()
     rows = []
     for strategy, cfg in (state.get("strategies") or {}).items():
         for symbol, sym_cfg in ((cfg or {}).get("symbols") or {}).items():
@@ -7299,7 +7299,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "8.4.0"
+APP_FEATURE_LEVEL = "8.4.1"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -9349,7 +9349,7 @@ def build_auto_paper_candidate_plan(max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS
     data = read_json_file(MINI_BACKTEST_RESULTS_FILE, {})
     if force_backtest or not data or not data.get("rows"):
         data = run_python_mini_backtests(max_symbols=max_symbols, interval=interval)
-    state = load_strategy_state()
+    state = load_state()
     existing = set()
     for strat, scfg in (state.get("strategies") or {}).items():
         for sym, symcfg in (scfg.get("symbols") or {}).items():
