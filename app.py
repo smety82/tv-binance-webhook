@@ -169,7 +169,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="6.9.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="7.6.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -7299,7 +7299,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "6.9.0"
+APP_FEATURE_LEVEL = "7.6.0"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -7974,9 +7974,750 @@ create table if not exists backtest_results (id bigserial primary key, created_a
 """
     return {"ok": True, "sql": sql}
 
+# ============================================================
+# v7.0.0 - v7.6.0 STRATEGY PROMOTION / AI ANALYST / APPROVAL AUTOMATION
+# ============================================================
+
+# These modules intentionally use deterministic, auditable logic by default.
+# The term "AI" here means an analyst/supervisor layer that synthesizes system state
+# into recommendations. It never bypasses the hard risk engine.
+
+PROMOTION_MANAGER_ENABLED = os.getenv("PROMOTION_MANAGER_ENABLED", "true").lower() == "true"
+PROMOTION_MANAGER_MIN_CLOSED = int(os.getenv("PROMOTION_MANAGER_MIN_CLOSED", str(PAPER_DECISION_MIN_SAMPLE_PROMOTE)))
+PROMOTION_MANAGER_PROMOTE_AVG_R = float(os.getenv("PROMOTION_MANAGER_PROMOTE_AVG_R", str(PAPER_DECISION_PROMOTE_AVG_R)))
+PROMOTION_MANAGER_REJECT_AVG_R = float(os.getenv("PROMOTION_MANAGER_REJECT_AVG_R", str(PAPER_DECISION_REJECT_AVG_R)))
+PROMOTION_MANAGER_MIN_BACKTEST_PF = float(os.getenv("PROMOTION_MANAGER_MIN_BACKTEST_PF", str(PAPER_DECISION_PROMOTE_BACKTEST_PF)))
+PROMOTION_MANAGER_PROMOTE_TARGET_MODE = os.getenv("PROMOTION_MANAGER_PROMOTE_TARGET_MODE", "MICRO").upper()
+PROMOTION_MANAGER_DEMOTE_TARGET_MODE = os.getenv("PROMOTION_MANAGER_DEMOTE_TARGET_MODE", "PAPER").upper()
+PROMOTION_MANAGER_DEFAULT_MICRO_RISK_PCT = float(os.getenv("PROMOTION_MANAGER_DEFAULT_MICRO_RISK_PCT", "0.05"))
+PROMOTION_MANAGER_REQUIRE_APPROVAL = os.getenv("PROMOTION_MANAGER_REQUIRE_APPROVAL", "true").lower() == "true"
+
+AI_ANALYST_ENABLED = os.getenv("AI_ANALYST_ENABLED", "true").lower() == "true"
+AI_RISK_SUPERVISOR_ENABLED = os.getenv("AI_RISK_SUPERVISOR_ENABLED", "true").lower() == "true"
+AI_RISK_HIGH_AVG_R = float(os.getenv("AI_RISK_HIGH_AVG_R", "-0.50"))
+AI_RISK_ELEVATED_AVG_R = float(os.getenv("AI_RISK_ELEVATED_AVG_R", "-0.20"))
+AI_RISK_MAX_ACTIVE_MICRO_LIVE = int(os.getenv("AI_RISK_MAX_ACTIVE_MICRO_LIVE", "3"))
+AI_RISK_ALT_LONG_CONCENTRATION_WARN = int(os.getenv("AI_RISK_ALT_LONG_CONCENTRATION_WARN", "4"))
+AI_RISK_CAN_BLOCK_PROMOTION = os.getenv("AI_RISK_CAN_BLOCK_PROMOTION", "true").lower() == "true"
+
+BACKTEST_IMPORT_DEFAULT_SOURCE = os.getenv("BACKTEST_IMPORT_DEFAULT_SOURCE", "manual_table_import")
+
+APPROVAL_WORKFLOW_ENABLED = os.getenv("APPROVAL_WORKFLOW_ENABLED", "true").lower() == "true"
+APPROVAL_TTL_HOURS = float(os.getenv("APPROVAL_TTL_HOURS", "24"))
+APPROVAL_STATE_FILE = APP_DIR / "approval_workflow_state.json"
+
+
+def _candidate_key(strategy: str, symbol: str, side: str) -> str:
+    return backtest_key(strategy, symbol, side)
+
+
+def _active_strategy_rows(include_off: bool = False) -> list[Dict[str, Any]]:
+    rows: list[Dict[str, Any]] = []
+    try:
+        state = load_state()
+    except Exception:
+        return rows
+    for strategy, st_cfg in (state.get("strategies") or {}).items():
+        if not isinstance(st_cfg, dict) or not st_cfg.get("enabled", True):
+            continue
+        for symbol, sym_cfg in (st_cfg.get("symbols") or {}).items():
+            if not isinstance(sym_cfg, dict):
+                continue
+            for side, side_cfg in sym_cfg.items():
+                if not isinstance(side_cfg, dict):
+                    continue
+                mode = str(side_cfg.get("mode", "OFF")).upper()
+                if not include_off and mode == "OFF":
+                    continue
+                rows.append({
+                    "strategy": strategy,
+                    "symbol": normalize_symbol(symbol),
+                    "side": normalize_side(side),
+                    "mode": mode,
+                    "risk_pct": to_float_or_none(side_cfg.get("risk_pct")) or 0.0,
+                    "config": side_cfg,
+                })
+    return rows
+
+
+def _decision_items(days: int, limit: int) -> list[Dict[str, Any]]:
+    report = build_paper_outcome_decision_report(days=days, limit=limit, include_outcomes=False)
+    return report.get("decisions") or []
+
+
+def _candidate_metrics_from_decision(item: Dict[str, Any]) -> Dict[str, Any]:
+    decision = item.get("decision") or {}
+    metrics = decision.get("metrics") or {}
+    return {
+        "status": decision.get("status"),
+        "action": decision.get("action"),
+        "reasons": decision.get("reasons") or [],
+        "closed_count": int(metrics.get("closed_count") or 0),
+        "average_r_closed": to_float_or_none(metrics.get("average_r_closed")),
+        "total_r": to_float_or_none(metrics.get("total_r")),
+        "win_rate_closed_pct": to_float_or_none(metrics.get("win_rate_closed_pct")),
+        "backtest_profit_factor": to_float_or_none(metrics.get("backtest_profit_factor")),
+        "backtest_trades": to_float_or_none(metrics.get("backtest_trades")),
+        "backtest_alignment_status": decision.get("backtest_alignment_status"),
+    }
+
+
+def build_strategy_promotion_plan(days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS) -> Dict[str, Any]:
+    safe_days = max(1, min(int(days), 90))
+    safe_limit = max(1, min(int(limit), max(PAPER_OUTCOME_MAX_EVENTS, 1)))
+    decisions = _decision_items(safe_days, safe_limit)
+    open_risk = summarize_open_risk()
+    ai_risk = build_ai_risk_supervisor_report(days=safe_days, limit=safe_limit, include_plan=False)
+
+    actions: list[Dict[str, Any]] = []
+    for item in decisions:
+        strategy = str(item.get("strategy") or "")
+        symbol = normalize_symbol(item.get("symbol") or "")
+        side = normalize_side(item.get("side") or "LONG")
+        current_mode = _current_strategy_side_mode(strategy, symbol, side)
+        metrics = _candidate_metrics_from_decision(item)
+        closed = metrics["closed_count"]
+        avg_r = metrics["average_r_closed"]
+        bt_pf = metrics["backtest_profit_factor"]
+
+        proposed_action = "KEEP_PAPER"
+        target_mode = current_mode
+        target_risk_pct = None
+        requires_approval = False
+        block_reason = None
+        reasons = []
+
+        if current_mode == "PAPER":
+            if closed >= PROMOTION_MANAGER_MIN_CLOSED and avg_r is not None and avg_r <= PROMOTION_MANAGER_REJECT_AVG_R:
+                proposed_action = "REJECT_TO_OFF"
+                target_mode = "OFF"
+                reasons.append(f"closed={closed}, avgR={avg_r:.4f} <= reject threshold {PROMOTION_MANAGER_REJECT_AVG_R:.4f}")
+                requires_approval = PROMOTION_MANAGER_REQUIRE_APPROVAL
+            elif (
+                closed >= PROMOTION_MANAGER_MIN_CLOSED
+                and avg_r is not None
+                and avg_r >= PROMOTION_MANAGER_PROMOTE_AVG_R
+                and bt_pf is not None
+                and bt_pf >= PROMOTION_MANAGER_MIN_BACKTEST_PF
+            ):
+                proposed_action = f"PROMOTE_TO_{PROMOTION_MANAGER_PROMOTE_TARGET_MODE}"
+                target_mode = PROMOTION_MANAGER_PROMOTE_TARGET_MODE
+                target_risk_pct = PROMOTION_MANAGER_DEFAULT_MICRO_RISK_PCT
+                reasons.append(f"closed={closed}, avgR={avg_r:.4f} >= promote threshold {PROMOTION_MANAGER_PROMOTE_AVG_R:.4f}")
+                reasons.append(f"backtest PF={bt_pf:.4f} >= {PROMOTION_MANAGER_MIN_BACKTEST_PF:.4f}")
+                requires_approval = True
+            else:
+                reasons.append("No promotion/rejection threshold met; collect more PAPER data")
+        elif current_mode in {"MICRO", "LIVE"}:
+            if closed >= PAPER_STRATEGY_GUARD_MIN_CLOSED and avg_r is not None and avg_r <= PAPER_STRATEGY_GUARD_REJECT_AVG_R:
+                proposed_action = f"DEMOTE_TO_{PROMOTION_MANAGER_DEMOTE_TARGET_MODE}"
+                target_mode = PROMOTION_MANAGER_DEMOTE_TARGET_MODE
+                reasons.append(f"active strategy underperforming: avgR={avg_r:.4f}")
+                requires_approval = PROMOTION_MANAGER_REQUIRE_APPROVAL
+            else:
+                proposed_action = "KEEP_ACTIVE"
+                target_mode = current_mode
+                reasons.append("No demotion threshold met")
+        else:
+            proposed_action = "NO_ACTION"
+            reasons.append(f"Current mode is {current_mode}")
+
+        if proposed_action.startswith("PROMOTE") and AI_RISK_CAN_BLOCK_PROMOTION:
+            risk_level = str((ai_risk.get("risk") or {}).get("level", "NORMAL"))
+            if risk_level in {"HIGH", "CRITICAL"}:
+                block_reason = f"AI risk supervisor level {risk_level} blocks promotion"
+                proposed_action = "PROMOTION_BLOCKED_BY_RISK"
+                target_mode = current_mode
+                target_risk_pct = None
+                requires_approval = False
+                reasons.append(block_reason)
+
+        actions.append({
+            "strategy": strategy,
+            "symbol": symbol,
+            "side": side,
+            "current_mode": current_mode,
+            "proposed_action": proposed_action,
+            "target_mode": target_mode,
+            "target_risk_pct": target_risk_pct,
+            "requires_approval": requires_approval,
+            "block_reason": block_reason,
+            "reasons": reasons,
+            "metrics": metrics,
+        })
+
+    counts: Dict[str, int] = {}
+    for a in actions:
+        key = str(a.get("proposed_action"))
+        counts[key] = counts.get(key, 0) + 1
+
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "enabled": PROMOTION_MANAGER_ENABLED,
+        "days": safe_days,
+        "thresholds": {
+            "min_closed": PROMOTION_MANAGER_MIN_CLOSED,
+            "promote_avg_r": PROMOTION_MANAGER_PROMOTE_AVG_R,
+            "reject_avg_r": PROMOTION_MANAGER_REJECT_AVG_R,
+            "min_backtest_pf": PROMOTION_MANAGER_MIN_BACKTEST_PF,
+            "promote_target_mode": PROMOTION_MANAGER_PROMOTE_TARGET_MODE,
+            "default_micro_risk_pct": PROMOTION_MANAGER_DEFAULT_MICRO_RISK_PCT,
+            "require_approval": PROMOTION_MANAGER_REQUIRE_APPROVAL,
+        },
+        "open_risk": open_risk,
+        "ai_risk_level": (ai_risk.get("risk") or {}).get("level"),
+        "action_counts": counts,
+        "actions": actions,
+    }
+
+
+def _apply_strategy_action(action: Dict[str, Any], reason_prefix: str = "promotion_manager") -> Dict[str, Any]:
+    target_mode = str(action.get("target_mode") or "").upper()
+    if target_mode not in {"OFF", "PAPER", "MICRO", "LIVE"}:
+        return {"ok": False, "reason": "NO_VALID_TARGET_MODE", "action": action}
+    current_mode = str(action.get("current_mode") or "").upper()
+    if target_mode == current_mode:
+        return {"ok": True, "changed": False, "reason": "ALREADY_IN_TARGET_MODE", "action": action}
+    risk_pct = action.get("target_risk_pct")
+    if target_mode == "OFF":
+        risk_pct = 0.0
+    result = set_strategy_side_config(
+        strategy=action.get("strategy"),
+        symbol=action.get("symbol"),
+        side=action.get("side"),
+        mode=target_mode,
+        risk_pct=risk_pct if risk_pct is not None else None,
+        reason=f"{reason_prefix}:{action.get('proposed_action')}",
+    )
+    return {"ok": True, "changed": True, "result": result, "action": action}
+
+
+@app.get("/strategy_promotion_plan")
+def strategy_promotion_plan(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_strategy_promotion_plan(days=days, limit=limit)
+
+
+@app.get("/strategy_promotion_dashboard", response_class=HTMLResponse)
+def strategy_promotion_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    plan = build_strategy_promotion_plan(days=days, limit=limit)
+    rows = []
+    for a in plan.get("actions") or []:
+        m = a.get("metrics") or {}
+        rows.append(f"""
+        <tr><td>{h(a.get('strategy'))}</td><td>{h(a.get('symbol'))}</td><td>{h(a.get('side'))}</td><td>{h(a.get('current_mode'))}</td>
+        <td><b>{h(a.get('proposed_action'))}</b></td><td>{h(a.get('target_mode'))}</td><td>{h(m.get('closed_count'))}</td>
+        <td>{fmt_num(m.get('average_r_closed'))}</td><td>{fmt_num(m.get('backtest_profit_factor'))}</td><td>{h('; '.join(a.get('reasons') or []))}</td></tr>
+        """)
+    return HTMLResponse(f"""
+    <html><head><title>Strategy Promotion Manager</title><style>
+    body{{font-family:Arial;margin:24px;background:#f6f8fb;color:#111827}} table{{border-collapse:collapse;width:100%;background:white;border-radius:10px;overflow:hidden}} th{{background:#111827;color:white}} td,th{{border-bottom:1px solid #e5e7eb;padding:9px;text-align:left}} .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}} a{{margin-right:10px}}
+    </style></head><body><h1>Strategy Promotion Manager v7.0.0</h1>
+    <div class='card'>AI risk level: <b>{h(plan.get('ai_risk_level'))}</b> | Action counts: {h(plan.get('action_counts'))}</div>
+    <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Mode</th><th>Action</th><th>Target</th><th>Closed</th><th>Avg R</th><th>BT PF</th><th>Reasons</th></tr>{''.join(rows)}</table>
+    <p><a href='/strategy_promotion_plan?secret={h(secret)}&days={days}&limit={limit}'>JSON plan</a><a href='/candidate_monitor_dashboard?secret={h(secret)}&days={days}&limit={limit}'>Candidate monitor</a><a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
+    </body></html>
+    """)
+
+
+@app.post("/strategy_promotion_run")
+async def strategy_promotion_run(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    if not PROMOTION_MANAGER_ENABLED:
+        raise HTTPException(403, "Promotion manager is disabled")
+    apply_changes = bool(body.get("apply", False))
+    allow_promotions = bool(body.get("allow_promotions", False))
+    allow_rejections = bool(body.get("allow_rejections", True))
+    days = int(body.get("days", PAPER_OUTCOME_DEFAULT_DAYS))
+    limit = int(body.get("limit", PAPER_OUTCOME_MAX_EVENTS))
+    plan = build_strategy_promotion_plan(days=days, limit=limit)
+    results = []
+    for action in plan.get("actions") or []:
+        proposed = str(action.get("proposed_action"))
+        should_apply = False
+        if proposed in {"REJECT_TO_OFF", "DEMOTE_TO_PAPER"} and allow_rejections:
+            should_apply = True
+        if proposed.startswith("PROMOTE_TO_") and allow_promotions:
+            should_apply = True
+        if not apply_changes or not should_apply:
+            results.append({"ok": True, "changed": False, "reason": "DRY_RUN_OR_NOT_ALLOWED", "action": action})
+            continue
+        if action.get("requires_approval") and not body.get("approval_token"):
+            results.append({"ok": False, "changed": False, "reason": "APPROVAL_REQUIRED", "action": action})
+            continue
+        results.append(_apply_strategy_action(action, reason_prefix="strategy_promotion_run"))
+    return {"ok": True, "apply": apply_changes, "results": results, "plan": plan}
+
+
+def build_ai_strategy_analyst_report(days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS) -> Dict[str, Any]:
+    safe_days = max(1, min(int(days), 90))
+    decision_report = build_paper_outcome_decision_report(days=safe_days, limit=limit, include_outcomes=False)
+    promotion = build_strategy_promotion_plan(days=safe_days, limit=limit)
+    risk = build_ai_risk_supervisor_report(days=safe_days, limit=limit, include_plan=False)
+    items = []
+    for d in decision_report.get("decisions") or []:
+        decision = d.get("decision") or {}
+        m = decision.get("metrics") or {}
+        avg_r = to_float_or_none(m.get("average_r_closed"))
+        closed = int(m.get("closed_count") or 0)
+        bt_pf = to_float_or_none(m.get("backtest_profit_factor"))
+        if closed < PAPER_DECISION_MIN_SAMPLE_REJECT:
+            recommendation = "KEEP_PAPER_COLLECT_DATA"
+            confidence = "low"
+        elif avg_r is not None and avg_r <= PAPER_DECISION_REJECT_AVG_R:
+            recommendation = "REJECT_OR_REOPTIMIZE"
+            confidence = "medium"
+        elif avg_r is not None and avg_r >= PAPER_DECISION_PROMOTE_AVG_R and bt_pf is not None and bt_pf >= PAPER_DECISION_PROMOTE_BACKTEST_PF:
+            recommendation = "PROMOTION_REVIEW"
+            confidence = "medium"
+        elif avg_r is not None and avg_r >= 0:
+            recommendation = "KEEP_PAPER"
+            confidence = "medium"
+        else:
+            recommendation = "WATCH_NEGATIVE"
+            confidence = "medium"
+        items.append({
+            "strategy": d.get("strategy"),
+            "symbol": d.get("symbol"),
+            "side": d.get("side"),
+            "recommendation": recommendation,
+            "confidence": confidence,
+            "closed_count": closed,
+            "average_r_closed": avg_r,
+            "total_r": m.get("total_r"),
+            "backtest_profit_factor": bt_pf,
+            "backtest_alignment_status": decision.get("backtest_alignment_status"),
+            "reasons": decision.get("reasons") or [],
+        })
+    portfolio_status = "NORMAL"
+    avg_total = to_float_or_none((decision_report.get("summary") or {}).get("average_r_closed"))
+    if str((risk.get("risk") or {}).get("level")) in {"HIGH", "CRITICAL"}:
+        portfolio_status = "CAUTIOUS"
+    elif avg_total is not None and avg_total < 0:
+        portfolio_status = "CAUTIOUS"
+    summary_text = build_ai_strategy_summary_text(items, risk)
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "mode": "deterministic_ai_analyst",
+        "portfolio_status": portfolio_status,
+        "summary": summary_text,
+        "days": safe_days,
+        "items": items,
+        "risk_supervisor": risk.get("risk"),
+        "promotion_action_counts": promotion.get("action_counts"),
+        "do_not_promote": str((risk.get("risk") or {}).get("level")) in {"HIGH", "CRITICAL"},
+        "source_reports": {
+            "paper_decision_summary": decision_report.get("summary"),
+            "status_counts": decision_report.get("status_counts"),
+        },
+    }
+
+
+def build_ai_strategy_summary_text(items: list[Dict[str, Any]], risk: Dict[str, Any]) -> str:
+    if not items:
+        return "No PAPER outcomes available yet. Keep collecting data."
+    best = sorted(items, key=lambda x: (to_float_or_none(x.get("average_r_closed")) if to_float_or_none(x.get("average_r_closed")) is not None else -999), reverse=True)[:1]
+    worst = sorted(items, key=lambda x: (to_float_or_none(x.get("average_r_closed")) if to_float_or_none(x.get("average_r_closed")) is not None else 999))[:1]
+    risk_level = (risk.get("risk") or {}).get("level") if isinstance(risk, dict) else None
+    return (
+        f"Portfolio risk is {risk_level or 'UNKNOWN'}. "
+        f"Best current candidate: {best[0].get('strategy')} {best[0].get('symbol')} avgR={fmt_num(best[0].get('average_r_closed'))}. "
+        f"Weakest current candidate: {worst[0].get('strategy')} {worst[0].get('symbol')} avgR={fmt_num(worst[0].get('average_r_closed'))}. "
+        "No AI recommendation may bypass the deterministic risk engine."
+    )
+
+
+@app.get("/ai_strategy_analyst_report")
+def ai_strategy_analyst_report(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_ai_strategy_analyst_report(days=days, limit=limit)
+
+
+def format_ai_strategy_analyst_message(report: Dict[str, Any]) -> str:
+    lines = [
+        f"🤖 AI Strategy Analyst — {report.get('days')}d",
+        f"Portfolio: {report.get('portfolio_status')} | Risk: {(report.get('risk_supervisor') or {}).get('level')} | Do not promote: {report.get('do_not_promote')}",
+        str(report.get("summary") or ""),
+    ]
+    for item in (report.get("items") or [])[:8]:
+        lines.append(
+            f"{item.get('recommendation')}: {item.get('strategy')} {item.get('symbol')} {item.get('side')} "
+            f"closed={item.get('closed_count')} avgR={fmt_num(item.get('average_r_closed'))} btPF={fmt_num(item.get('backtest_profit_factor'))}"
+        )
+    return "\n".join(lines)
+
+
+@app.get("/telegram_ai_strategy_analyst_report")
+def telegram_ai_strategy_analyst_report(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS, force: bool = True):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    report = build_ai_strategy_analyst_report(days=days, limit=limit)
+    message = format_ai_strategy_analyst_message(report)
+    notify = safe_notify_event("🤖 AI Strategy Analyst", message, important=False)
+    return {"ok": True, "sent": bool(notify.get("sent")), "notify": notify, "message": message, "report": report}
+
+
+def build_ai_risk_supervisor_report(days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS, include_plan: bool = True) -> Dict[str, Any]:
+    safe_days = max(1, min(int(days), 90))
+    decision_report = build_paper_outcome_decision_report(days=safe_days, limit=limit, include_outcomes=False)
+    summary = decision_report.get("summary") or {}
+    avg_r = to_float_or_none(summary.get("average_r_closed"))
+    total_r = to_float_or_none(summary.get("total_r")) or 0.0
+    closed = int(summary.get("closed_count") or 0)
+    open_risk = summarize_open_risk()
+    active_rows = _active_strategy_rows(include_off=False)
+    active_micro_live = [x for x in active_rows if x.get("mode") in {"MICRO", "LIVE"}]
+    active_paper = [x for x in active_rows if x.get("mode") == "PAPER"]
+    long_alt_count = len([x for x in active_rows if x.get("side") == "LONG" and x.get("symbol") not in {"BTCUSDT", "ETHUSDT"}])
+    reasons = []
+    level = "NORMAL"
+    if closed == 0:
+        level = "UNKNOWN"
+        reasons.append("No closed PAPER outcomes yet")
+    elif avg_r is not None and avg_r <= AI_RISK_HIGH_AVG_R:
+        level = "HIGH"
+        reasons.append(f"Average PAPER R {avg_r:.4f} <= high-risk threshold {AI_RISK_HIGH_AVG_R:.4f}")
+    elif avg_r is not None and avg_r <= AI_RISK_ELEVATED_AVG_R:
+        level = "ELEVATED"
+        reasons.append(f"Average PAPER R {avg_r:.4f} <= elevated threshold {AI_RISK_ELEVATED_AVG_R:.4f}")
+    if len(active_micro_live) > AI_RISK_MAX_ACTIVE_MICRO_LIVE:
+        level = "HIGH"
+        reasons.append(f"Too many active MICRO/LIVE strategies: {len(active_micro_live)}")
+    if long_alt_count >= AI_RISK_ALT_LONG_CONCENTRATION_WARN:
+        if level == "NORMAL":
+            level = "ELEVATED"
+        reasons.append(f"Altcoin LONG concentration: {long_alt_count} active long alt strategies")
+    if not reasons:
+        reasons.append("No elevated risk condition detected")
+    recommendation = "ALLOW_MONITORING"
+    if level in {"HIGH", "CRITICAL"}:
+        recommendation = "BLOCK_PROMOTIONS_AND_REVIEW"
+    elif level == "ELEVATED":
+        recommendation = "NO_PROMOTION_UNTIL_IMPROVEMENT"
+    elif level == "UNKNOWN":
+        recommendation = "COLLECT_MORE_DATA"
+    plan = build_strategy_promotion_plan(days=safe_days, limit=limit) if include_plan else None
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "risk": {
+            "level": level,
+            "recommendation": recommendation,
+            "reasons": reasons,
+            "closed_count": closed,
+            "average_r_closed": avg_r,
+            "total_r": total_r,
+            "active_paper_count": len(active_paper),
+            "active_micro_live_count": len(active_micro_live),
+            "long_alt_count": long_alt_count,
+        },
+        "open_risk": open_risk,
+        "active_strategies": active_rows,
+        "promotion_plan": plan,
+    }
+
+
+@app.get("/ai_risk_supervisor")
+def ai_risk_supervisor(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_ai_risk_supervisor_report(days=days, limit=limit, include_plan=True)
+
+
+def format_ai_risk_supervisor_message(report: Dict[str, Any]) -> str:
+    risk = report.get("risk") or {}
+    lines = [
+        f"🧠 AI Risk Supervisor — level {risk.get('level')}",
+        f"Recommendation: {risk.get('recommendation')}",
+        f"closed={risk.get('closed_count')} avgR={fmt_num(risk.get('average_r_closed'))} totalR={fmt_num(risk.get('total_r'))}",
+    ]
+    for reason in (risk.get("reasons") or [])[:8]:
+        lines.append(f"- {reason}")
+    return "\n".join(lines)
+
+
+@app.get("/telegram_ai_risk_supervisor")
+def telegram_ai_risk_supervisor(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    report = build_ai_risk_supervisor_report(days=days, limit=limit, include_plan=False)
+    message = format_ai_risk_supervisor_message(report)
+    notify = safe_notify_event("🧠 AI Risk Supervisor", message, important=True)
+    return {"ok": True, "sent": bool(notify.get("sent")), "notify": notify, "message": message, "report": report}
+
+
+def parse_backtest_table_text(text: str, default_source: str = BACKTEST_IMPORT_DEFAULT_SOURCE) -> list[Dict[str, Any]]:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return []
+    dialect = csv.excel_tab if "\t" in cleaned.splitlines()[0] else csv.excel
+    rows = list(csv.DictReader(cleaned.splitlines(), dialect=dialect))
+    normalized = []
+    for row in rows:
+        lowered = {str(k).strip().lower().replace(" ", "_"): v for k, v in row.items()}
+        item = {
+            "strategy": lowered.get("strategy") or lowered.get("strategy_name") or lowered.get("name"),
+            "symbol": lowered.get("symbol") or lowered.get("ticker") or lowered.get("pair"),
+            "side": lowered.get("side") or "LONG",
+            "profit_factor": lowered.get("profit_factor") or lowered.get("pf") or lowered.get("bt_pf"),
+            "trades": lowered.get("trades") or lowered.get("total_trades") or lowered.get("closed_trades"),
+            "win_rate": lowered.get("win_rate") or lowered.get("win_%") or lowered.get("percent_profitable") or lowered.get("profitable_trades"),
+            "max_drawdown": lowered.get("max_drawdown") or lowered.get("max_dd"),
+            "net_profit": lowered.get("net_profit") or lowered.get("total_pnl") or lowered.get("total_p&l"),
+            "timeframe": lowered.get("timeframe") or lowered.get("tf"),
+            "date_from": lowered.get("date_from") or lowered.get("from"),
+            "date_to": lowered.get("date_to") or lowered.get("to"),
+            "source": lowered.get("source") or default_source,
+            "raw": row,
+        }
+        normalized.append(normalize_backtest_row(item))
+    return normalized
+
+
+@app.post("/backtest_table_import")
+async def backtest_table_import(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    mode = str(body.get("mode", "upsert")).lower()
+    rows = body.get("rows") or body.get("items")
+    if isinstance(rows, list):
+        normalized = [normalize_backtest_row(r if isinstance(r, dict) else {"raw": r}) for r in rows]
+    else:
+        csv_text = body.get("csv_text") or body.get("tsv_text") or body.get("text") or ""
+        normalized = parse_backtest_table_text(str(csv_text), default_source=str(body.get("source") or BACKTEST_IMPORT_DEFAULT_SOURCE))
+    for row in normalized:
+        row["updated_at"] = now_iso()
+        row["source"] = row.get("source") or BACKTEST_IMPORT_DEFAULT_SOURCE
+    if not normalized:
+        raise HTTPException(400, "No valid backtest rows found. Provide rows/items or csv_text/tsv_text.")
+    if mode == "replace":
+        final_rows = normalized
+    elif mode == "upsert":
+        final_rows = merge_backtest_rows(load_backtest_results(), normalized)
+    else:
+        raise HTTPException(400, "mode must be 'upsert' or 'replace'")
+    save_backtest_results(final_rows)
+    return {"ok": True, "mode": mode, "imported": len(normalized), "total_registry_rows": len(final_rows), "rows": normalized, "registry": final_rows}
+
+
+@app.get("/backtest_table_import_template")
+def backtest_table_import_template(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    csv_template = "strategy,symbol,side,timeframe,date_from,date_to,profit_factor,trades,win_rate,max_drawdown,net_profit,source\ntrend_continuation_avax_v11,AVAXUSDT,LONG,15,2026-01-01,2026-05-20,1.49,66,54.55,,,manual_tradingview"
+    return {"ok": True, "csv_template": csv_template, "endpoint": "/backtest_table_import", "method": "POST", "body_example": {"secret": "...", "mode": "upsert", "csv_text": csv_template}}
+
+
+def load_approval_state() -> Dict[str, Any]:
+    data = read_json_file(APPROVAL_STATE_FILE, {"items": {}})
+    if not isinstance(data, dict):
+        data = {"items": {}}
+    data.setdefault("items", {})
+    return data
+
+
+def save_approval_state(data: Dict[str, Any]) -> None:
+    write_json_file(APPROVAL_STATE_FILE, data)
+
+
+def create_approval_item(action: str, payload: Dict[str, Any], title: str = "Strategy approval") -> Dict[str, Any]:
+    token_raw = f"{time.time()}:{action}:{json.dumps(payload, sort_keys=True, default=str)}"
+    token = hashlib.sha256(token_raw.encode()).hexdigest()[:12]
+    state = load_approval_state()
+    item = {
+        "token": token,
+        "action": action,
+        "title": title,
+        "payload": payload,
+        "status": "PENDING",
+        "created_at": now_iso(),
+        "expires_at_ts": time.time() + APPROVAL_TTL_HOURS * 3600,
+        "decided_at": None,
+        "decision": None,
+    }
+    state.setdefault("items", {})[token] = item
+    save_approval_state(state)
+    return item
+
+
+def get_approval_item(token: str) -> Optional[Dict[str, Any]]:
+    return (load_approval_state().get("items") or {}).get(str(token))
+
+
+def set_approval_decision(token: str, decision: str) -> Dict[str, Any]:
+    state = load_approval_state()
+    item = (state.get("items") or {}).get(token)
+    if not item:
+        raise HTTPException(404, "Approval token not found")
+    if item.get("status") != "PENDING":
+        return {"ok": False, "reason": "ALREADY_DECIDED", "item": item}
+    if time.time() > float(item.get("expires_at_ts") or 0):
+        item["status"] = "EXPIRED"
+        save_approval_state(state)
+        return {"ok": False, "reason": "EXPIRED", "item": item}
+    decision_up = str(decision).upper()
+    if decision_up not in {"APPROVE", "REJECT"}:
+        raise HTTPException(400, "decision must be APPROVE or REJECT")
+    item["status"] = "APPROVED" if decision_up == "APPROVE" else "REJECTED"
+    item["decision"] = decision_up
+    item["decided_at"] = now_iso()
+    save_approval_state(state)
+    if decision_up == "APPROVE":
+        payload = item.get("payload") or {}
+        action_payload = payload.get("strategy_action") if isinstance(payload, dict) else None
+        if isinstance(action_payload, dict):
+            result = _apply_strategy_action(action_payload, reason_prefix="telegram_approval")
+            item["execution_result"] = result
+            state["items"][token] = item
+            save_approval_state(state)
+    return {"ok": True, "item": item}
+
+
+@app.post("/approval_create")
+async def approval_create(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    if not APPROVAL_WORKFLOW_ENABLED:
+        raise HTTPException(403, "Approval workflow disabled")
+    item = create_approval_item(str(body.get("action", "manual_action")), body.get("payload") or {}, str(body.get("title", "Strategy approval")))
+    if body.get("notify", True):
+        approve_url = f"/approval_decide?secret=***&token={item['token']}&decision=APPROVE"
+        reject_url = f"/approval_decide?secret=***&token={item['token']}&decision=REJECT"
+        safe_notify_event("✅ Approval requested", f"{item.get('title')}\nToken: {item['token']}\nApprove: {approve_url}\nReject: {reject_url}", important=True)
+    return {"ok": True, "approval": item}
+
+
+@app.get("/approval_list")
+def approval_list(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {"ok": True, "state": load_approval_state()}
+
+
+@app.get("/approval_decide")
+def approval_decide(secret: str, token: str, decision: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    result = set_approval_decision(token, decision)
+    safe_notify_event("✅ Approval decision", f"token={token}\ndecision={decision}\nok={result.get('ok')}", important=True)
+    return result
+
+
+@app.post("/approval_decide")
+async def approval_decide_post(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    result = set_approval_decision(str(body.get("token")), str(body.get("decision")))
+    safe_notify_event("✅ Approval decision", f"token={body.get('token')}\ndecision={body.get('decision')}\nok={result.get('ok')}", important=True)
+    return result
+
+
+@app.post("/promotion_approval_create")
+async def promotion_approval_create(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    plan = build_strategy_promotion_plan(days=int(body.get("days", PAPER_OUTCOME_DEFAULT_DAYS)), limit=int(body.get("limit", PAPER_OUTCOME_MAX_EVENTS)))
+    created = []
+    for a in plan.get("actions") or []:
+        if str(a.get("proposed_action", "")).startswith("PROMOTE_TO_") or a.get("proposed_action") in {"REJECT_TO_OFF", "DEMOTE_TO_PAPER"}:
+            item = create_approval_item("strategy_state_action", {"strategy_action": a}, title=f"{a.get('proposed_action')} {a.get('strategy')} {a.get('symbol')}")
+            created.append(item)
+    if created:
+        safe_notify_event("✅ Promotion approvals created", "\n".join([f"{x['token']}: {x['title']}" for x in created[:10]]), important=True)
+    return {"ok": True, "created_count": len(created), "created": created, "plan": plan}
+
+
+def build_portfolio_exposure_ai_summary(days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS) -> Dict[str, Any]:
+    active = _active_strategy_rows(include_off=False)
+    open_risk = summarize_open_risk()
+    risk = build_ai_risk_supervisor_report(days=days, limit=limit, include_plan=False)
+    by_mode: Dict[str, int] = {}
+    by_symbol: Dict[str, int] = {}
+    by_side: Dict[str, int] = {}
+    for x in active:
+        by_mode[x["mode"]] = by_mode.get(x["mode"], 0) + 1
+        by_symbol[x["symbol"]] = by_symbol.get(x["symbol"], 0) + 1
+        by_side[x["side"]] = by_side.get(x["side"], 0) + 1
+    concentration = []
+    for sym, cnt in sorted(by_symbol.items(), key=lambda kv: kv[1], reverse=True):
+        if cnt > 1:
+            concentration.append({"symbol": sym, "active_strategy_count": cnt})
+    text = (
+        f"Active strategies: {len(active)}. Modes: {by_mode}. Sides: {by_side}. "
+        f"Open positions: {open_risk.get('open_positions')}, open value: {fmt_num(open_risk.get('total_position_value'))}. "
+        f"AI risk level: {(risk.get('risk') or {}).get('level')}."
+    )
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "summary": text,
+        "active_count": len(active),
+        "by_mode": by_mode,
+        "by_symbol": by_symbol,
+        "by_side": by_side,
+        "concentration": concentration,
+        "open_risk": open_risk,
+        "ai_risk": risk.get("risk"),
+        "active_strategies": active,
+    }
+
+
+@app.get("/portfolio_exposure_ai_summary")
+def portfolio_exposure_ai_summary(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_portfolio_exposure_ai_summary(days=days, limit=limit)
+
+
+@app.get("/telegram_portfolio_exposure_ai_summary")
+def telegram_portfolio_exposure_ai_summary(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    report = build_portfolio_exposure_ai_summary(days=days, limit=limit)
+    lines = ["📌 Portfolio Exposure AI Summary", report.get("summary", "")]
+    for item in report.get("concentration") or []:
+        lines.append(f"Concentration: {item.get('symbol')} active strategies={item.get('active_strategy_count')}")
+    notify = safe_notify_event("📌 Portfolio exposure summary", "\n".join(lines), important=False)
+    return {"ok": True, "sent": bool(notify.get("sent")), "notify": notify, "report": report}
+
+
+@app.get("/v7_control_center", response_class=HTMLResponse)
+def v7_control_center(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    risk = build_ai_risk_supervisor_report(days=days, limit=limit, include_plan=False)
+    analyst = build_ai_strategy_analyst_report(days=days, limit=limit)
+    promo = build_strategy_promotion_plan(days=days, limit=limit)
+    port = build_portfolio_exposure_ai_summary(days=days, limit=limit)
+    return HTMLResponse(f"""
+    <html><head><title>v7 Trading AI Control Center</title><style>
+    body{{font-family:Arial;margin:24px;background:#f6f8fb;color:#111827}} .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}} a{{display:inline-block;margin:4px 8px 4px 0}} code{{background:#eef2ff;padding:2px 5px;border-radius:4px}}
+    </style></head><body><h1>v7 Trading AI Control Center</h1>
+    <div class='card'><h2>AI Risk Supervisor</h2><p>Level: <b>{h((risk.get('risk') or {}).get('level'))}</b></p><p>{h((risk.get('risk') or {}).get('recommendation'))}</p></div>
+    <div class='card'><h2>AI Strategy Analyst</h2><p>Status: <b>{h(analyst.get('portfolio_status'))}</b></p><p>{h(analyst.get('summary'))}</p></div>
+    <div class='card'><h2>Promotion Manager</h2><p>Action counts: {h(promo.get('action_counts'))}</p></div>
+    <div class='card'><h2>Portfolio</h2><p>{h(port.get('summary'))}</p></div>
+    <div class='card'><h2>Links</h2>
+    <a href='/strategy_promotion_dashboard?secret={h(secret)}&days={days}&limit={limit}'>Promotion dashboard</a>
+    <a href='/ai_strategy_analyst_report?secret={h(secret)}&days={days}&limit={limit}'>AI analyst JSON</a>
+    <a href='/ai_risk_supervisor?secret={h(secret)}&days={days}&limit={limit}'>AI risk JSON</a>
+    <a href='/portfolio_exposure_ai_summary?secret={h(secret)}&days={days}&limit={limit}'>Portfolio JSON</a>
+    <a href='/candidate_monitor_dashboard?secret={h(secret)}&days={days}&limit={limit}'>Candidate monitor</a>
+    <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a>
+    </div></body></html>
+    """)
+
+
 
 @app.get("/version")
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center"]}
