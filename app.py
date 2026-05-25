@@ -7299,7 +7299,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "8.4.2"
+APP_FEATURE_LEVEL = "8.4.4"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8720,7 +8720,7 @@ def v7_control_center(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix"]}
 
 
 # ============================================================
@@ -9685,7 +9685,7 @@ def discovery_candidate_dashboard(secret: str, max_symbols: int = MINI_BACKTEST_
     bc = data.get("summary", {}).get("bucket_counts", {})
     return HTMLResponse(f"""
     <html><head><title>Discovery Candidate Dashboard</title><style>body{{font-family:Arial;margin:20px;background:#f6f8fb}} .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}} table{{border-collapse:collapse;width:100%;background:white;font-size:13px}} th{{background:#111827;color:white}} td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}} .STRONG_CANDIDATE{{color:#047857;font-weight:bold}} .CANDIDATE{{color:#0369a1;font-weight:bold}} .WATCHLIST{{color:#92400e;font-weight:bold}} .NEAR_MISS{{color:#7c2d12;font-weight:bold}}</style></head>
-    <body><h1>Discovery Candidate Dashboard v8.4.2</h1><div class='card'><b>Interval:</b> {h(interval)} | <b>Rows:</b> {data.get('total_rows_evaluated')} | <b>Shown:</b> {data.get('count')}<br><b>Bucket counts:</b> {h(json.dumps(bc, ensure_ascii=False))}</div>
+    <body><h1>Discovery Candidate Dashboard v8.4.4</h1><div class='card'><b>Interval:</b> {h(interval)} | <b>Rows:</b> {data.get('total_rows_evaluated')} | <b>Shown:</b> {data.get('count')}<br><b>Bucket counts:</b> {h(json.dumps(bc, ensure_ascii=False))}</div>
     <table><tr><th>Bucket</th><th>Symbol</th><th>Family</th><th>PF</th><th>Trades</th><th>Win %</th><th>Avg R</th><th>Score</th><th>Discovery reason</th><th>Strict failures</th><th>Action</th></tr>{rows}</table>
     <p><a href='/discovery_candidate_plan?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}&include_rejected={str(include_rejected).lower()}'>JSON</a> · <a href='/auto_paper_candidate_plan?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}'>Strict auto plan</a> · <a href='/mini_backtest_dashboard?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}'>Mini backtest</a> · <a href='/ai_market_opportunity_dashboard?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}'>AI opportunity</a></p></body></html>
     """)
@@ -9702,3 +9702,345 @@ def telegram_discovery_candidate_report(secret: str, max_symbols: int = MINI_BAC
         lines.append(f"{x.get('bucket')}: {x.get('symbol')} {x.get('family')} PF={fmt_num(x.get('profit_factor'))} trades={x.get('trade_count')} score={fmt_num(x.get('current_score'))} action={x.get('action')}")
     notify = safe_notify_event("🔎 Discovery candidate report", "\n".join(lines), important=False)
     return {"ok": True, "sent": bool(notify.get("sent")), "notify": notify, "report": data}
+
+
+# ============================================================
+# v8.4.3 / v8.4.4 DISCOVERY VALIDATION REGISTRY + QUALITY FIX
+# ============================================================
+
+DISCOVERY_VALIDATION_REGISTRY_FILE = APP_DIR / "discovery_validation_registry.json"
+DISCOVERY_HIDE_TV_REJECTED_DEFAULT = os.getenv("DISCOVERY_HIDE_TV_REJECTED_DEFAULT", "false").lower() == "true"
+DISCOVERY_TV_CONFIRM_PF = float(os.getenv("DISCOVERY_TV_CONFIRM_PF", "1.40"))
+DISCOVERY_TV_WATCH_PF = float(os.getenv("DISCOVERY_TV_WATCH_PF", "1.20"))
+DISCOVERY_TV_MIN_TRADES = int(os.getenv("DISCOVERY_TV_MIN_TRADES", "20"))
+DISCOVERY_THIN_SAMPLE_TRADES = int(os.getenv("DISCOVERY_THIN_SAMPLE_TRADES", "10"))
+DISCOVERY_NO_LOSS_PF_SENTINEL = float(os.getenv("DISCOVERY_NO_LOSS_PF_SENTINEL", "900"))
+
+
+def discovery_key(symbol: str, family: str, side: str = "LONG", interval: str = "15") -> str:
+    return f"{str(symbol).upper()}|{str(family)}|{str(side).upper()}|{str(interval)}"
+
+
+def load_discovery_validations() -> Dict[str, Any]:
+    data = read_json_file(DISCOVERY_VALIDATION_REGISTRY_FILE, {"rows": []})
+    if isinstance(data, list):
+        data = {"rows": data}
+    rows = data.get("rows") or []
+    out = {}
+    for r in rows:
+        key = r.get("key") or discovery_key(r.get("symbol", ""), r.get("family", ""), r.get("side", "LONG"), r.get("interval", "15"))
+        if key.strip("|"):
+            r["key"] = key
+            out[key] = r
+    return {"rows": list(out.values()), "by_key": out}
+
+
+def save_discovery_validations(rows: list) -> None:
+    unique = {}
+    for r in rows:
+        key = r.get("key") or discovery_key(r.get("symbol", ""), r.get("family", ""), r.get("side", "LONG"), r.get("interval", "15"))
+        if key.strip("|"):
+            r["key"] = key
+            unique[key] = r
+    write_json_file(DISCOVERY_VALIDATION_REGISTRY_FILE, {"rows": list(unique.values()), "updated_at": now_iso()})
+
+
+def normalize_discovery_validation_row(item: Dict[str, Any]) -> Dict[str, Any]:
+    symbol = str(item.get("symbol") or item.get("pair") or "").upper().strip()
+    family = str(item.get("family") or item.get("strategy_family") or "").strip()
+    side = str(item.get("side") or "LONG").upper().strip()
+    interval = str(item.get("interval") or item.get("timeframe") or item.get("tf") or "15").strip()
+    tv_pf = item.get("tv_pf", item.get("tradingview_pf", item.get("profit_factor", item.get("pf"))))
+    tv_trades = item.get("tv_trades", item.get("trades", item.get("total_trades")))
+    tv_win_rate = item.get("tv_win_rate", item.get("win_rate", item.get("profitable_trades")))
+    tv_max_dd = item.get("tv_max_drawdown", item.get("max_drawdown", item.get("max_dd")))
+    tv_net_pnl = item.get("tv_net_pnl", item.get("net_pnl", item.get("net_profit")))
+    decision = str(item.get("decision") or "").upper().strip()
+    pf = v8_float(tv_pf, None)
+    trades = v8_int(tv_trades, 0)
+    if not decision:
+        if pf is None:
+            decision = "UNVALIDATED"
+        elif trades < DISCOVERY_TV_MIN_TRADES:
+            decision = "TV_THIN_SAMPLE"
+        elif pf >= DISCOVERY_TV_CONFIRM_PF:
+            decision = "TV_CONFIRMED"
+        elif pf >= DISCOVERY_TV_WATCH_PF:
+            decision = "TV_WATCH"
+        else:
+            decision = "TV_REJECTED"
+    row = {
+        "key": discovery_key(symbol, family, side, interval),
+        "symbol": symbol,
+        "family": family,
+        "side": side,
+        "interval": interval,
+        "tv_pf": pf,
+        "tv_trades": trades,
+        "tv_win_rate": v8_float(tv_win_rate, None),
+        "tv_max_drawdown": v8_float(tv_max_dd, None),
+        "tv_net_pnl": v8_float(tv_net_pnl, None),
+        "decision": decision,
+        "reason": str(item.get("reason") or ""),
+        "source": str(item.get("source") or "manual_tradingview"),
+        "updated_at": now_iso(),
+        "raw": item.get("raw", item),
+    }
+    return row
+
+
+def discovery_quality_for_row(row: Dict[str, Any], validation: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    pf = v8_float(row.get("profit_factor"), None)
+    trades = v8_int(row.get("trade_count"), 0)
+    score = v8_float(row.get("current_score"), 0.0)
+    avg_r = v8_float(row.get("average_r"), 0.0)
+    no_loss_sample = bool(pf is not None and pf >= DISCOVERY_NO_LOSS_PF_SENTINEL)
+
+    quality = "GOOD"
+    flags = []
+    if no_loss_sample and trades < DISCOVERY_THIN_SAMPLE_TRADES:
+        quality = "UNRELIABLE"
+        flags.append("NO_LOSS_SAMPLE_TOO_THIN")
+    elif trades < DISCOVERY_THIN_SAMPLE_TRADES:
+        quality = "THIN_SAMPLE"
+        flags.append(f"THIN_SAMPLE_{trades}_LT_{DISCOVERY_THIN_SAMPLE_TRADES}")
+    elif pf is not None and pf >= 1.20 and trades >= 20 and score >= 65:
+        quality = "STRONG"
+    elif pf is not None and pf >= 1.05 and trades >= 10:
+        quality = "GOOD"
+    else:
+        quality = "WEAK"
+
+    tv_status = "UNVALIDATED"
+    tv_pf = None
+    tv_trades = None
+    if validation:
+        tv_status = str(validation.get("decision") or "UNVALIDATED")
+        tv_pf = validation.get("tv_pf")
+        tv_trades = validation.get("tv_trades")
+        if tv_status == "TV_REJECTED":
+            quality = "TV_REJECTED"
+            flags.append("TV_VALIDATION_REJECTED")
+        elif tv_status == "TV_CONFIRMED":
+            quality = "TV_CONFIRMED"
+            flags.append("TV_VALIDATION_CONFIRMED")
+        elif tv_status == "TV_WATCH":
+            quality = "TV_WATCH"
+            flags.append("TV_VALIDATION_WATCH")
+        elif tv_status == "TV_THIN_SAMPLE":
+            flags.append("TV_THIN_SAMPLE")
+
+    # Conservative ranking score: caps distorted PF and penalizes thin/no-loss samples.
+    pf_for_score = 0.0 if pf is None else min(float(pf), 5.0)
+    trade_factor = min(trades / 20.0, 1.5)
+    rank_score = (pf_for_score * 18.0) + (score * 0.8) + (avg_r * 20.0) + (trade_factor * 12.0)
+    if no_loss_sample:
+        rank_score -= 40.0
+    if trades < DISCOVERY_THIN_SAMPLE_TRADES:
+        rank_score -= 25.0
+    if quality == "TV_REJECTED":
+        rank_score -= 100.0
+    if quality == "TV_CONFIRMED":
+        rank_score += 40.0
+    if quality == "TV_WATCH":
+        rank_score += 15.0
+
+    return {
+        "quality": quality,
+        "quality_flags": flags,
+        "no_loss_sample": no_loss_sample,
+        "rank_score": round(rank_score, 4),
+        "tv_status": tv_status,
+        "tv_pf": tv_pf,
+        "tv_trades": tv_trades,
+    }
+
+
+# Override v8.4.2 builder with calibrated v8.4.4 ranking/validation-aware builder.
+def build_discovery_candidate_plan(max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL, force_backtest: bool = False, include_rejected: bool = False) -> Dict[str, Any]:
+    data = read_json_file(MINI_BACKTEST_RESULTS_FILE, {})
+    if force_backtest or not data or not data.get("rows"):
+        data = run_python_mini_backtests(max_symbols=max_symbols, interval=interval)
+
+    validations = load_discovery_validations().get("by_key", {})
+    state = load_state()
+    active_symbols = set()
+    active_strategy_symbol = set()
+    for strat, scfg in (state.get("strategies") or {}).items():
+        for sym, symcfg in (scfg.get("symbols") or {}).items():
+            for side, sidecfg in (symcfg or {}).items():
+                if str((sidecfg or {}).get("mode", "OFF")).upper() != "OFF":
+                    active_symbols.add(str(sym).upper())
+                    active_strategy_symbol.add((strat, str(sym).upper(), str(side).upper()))
+
+    rows = []
+    counts: Dict[str, int] = {}
+    quality_counts: Dict[str, int] = {}
+    tv_counts: Dict[str, int] = {}
+    for row in data.get("rows") or []:
+        sym = str(row.get("symbol", "")).upper()
+        fam = str(row.get("family", ""))
+        val = validations.get(discovery_key(sym, fam, "LONG", interval)) or validations.get(discovery_key(sym, fam, "LONG", "15"))
+        q = discovery_quality_for_row(row, val)
+        cls = classify_discovery_row(row)
+        bucket = cls["bucket"]
+
+        if q["quality"] == "UNRELIABLE" and bucket in {"CANDIDATE", "STRONG_CANDIDATE"}:
+            bucket = "NEAR_MISS"
+            cls["action"] = "IGNORE_UNTIL_MORE_TRADES"
+            cls["reject_reason"] = "NO_LOSS_SAMPLE_THIN_SAMPLE"
+        if q["quality"] == "TV_REJECTED":
+            bucket = "TV_REJECTED"
+            cls["action"] = "DO_NOT_ADD_TO_PAPER"
+            cls["reject_reason"] = "REJECTED_BY_TRADINGVIEW_VALIDATION"
+        elif q["quality"] == "TV_CONFIRMED":
+            bucket = "TV_CONFIRMED"
+            cls["action"] = "REVIEW_FOR_PAPER_OR_CANDIDATE_SCRIPT"
+            cls["reject_reason"] = "CONFIRMED_BY_TRADINGVIEW"
+        elif q["quality"] == "TV_WATCH" and bucket in {"CANDIDATE", "WATCHLIST", "NEAR_MISS"}:
+            bucket = "TV_WATCH"
+            cls["action"] = "WATCH_AND_RETEST"
+            cls["reject_reason"] = "WATCH_BY_TRADINGVIEW_VALIDATION"
+
+        counts[bucket] = counts.get(bucket, 0) + 1
+        quality_counts[q["quality"]] = quality_counts.get(q["quality"], 0) + 1
+        tv_counts[q["tv_status"]] = tv_counts.get(q["tv_status"], 0) + 1
+        if bucket in {"REJECTED", "TV_REJECTED"} and not include_rejected:
+            # Keep TV_REJECTED out of the main dashboard by default; visible through registry/top endpoint.
+            continue
+
+        strategy_name = f"auto_{fam}_{sym.lower()}_v1"
+        is_active = (strategy_name, sym, "LONG") in active_strategy_symbol or sym in active_symbols
+        rows.append({
+            "symbol": sym,
+            "family": fam,
+            "strategy_suggestion": strategy_name,
+            "side": "LONG",
+            "bucket": bucket,
+            "quality": q["quality"],
+            "quality_flags": q["quality_flags"],
+            "rank_score": q["rank_score"],
+            "tv_status": q["tv_status"],
+            "tv_pf": q["tv_pf"],
+            "tv_trades": q["tv_trades"],
+            "action": "ALREADY_ACTIVE_OR_SYMBOL_ACTIVE" if is_active and bucket in {"STRONG_CANDIDATE", "CANDIDATE", "WATCHLIST", "TV_CONFIRMED", "TV_WATCH"} else cls["action"],
+            "reject_reason": cls["reject_reason"],
+            "strict_candidate": cls["strict_candidate"],
+            "strict_failures": cls["strict_failures"],
+            "profit_factor": row.get("profit_factor"),
+            "trade_count": row.get("trade_count"),
+            "win_rate": row.get("win_rate"),
+            "average_r": row.get("average_r"),
+            "total_r": row.get("total_r"),
+            "current_score": row.get("current_score"),
+            "current_recommendation": row.get("current_recommendation"),
+            "signal_now": row.get("signal_now"),
+            "turnover24h": row.get("turnover24h"),
+            "liquidity_score": row.get("liquidity_score"),
+            "already_active_symbol": sym in active_symbols,
+            "requires_approval": True,
+            "validation": val,
+        })
+
+    bucket_rank = {"TV_CONFIRMED": 7, "STRONG_CANDIDATE": 6, "CANDIDATE": 5, "TV_WATCH": 4, "WATCHLIST": 3, "NEAR_MISS": 2, "TV_REJECTED": 1, "REJECTED": 0}
+    rows.sort(key=lambda x: (bucket_rank.get(x.get("bucket"), 0), v8_float(x.get("rank_score"), 0), v8_int(x.get("trade_count"), 0)), reverse=True)
+    summary = {
+        "strict_thresholds": {"min_score": AUTO_PAPER_CANDIDATE_MIN_SCORE, "min_pf": AUTO_PAPER_CANDIDATE_MIN_PF, "min_trades": AUTO_PAPER_CANDIDATE_MIN_TRADES},
+        "discovery_thresholds": {"min_score": DISCOVERY_MIN_SCORE, "min_pf": DISCOVERY_MIN_PF, "min_trades": DISCOVERY_MIN_TRADES},
+        "tv_validation_thresholds": {"tv_confirm_pf": DISCOVERY_TV_CONFIRM_PF, "tv_watch_pf": DISCOVERY_TV_WATCH_PF, "tv_min_trades": DISCOVERY_TV_MIN_TRADES},
+        "bucket_counts": counts,
+        "quality_counts": quality_counts,
+        "tv_status_counts": tv_counts,
+        "strong_or_candidate": counts.get("STRONG_CANDIDATE", 0) + counts.get("CANDIDATE", 0) + counts.get("TV_CONFIRMED", 0),
+        "watchlist_or_near_miss": counts.get("WATCHLIST", 0) + counts.get("NEAR_MISS", 0) + counts.get("TV_WATCH", 0),
+    }
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "created_at": now_iso(), "interval": interval, "max_symbols": max_symbols, "count": len(rows[:DISCOVERY_TOP_N]), "total_rows_evaluated": len(data.get("rows") or []), "validation_rows": len(validations), "summary": summary, "items": rows[:DISCOVERY_TOP_N]}
+
+
+@app.post("/discovery_validation_import")
+async def discovery_validation_import(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    mode = str(body.get("mode", "upsert")).lower()
+    items = body.get("items") or body.get("rows") or []
+    if not isinstance(items, list):
+        raise HTTPException(400, "items/rows must be a list")
+    normalized = [normalize_discovery_validation_row(x) for x in items if isinstance(x, dict)]
+    if not normalized:
+        raise HTTPException(400, "No valid validation rows found")
+    existing = [] if mode == "replace" else load_discovery_validations().get("rows", [])
+    if mode not in {"upsert", "replace"}:
+        raise HTTPException(400, "mode must be 'upsert' or 'replace'")
+    save_discovery_validations(existing + normalized)
+    final_rows = load_discovery_validations().get("rows", [])
+    return {"ok": True, "mode": mode, "imported": len(normalized), "total_registry_rows": len(final_rows), "rows": normalized, "registry": final_rows}
+
+
+@app.post("/discovery_validation_seed_recent")
+async def discovery_validation_seed_recent(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    rows = [
+        {"symbol": "NEARUSDT", "family": "trend_continuation", "side": "LONG", "interval": "15", "tv_pf": 1.085, "tv_trades": 132, "tv_win_rate": 47.73, "decision": "TV_REJECTED", "reason": "Manual TradingView validation 2026-01-01 to 2026-05-25: PF below 1.20"},
+        {"symbol": "GRASSUSDT", "family": "trend_pullback", "side": "LONG", "interval": "15", "tv_pf": 0.936, "tv_trades": 46, "tv_win_rate": 41.30, "decision": "TV_REJECTED", "reason": "Manual TradingView validation 2026-01-01 to 2026-05-25: PF below 1.20"},
+        {"symbol": "NEARUSDT", "family": "trend_pullback", "side": "LONG", "interval": "15", "tv_pf": 0.398, "tv_trades": 38, "tv_win_rate": 26.32, "decision": "TV_REJECTED", "reason": "Manual TradingView validation 2026-01-01 to 2026-05-25: PF below 1.20"},
+    ]
+    normalized = [normalize_discovery_validation_row(x) for x in rows]
+    existing = load_discovery_validations().get("rows", [])
+    save_discovery_validations(existing + normalized)
+    final_rows = load_discovery_validations().get("rows", [])
+    return {"ok": True, "seeded": len(normalized), "total_registry_rows": len(final_rows), "rows": normalized}
+
+
+@app.get("/discovery_validation_registry")
+def discovery_validation_registry(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = load_discovery_validations()
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "count": len(data.get("rows", [])), "rows": data.get("rows", [])}
+
+
+@app.post("/discovery_validation_clear")
+async def discovery_validation_clear(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    write_json_file(DISCOVERY_VALIDATION_REGISTRY_FILE, {"rows": [], "updated_at": now_iso()})
+    return {"ok": True, "cleared": True}
+
+
+@app.get("/discovery_top_candidates")
+def discovery_top_candidates(secret: str, max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL, force_backtest: bool = False, include_rejected: bool = False, min_quality: str = "GOOD"):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = build_discovery_candidate_plan(max_symbols=max_symbols, interval=interval, force_backtest=force_backtest, include_rejected=include_rejected)
+    allowed_by_min = {
+        "TV_CONFIRMED": {"TV_CONFIRMED"},
+        "STRONG": {"TV_CONFIRMED", "STRONG"},
+        "GOOD": {"TV_CONFIRMED", "TV_WATCH", "STRONG", "GOOD"},
+        "THIN_SAMPLE": {"TV_CONFIRMED", "TV_WATCH", "STRONG", "GOOD", "THIN_SAMPLE"},
+        "ALL": None,
+    }
+    allowed = allowed_by_min.get(str(min_quality).upper(), allowed_by_min["GOOD"])
+    rows = data.get("items", [])
+    if allowed is not None:
+        rows = [r for r in rows if r.get("quality") in allowed]
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "count": len(rows), "items": rows, "summary": data.get("summary")}
+
+
+@app.get("/discovery_quality_dashboard", response_class=HTMLResponse)
+def discovery_quality_dashboard(secret: str, max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL, force_backtest: bool = False, include_rejected: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = build_discovery_candidate_plan(max_symbols=max_symbols, interval=interval, force_backtest=force_backtest, include_rejected=include_rejected)
+    rows = "".join([
+        f"<tr><td>{h(x.get('bucket'))}</td><td>{h(x.get('quality'))}</td><td>{fmt_num(x.get('rank_score'))}</td><td>{h(x.get('symbol'))}</td><td>{h(x.get('family'))}</td><td>{fmt_num(x.get('profit_factor'))}</td><td>{x.get('trade_count')}</td><td>{fmt_num(x.get('average_r'))}</td><td>{fmt_num(x.get('current_score'))}</td><td>{h(x.get('tv_status'))}</td><td>{fmt_num(x.get('tv_pf'))}</td><td>{x.get('tv_trades') or ''}</td><td>{h('; '.join(x.get('quality_flags') or []))}</td><td>{h(x.get('action'))}</td></tr>"
+        for x in data.get("items", [])
+    ])
+    s = data.get("summary", {})
+    return HTMLResponse(f"""
+    <html><head><title>Discovery Quality Dashboard</title><style>body{{font-family:Arial;margin:20px;background:#f6f8fb}} .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}} table{{border-collapse:collapse;width:100%;background:white;font-size:13px}} th{{background:#111827;color:white}} td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}} .TV_REJECTED{{color:#991b1b;font-weight:bold}} .TV_CONFIRMED{{color:#047857;font-weight:bold}} .STRONG{{color:#047857;font-weight:bold}} .UNRELIABLE{{color:#991b1b;font-weight:bold}}</style></head>
+    <body><h1>Discovery Quality Dashboard v8.4.4</h1><div class='card'><b>Interval:</b> {h(interval)} | <b>Rows:</b> {data.get('total_rows_evaluated')} | <b>Shown:</b> {data.get('count')} | <b>Validation rows:</b> {data.get('validation_rows')}<br><b>Bucket counts:</b> {h(json.dumps(s.get('bucket_counts', {}), ensure_ascii=False))}<br><b>Quality counts:</b> {h(json.dumps(s.get('quality_counts', {}), ensure_ascii=False))}<br><b>TV status counts:</b> {h(json.dumps(s.get('tv_status_counts', {}), ensure_ascii=False))}</div>
+    <table><tr><th>Bucket</th><th>Quality</th><th>Rank</th><th>Symbol</th><th>Family</th><th>Python PF</th><th>Py Trades</th><th>Avg R</th><th>Score</th><th>TV Status</th><th>TV PF</th><th>TV Trades</th><th>Quality flags</th><th>Action</th></tr>{rows}</table>
+    <p><a href='/discovery_top_candidates?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}'>Top JSON</a> · <a href='/discovery_validation_registry?secret={h(secret)}'>Validation registry</a> · <a href='/discovery_candidate_dashboard?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}'>Classic discovery</a></p></body></html>
+    """)
+
