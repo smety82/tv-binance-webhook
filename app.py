@@ -7299,7 +7299,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "8.4.1"
+APP_FEATURE_LEVEL = "8.4.2"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8720,7 +8720,7 @@ def v7_control_center(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis"]}
 
 
 # ============================================================
@@ -9508,3 +9508,197 @@ def telegram_market_opportunity_report(secret: str, max_symbols: int = MINI_BACK
     notify = safe_notify_event("🧠 Market opportunity report", "\n".join(lines), important=False)
     return {"ok": True, "sent": bool(notify.get("sent")), "notify": notify, "report": data}
 
+
+
+# ============================================================
+# v8.4.2 - DISCOVERY MODE / RELAXED CANDIDATE PLAN
+# ============================================================
+# Purpose:
+# - show not only strict PAPER candidates, but also near misses
+# - explain why a symbol/strategy was rejected by thresholds
+# - support discovery without weakening the actual auto paper onboarding rules
+
+DISCOVERY_MIN_SCORE = float(os.getenv("DISCOVERY_MIN_SCORE", "55"))
+DISCOVERY_MIN_PF = float(os.getenv("DISCOVERY_MIN_PF", "1.00"))
+DISCOVERY_MIN_TRADES = int(os.getenv("DISCOVERY_MIN_TRADES", "8"))
+DISCOVERY_TOP_N = int(os.getenv("DISCOVERY_TOP_N", "50"))
+DISCOVERY_STRONG_SCORE = float(os.getenv("DISCOVERY_STRONG_SCORE", "75"))
+DISCOVERY_STRONG_PF = float(os.getenv("DISCOVERY_STRONG_PF", "1.20"))
+DISCOVERY_STRONG_TRADES = int(os.getenv("DISCOVERY_STRONG_TRADES", "20"))
+
+
+def classify_discovery_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    pf_raw = row.get("profit_factor")
+    pf = None if pf_raw is None else v8_float(pf_raw, 0.0)
+    trades = v8_int(row.get("trade_count"), 0)
+    score = v8_float(row.get("current_score"), 0.0)
+    candidate_strict = bool(
+        pf is not None
+        and pf >= AUTO_PAPER_CANDIDATE_MIN_PF
+        and trades >= AUTO_PAPER_CANDIDATE_MIN_TRADES
+        and score >= AUTO_PAPER_CANDIDATE_MIN_SCORE
+    )
+
+    failures = []
+    if pf is None:
+        failures.append("NO_PF")
+    elif pf < AUTO_PAPER_CANDIDATE_MIN_PF:
+        failures.append(f"PF_BELOW_STRICT_{pf:.2f}_LT_{AUTO_PAPER_CANDIDATE_MIN_PF:.2f}")
+    if trades < AUTO_PAPER_CANDIDATE_MIN_TRADES:
+        failures.append(f"TRADES_BELOW_STRICT_{trades}_LT_{AUTO_PAPER_CANDIDATE_MIN_TRADES}")
+    if score < AUTO_PAPER_CANDIDATE_MIN_SCORE:
+        failures.append(f"SCORE_BELOW_STRICT_{score:.1f}_LT_{AUTO_PAPER_CANDIDATE_MIN_SCORE:.1f}")
+
+    if candidate_strict:
+        bucket = "STRONG_CANDIDATE"
+        action = "ADD_PAPER_CANDIDATE_REVIEW"
+    elif pf is not None and pf >= DISCOVERY_STRONG_PF and trades >= DISCOVERY_MIN_TRADES and score >= DISCOVERY_MIN_SCORE:
+        bucket = "CANDIDATE"
+        action = "REVIEW_FOR_PAPER"
+    elif pf is not None and pf >= DISCOVERY_MIN_PF and trades >= DISCOVERY_MIN_TRADES and score >= DISCOVERY_MIN_SCORE:
+        bucket = "WATCHLIST"
+        action = "WATCH_AND_RETEST"
+    elif pf is not None and (pf >= DISCOVERY_MIN_PF or score >= DISCOVERY_MIN_SCORE or trades >= DISCOVERY_MIN_TRADES):
+        bucket = "NEAR_MISS"
+        action = "PARAMETER_REVIEW"
+    else:
+        bucket = "REJECTED"
+        action = "IGNORE"
+
+    if pf is None:
+        reject_reason = "NO_PROFIT_FACTOR"
+    elif trades < DISCOVERY_MIN_TRADES:
+        reject_reason = "REJECTED_BY_TRADES"
+    elif pf < DISCOVERY_MIN_PF:
+        reject_reason = "REJECTED_BY_PF"
+    elif score < DISCOVERY_MIN_SCORE:
+        reject_reason = "REJECTED_BY_SCORE"
+    else:
+        reject_reason = "PASSED_DISCOVERY"
+
+    return {
+        "bucket": bucket,
+        "action": action,
+        "reject_reason": reject_reason,
+        "strict_candidate": candidate_strict,
+        "strict_failures": failures,
+    }
+
+
+def build_discovery_candidate_plan(max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL, force_backtest: bool = False, include_rejected: bool = False) -> Dict[str, Any]:
+    data = read_json_file(MINI_BACKTEST_RESULTS_FILE, {})
+    if force_backtest or not data or not data.get("rows"):
+        data = run_python_mini_backtests(max_symbols=max_symbols, interval=interval)
+
+    state = load_state()
+    active_symbols = set()
+    active_strategy_symbol = set()
+    for strat, scfg in (state.get("strategies") or {}).items():
+        for sym, symcfg in (scfg.get("symbols") or {}).items():
+            for side, sidecfg in (symcfg or {}).items():
+                if str((sidecfg or {}).get("mode", "OFF")).upper() != "OFF":
+                    active_symbols.add(str(sym).upper())
+                    active_strategy_symbol.add((strat, str(sym).upper(), str(side).upper()))
+
+    rows = []
+    counts: Dict[str, int] = {}
+    for row in data.get("rows") or []:
+        cls = classify_discovery_row(row)
+        bucket = cls["bucket"]
+        counts[bucket] = counts.get(bucket, 0) + 1
+        if bucket == "REJECTED" and not include_rejected:
+            continue
+        sym = str(row.get("symbol", "")).upper()
+        fam = str(row.get("family", ""))
+        strategy_name = f"auto_{fam}_{sym.lower()}_v1"
+        is_active = (strategy_name, sym, "LONG") in active_strategy_symbol or sym in active_symbols
+        rows.append({
+            "symbol": sym,
+            "family": fam,
+            "strategy_suggestion": strategy_name,
+            "side": "LONG",
+            "bucket": bucket,
+            "action": "ALREADY_ACTIVE_OR_SYMBOL_ACTIVE" if is_active and bucket in {"STRONG_CANDIDATE", "CANDIDATE", "WATCHLIST"} else cls["action"],
+            "reject_reason": cls["reject_reason"],
+            "strict_candidate": cls["strict_candidate"],
+            "strict_failures": cls["strict_failures"],
+            "profit_factor": row.get("profit_factor"),
+            "trade_count": row.get("trade_count"),
+            "win_rate": row.get("win_rate"),
+            "average_r": row.get("average_r"),
+            "total_r": row.get("total_r"),
+            "current_score": row.get("current_score"),
+            "current_recommendation": row.get("current_recommendation"),
+            "signal_now": row.get("signal_now"),
+            "turnover24h": row.get("turnover24h"),
+            "liquidity_score": row.get("liquidity_score"),
+            "already_active_symbol": sym in active_symbols,
+            "requires_approval": True,
+        })
+
+    bucket_rank = {"STRONG_CANDIDATE": 5, "CANDIDATE": 4, "WATCHLIST": 3, "NEAR_MISS": 2, "REJECTED": 1}
+    rows.sort(key=lambda x: (bucket_rank.get(x.get("bucket"), 0), v8_float(x.get("profit_factor"), 0), v8_float(x.get("current_score"), 0), v8_int(x.get("trade_count"), 0)), reverse=True)
+    summary = {
+        "strict_thresholds": {
+            "min_score": AUTO_PAPER_CANDIDATE_MIN_SCORE,
+            "min_pf": AUTO_PAPER_CANDIDATE_MIN_PF,
+            "min_trades": AUTO_PAPER_CANDIDATE_MIN_TRADES,
+        },
+        "discovery_thresholds": {
+            "min_score": DISCOVERY_MIN_SCORE,
+            "min_pf": DISCOVERY_MIN_PF,
+            "min_trades": DISCOVERY_MIN_TRADES,
+        },
+        "bucket_counts": counts,
+        "strong_or_candidate": counts.get("STRONG_CANDIDATE", 0) + counts.get("CANDIDATE", 0),
+        "watchlist_or_near_miss": counts.get("WATCHLIST", 0) + counts.get("NEAR_MISS", 0),
+    }
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "interval": interval,
+        "max_symbols": max_symbols,
+        "count": len(rows[:DISCOVERY_TOP_N]),
+        "total_rows_evaluated": len(data.get("rows") or []),
+        "summary": summary,
+        "items": rows[:DISCOVERY_TOP_N],
+    }
+
+
+@app.get("/discovery_candidate_plan")
+def discovery_candidate_plan(secret: str, max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL, force_backtest: bool = False, include_rejected: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_discovery_candidate_plan(max_symbols=max_symbols, interval=interval, force_backtest=force_backtest, include_rejected=include_rejected)
+
+
+@app.get("/discovery_candidate_dashboard", response_class=HTMLResponse)
+def discovery_candidate_dashboard(secret: str, max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL, force_backtest: bool = False, include_rejected: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = build_discovery_candidate_plan(max_symbols=max_symbols, interval=interval, force_backtest=force_backtest, include_rejected=include_rejected)
+    rows = "".join([
+        f"<tr><td>{h(x.get('bucket'))}</td><td>{h(x.get('symbol'))}</td><td>{h(x.get('family'))}</td><td>{fmt_num(x.get('profit_factor'))}</td><td>{x.get('trade_count')}</td><td>{fmt_num(x.get('win_rate'))}</td><td>{fmt_num(x.get('average_r'))}</td><td>{fmt_num(x.get('current_score'))}</td><td>{h(x.get('reject_reason'))}</td><td>{h('; '.join(x.get('strict_failures') or []))}</td><td>{h(x.get('action'))}</td></tr>"
+        for x in data.get("items", [])
+    ])
+    bc = data.get("summary", {}).get("bucket_counts", {})
+    return HTMLResponse(f"""
+    <html><head><title>Discovery Candidate Dashboard</title><style>body{{font-family:Arial;margin:20px;background:#f6f8fb}} .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}} table{{border-collapse:collapse;width:100%;background:white;font-size:13px}} th{{background:#111827;color:white}} td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}} .STRONG_CANDIDATE{{color:#047857;font-weight:bold}} .CANDIDATE{{color:#0369a1;font-weight:bold}} .WATCHLIST{{color:#92400e;font-weight:bold}} .NEAR_MISS{{color:#7c2d12;font-weight:bold}}</style></head>
+    <body><h1>Discovery Candidate Dashboard v8.4.2</h1><div class='card'><b>Interval:</b> {h(interval)} | <b>Rows:</b> {data.get('total_rows_evaluated')} | <b>Shown:</b> {data.get('count')}<br><b>Bucket counts:</b> {h(json.dumps(bc, ensure_ascii=False))}</div>
+    <table><tr><th>Bucket</th><th>Symbol</th><th>Family</th><th>PF</th><th>Trades</th><th>Win %</th><th>Avg R</th><th>Score</th><th>Discovery reason</th><th>Strict failures</th><th>Action</th></tr>{rows}</table>
+    <p><a href='/discovery_candidate_plan?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}&include_rejected={str(include_rejected).lower()}'>JSON</a> · <a href='/auto_paper_candidate_plan?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}'>Strict auto plan</a> · <a href='/mini_backtest_dashboard?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}'>Mini backtest</a> · <a href='/ai_market_opportunity_dashboard?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}'>AI opportunity</a></p></body></html>
+    """)
+
+
+@app.get("/telegram_discovery_candidate_report")
+def telegram_discovery_candidate_report(secret: str, max_symbols: int = MINI_BACKTEST_MAX_SYMBOLS, interval: str = SCANNER_DEFAULT_INTERVAL, force_backtest: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = build_discovery_candidate_plan(max_symbols=max_symbols, interval=interval, force_backtest=force_backtest, include_rejected=False)
+    bc = data.get("summary", {}).get("bucket_counts", {})
+    lines = ["🔎 Discovery Candidate Report", f"interval={interval} max_symbols={max_symbols}", f"buckets={json.dumps(bc, ensure_ascii=False)}"]
+    for x in (data.get("items") or [])[:10]:
+        lines.append(f"{x.get('bucket')}: {x.get('symbol')} {x.get('family')} PF={fmt_num(x.get('profit_factor'))} trades={x.get('trade_count')} score={fmt_num(x.get('current_score'))} action={x.get('action')}")
+    notify = safe_notify_event("🔎 Discovery candidate report", "\n".join(lines), important=False)
+    return {"ok": True, "sent": bool(notify.get("sent")), "notify": notify, "report": data}
