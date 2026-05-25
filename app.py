@@ -148,17 +148,28 @@ PAPER_DECISION_KEEP_AVG_R = float(os.getenv("PAPER_DECISION_KEEP_AVG_R", "0.05")
 PAPER_DECISION_PROMOTE_AVG_R = float(os.getenv("PAPER_DECISION_PROMOTE_AVG_R", "0.15"))
 PAPER_DECISION_PROMOTE_BACKTEST_PF = float(os.getenv("PAPER_DECISION_PROMOTE_BACKTEST_PF", "1.15"))
 PAPER_MONITOR_REPORT_MIN_HOURS = float(os.getenv("PAPER_MONITOR_REPORT_MIN_HOURS", "12"))
+
+# v6.9.0 PAPER strategy guard / automation.
+# Default is warning-only: it reports candidates that should be rejected, but does not switch them OFF.
+PAPER_STRATEGY_GUARD_ENABLED = os.getenv("PAPER_STRATEGY_GUARD_ENABLED", "true").lower() == "true"
+PAPER_STRATEGY_GUARD_MODE = os.getenv("PAPER_STRATEGY_GUARD_MODE", "WARNING").upper()  # WARNING or OFF
+PAPER_STRATEGY_GUARD_MIN_CLOSED = int(os.getenv("PAPER_STRATEGY_GUARD_MIN_CLOSED", str(PAPER_DECISION_MIN_SAMPLE_REJECT)))
+PAPER_STRATEGY_GUARD_REJECT_AVG_R = float(os.getenv("PAPER_STRATEGY_GUARD_REJECT_AVG_R", str(PAPER_DECISION_REJECT_AVG_R)))
+PAPER_STRATEGY_GUARD_NOTIFY = os.getenv("PAPER_STRATEGY_GUARD_NOTIFY", "true").lower() == "true"
+PAPER_STRATEGY_GUARD_COOLDOWN_HOURS = float(os.getenv("PAPER_STRATEGY_GUARD_COOLDOWN_HOURS", "12"))
+
 HTTP_TIMEOUT = 15.0
 
 APP_DIR = Path(__file__).resolve().parent
 PAPER_MONITOR_STATE_FILE = APP_DIR / "paper_monitor_state.json"
+PAPER_STRATEGY_GUARD_STATE_FILE = APP_DIR / "paper_strategy_guard_state.json"
 STATE_FILE = APP_DIR / "strategy_state.json"
 TRADE_LOG_FILE = APP_DIR / "trade_log.csv"
 RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="6.8.2")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="6.9.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6239,7 +6250,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor v6.8.2</h1>
+    <h1>Candidate Strategy Monitor v6.9.0</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -6312,6 +6323,189 @@ def cron_paper_outcome_report(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAY
         state.update({"last_sent_ts": now_ts, "last_sent_at": now_iso(), "last_days": days})
         write_json_file(PAPER_MONITOR_STATE_FILE, state)
     return {"ok": True, "sent": bool(notify.get("sent")), "notify": notify, "report": report}
+
+
+@app.get("/telegram_candidate_monitor_report")
+def telegram_candidate_monitor_report(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, force: bool = False):
+    """Alias endpoint for manual/cron Telegram candidate monitoring."""
+    return cron_paper_outcome_report(secret=secret, days=days, force=force)
+
+
+def _current_strategy_side_mode(strategy: str, symbol: str, side: str) -> str:
+    try:
+        state = load_state()
+        cfg = get_side_config_copy(state, strategy, symbol, side)
+        return str(cfg.get("mode", "OFF")).upper()
+    except Exception:
+        return "UNKNOWN"
+
+
+def build_paper_strategy_guard_plan(days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS) -> Dict[str, Any]:
+    report = build_paper_outcome_decision_report(days=days, limit=limit, include_outcomes=False)
+    actions = []
+    for item in report.get("decisions", []):
+        strategy = str(item.get("strategy") or "")
+        symbol = normalize_symbol(item.get("symbol") or "")
+        side = normalize_side(item.get("side") or "LONG")
+        decision = item.get("decision") or {}
+        metrics = decision.get("metrics") or {}
+        closed = int(metrics.get("closed_count") or 0)
+        avg_r = to_float_or_none(metrics.get("average_r_closed"))
+        current_mode = _current_strategy_side_mode(strategy, symbol, side)
+        qualifies = (
+            PAPER_STRATEGY_GUARD_ENABLED
+            and current_mode == "PAPER"
+            and closed >= PAPER_STRATEGY_GUARD_MIN_CLOSED
+            and avg_r is not None
+            and float(avg_r) <= PAPER_STRATEGY_GUARD_REJECT_AVG_R
+        )
+        action_type = "NONE"
+        recommended_mode = current_mode
+        reason = "No guard action needed"
+        if qualifies:
+            action_type = "WARN_ONLY" if PAPER_STRATEGY_GUARD_MODE != "OFF" else "SET_OFF"
+            recommended_mode = "OFF"
+            reason = f"PAPER guard triggered: closed={closed}, avgR={float(avg_r):.4f} <= {PAPER_STRATEGY_GUARD_REJECT_AVG_R:.4f}"
+        actions.append({
+            "strategy": strategy,
+            "symbol": symbol,
+            "side": side,
+            "current_mode": current_mode,
+            "decision_status": decision.get("status"),
+            "closed_count": closed,
+            "average_r_closed": avg_r,
+            "total_r": metrics.get("total_r"),
+            "backtest_profit_factor": metrics.get("backtest_profit_factor"),
+            "backtest_alignment_status": decision.get("backtest_alignment_status"),
+            "qualifies": qualifies,
+            "action_type": action_type,
+            "recommended_mode": recommended_mode,
+            "reason": reason,
+        })
+    triggered = [x for x in actions if x.get("qualifies")]
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "enabled": PAPER_STRATEGY_GUARD_ENABLED,
+        "mode": PAPER_STRATEGY_GUARD_MODE,
+        "days": report.get("days"),
+        "thresholds": {
+            "min_closed": PAPER_STRATEGY_GUARD_MIN_CLOSED,
+            "reject_avg_r": PAPER_STRATEGY_GUARD_REJECT_AVG_R,
+            "notify": PAPER_STRATEGY_GUARD_NOTIFY,
+            "cooldown_hours": PAPER_STRATEGY_GUARD_COOLDOWN_HOURS,
+        },
+        "triggered_count": len(triggered),
+        "actions": actions,
+        "triggered": triggered,
+        "source_report": {
+            "count": report.get("count"),
+            "summary": report.get("summary"),
+            "status_counts": report.get("status_counts"),
+        },
+    }
+
+
+def format_paper_strategy_guard_message(plan: Dict[str, Any]) -> str:
+    lines = [
+        f"🛡️ PAPER strategy guard — {plan.get('days')}d",
+        f"Mode: {plan.get('mode')} | Triggered: {plan.get('triggered_count')} | Threshold: closed≥{(plan.get('thresholds') or {}).get('min_closed')}, avgR≤{fmt_num((plan.get('thresholds') or {}).get('reject_avg_r'))}",
+    ]
+    triggered = plan.get("triggered") or []
+    if not triggered:
+        lines.append("No strategy meets reject/downgrade criteria.")
+    for item in triggered[:10]:
+        lines.append(
+            f"{item.get('action_type')}: {item.get('strategy')} {item.get('symbol')} {item.get('side')} "
+            f"closed={item.get('closed_count')} avgR={fmt_num(item.get('average_r_closed'))} mode={item.get('current_mode')} → {item.get('recommended_mode')}"
+        )
+    return "\n".join(lines)
+
+
+@app.get("/paper_strategy_guard_config")
+def paper_strategy_guard_config(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {
+        "ok": True,
+        "paper_strategy_guard": {
+            "enabled": PAPER_STRATEGY_GUARD_ENABLED,
+            "mode": PAPER_STRATEGY_GUARD_MODE,
+            "min_closed": PAPER_STRATEGY_GUARD_MIN_CLOSED,
+            "reject_avg_r": PAPER_STRATEGY_GUARD_REJECT_AVG_R,
+            "notify": PAPER_STRATEGY_GUARD_NOTIFY,
+            "cooldown_hours": PAPER_STRATEGY_GUARD_COOLDOWN_HOURS,
+        }
+    }
+
+
+@app.get("/paper_strategy_guard_plan")
+def paper_strategy_guard_plan(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_paper_strategy_guard_plan(days=days, limit=limit)
+
+
+@app.post("/paper_strategy_guard_run")
+async def paper_strategy_guard_run(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    days = int(body.get("days", PAPER_OUTCOME_DEFAULT_DAYS))
+    limit = int(body.get("limit", PAPER_OUTCOME_MAX_EVENTS))
+    force_notify = bool(body.get("force_notify", False))
+    apply_off = bool(body.get("apply_off", False))
+    plan = build_paper_strategy_guard_plan(days=days, limit=limit)
+
+    notify_result = {"sent": False, "skipped": True}
+    state = read_json_file(PAPER_STRATEGY_GUARD_STATE_FILE, {})
+    now_ts = time.time()
+    last_sent = float(state.get("last_sent_ts") or 0)
+    min_seconds = PAPER_STRATEGY_GUARD_COOLDOWN_HOURS * 3600.0
+    should_notify = PAPER_STRATEGY_GUARD_NOTIFY and (force_notify or not last_sent or now_ts - last_sent >= min_seconds)
+    if should_notify:
+        notify_result = safe_notify_event("🛡️ PAPER strategy guard", format_paper_strategy_guard_message(plan), important=bool(plan.get("triggered_count")))
+        if notify_result.get("sent"):
+            state.update({"last_sent_ts": now_ts, "last_sent_at": now_iso(), "last_days": days, "last_triggered_count": plan.get("triggered_count")})
+            write_json_file(PAPER_STRATEGY_GUARD_STATE_FILE, state)
+
+    applied = []
+    if apply_off:
+        require_strategy_admin()
+        for item in plan.get("triggered", []):
+            if item.get("current_mode") == "PAPER":
+                result = set_strategy_side_config(
+                    strategy=item.get("strategy"),
+                    symbol=item.get("symbol"),
+                    side=item.get("side"),
+                    mode="OFF",
+                    risk_pct=0.0,
+                    reason="paper_strategy_guard_reject",
+                )
+                applied.append(result)
+    return {"ok": True, "plan": plan, "notify": notify_result, "applied_count": len(applied), "applied": applied, "apply_off_requested": apply_off}
+
+
+@app.get("/cron_paper_strategy_guard")
+def cron_paper_strategy_guard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, apply_off: bool = False, force_notify: bool = False):
+    verify_cron_secret(secret)
+    plan = build_paper_strategy_guard_plan(days=days, limit=PAPER_OUTCOME_MAX_EVENTS)
+    state = read_json_file(PAPER_STRATEGY_GUARD_STATE_FILE, {})
+    now_ts = time.time()
+    last_sent = float(state.get("last_sent_ts") or 0)
+    min_seconds = PAPER_STRATEGY_GUARD_COOLDOWN_HOURS * 3600.0
+    notify_result = {"sent": False, "skipped": True}
+    if PAPER_STRATEGY_GUARD_NOTIFY and (force_notify or not last_sent or now_ts - last_sent >= min_seconds):
+        notify_result = safe_notify_event("🛡️ PAPER strategy guard", format_paper_strategy_guard_message(plan), important=bool(plan.get("triggered_count")))
+        if notify_result.get("sent"):
+            state.update({"last_sent_ts": now_ts, "last_sent_at": now_iso(), "last_days": days, "last_triggered_count": plan.get("triggered_count")})
+            write_json_file(PAPER_STRATEGY_GUARD_STATE_FILE, state)
+    applied = []
+    if apply_off:
+        require_strategy_admin()
+        for item in plan.get("triggered", []):
+            if item.get("current_mode") == "PAPER":
+                applied.append(set_strategy_side_config(item.get("strategy"), item.get("symbol"), item.get("side"), mode="OFF", risk_pct=0.0, reason="cron_paper_strategy_guard"))
+    return {"ok": True, "plan": plan, "notify": notify_result, "applied_count": len(applied), "applied": applied}
 
 
 # ============================================================
@@ -7105,7 +7299,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "6.8.2"
+APP_FEATURE_LEVEL = "6.9.0"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -7785,4 +7979,4 @@ create table if not exists backtest_results (id bigserial primary key, created_a
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning"]}
