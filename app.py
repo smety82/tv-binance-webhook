@@ -139,6 +139,17 @@ PAPER_OUTCOME_TP1_QTY_PCT = float(os.getenv("PAPER_OUTCOME_TP1_QTY_PCT", "50"))
 PAPER_OUTCOME_SAME_CANDLE_RULE = os.getenv("PAPER_OUTCOME_SAME_CANDLE_RULE", "SL_FIRST").upper()
 PAPER_OUTCOME_DEFAULT_INTERVAL = os.getenv("PAPER_OUTCOME_DEFAULT_INTERVAL", "15")
 
+# v6.8.0 PAPER candidate decision / monitoring automation.
+PAPER_DECISION_MIN_SAMPLE_REJECT = int(os.getenv("PAPER_DECISION_MIN_SAMPLE_REJECT", "10"))
+PAPER_DECISION_MIN_SAMPLE_PROMOTE = int(os.getenv("PAPER_DECISION_MIN_SAMPLE_PROMOTE", "20"))
+PAPER_DECISION_MIN_SAMPLE_KEEP = int(os.getenv("PAPER_DECISION_MIN_SAMPLE_KEEP", "8"))
+PAPER_DECISION_REJECT_AVG_R = float(os.getenv("PAPER_DECISION_REJECT_AVG_R", "-0.30"))
+PAPER_DECISION_KEEP_AVG_R = float(os.getenv("PAPER_DECISION_KEEP_AVG_R", "0.05"))
+PAPER_DECISION_PROMOTE_AVG_R = float(os.getenv("PAPER_DECISION_PROMOTE_AVG_R", "0.15"))
+PAPER_DECISION_PROMOTE_BACKTEST_PF = float(os.getenv("PAPER_DECISION_PROMOTE_BACKTEST_PF", "1.15"))
+PAPER_MONITOR_REPORT_MIN_HOURS = float(os.getenv("PAPER_MONITOR_REPORT_MIN_HOURS", "12"))
+PAPER_MONITOR_STATE_FILE = APP_DIR / "paper_monitor_state.json"
+
 HTTP_TIMEOUT = 15.0
 
 APP_DIR = Path(__file__).resolve().parent
@@ -148,7 +159,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="6.7.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="6.8.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -3853,7 +3864,7 @@ def root():
     runtime_state = load_runtime_state()
     return f"""
     <h3>TV Webhook ↔ Bybit Risk Engine: OK</h3>
-    <p>version: 6.7.0</p>
+    <p>version: 6.8.0</p>
     <p>real_orders_enabled: {ENABLE_REAL_ORDERS}</p>
     <p>trading_paused: {runtime_state.get("trading_paused")}</p>
     <p>supabase_enabled: {supabase_enabled()}</p>
@@ -5822,7 +5833,344 @@ def paper_outcome_config(secret: str):
             "same_candle_rule": PAPER_OUTCOME_SAME_CANDLE_RULE,
             "default_interval": PAPER_OUTCOME_DEFAULT_INTERVAL,
         },
+        "decision_layer": {
+            "min_sample_reject": PAPER_DECISION_MIN_SAMPLE_REJECT,
+            "min_sample_keep": PAPER_DECISION_MIN_SAMPLE_KEEP,
+            "min_sample_promote": PAPER_DECISION_MIN_SAMPLE_PROMOTE,
+            "reject_avg_r": PAPER_DECISION_REJECT_AVG_R,
+            "keep_avg_r": PAPER_DECISION_KEEP_AVG_R,
+            "promote_avg_r": PAPER_DECISION_PROMOTE_AVG_R,
+            "promote_backtest_pf": PAPER_DECISION_PROMOTE_BACKTEST_PF,
+        },
     }
+
+
+# ============================================================
+# v6.8.0 PAPER OUTCOME DECISION LAYER / CANDIDATE MONITOR
+# ============================================================
+
+def read_json_file(path: Path, default: Any) -> Any:
+    try:
+        if path.exists():
+            with path.open("r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as exc:
+        log(f"[WARN] read_json_file failed for {path}: {exc}")
+    return default
+
+
+def write_json_file(path: Path, data: Any) -> None:
+    try:
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        log(f"[WARN] write_json_file failed for {path}: {exc}")
+
+
+def paper_event_risk_pct(event: Dict[str, Any]) -> float:
+    raw = event.get("raw_payload") or {}
+    value = event_numeric({}, "riskPct", raw, "riskPct")
+    if value is None:
+        value = event_numeric({}, "risk_pct", raw, "risk_pct")
+    return float(value or 0.0)
+
+
+def enrich_paper_outcome(item: Dict[str, Any], equity: Optional[float] = None) -> Dict[str, Any]:
+    """Add robust estimated risk/PnL fields without changing the original outcome contract."""
+    result = dict(item)
+    event = result.get("event") or {}
+    r_val = result.get("r_multiple")
+    risk_pct = paper_event_risk_pct(event)
+    risk_usd = None
+    pnl_usdt = None
+    if equity is None:
+        try:
+            equity = get_equity_usdt()
+        except Exception:
+            equity = None
+    if equity is not None and risk_pct > 0:
+        risk_usd = float(equity) * (risk_pct / 100.0)
+        if r_val is not None:
+            try:
+                pnl_usdt = risk_usd * float(r_val)
+            except Exception:
+                pnl_usdt = None
+    result["risk_pct_requested"] = risk_pct
+    result["estimated_risk_usdt"] = risk_usd
+    result["estimated_pnl_usdt_v2"] = pnl_usdt
+    if result.get("estimated_pnl_usdt") in (None, 0, 0.0, -0.0) and pnl_usdt is not None:
+        result["estimated_pnl_usdt"] = pnl_usdt
+    return result
+
+
+def backtest_index_by_candidate() -> Dict[str, Dict[str, Any]]:
+    index: Dict[str, Dict[str, Any]] = {}
+    for row in load_backtest_results():
+        bt = normalize_backtest_row(row if isinstance(row, dict) else {"raw": row})
+        side = bt.get("side") if bt.get("side") != "BOTH" else "LONG"
+        key = backtest_key(bt.get("strategy", "UNKNOWN"), bt.get("symbol", ""), side or "LONG")
+        index[key] = bt
+    return index
+
+
+def classify_paper_candidate(group: Dict[str, Any], backtest: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    closed = int(group.get("closed_count") or 0)
+    count = int(group.get("count") or 0)
+    avg_r = group.get("average_r_closed")
+    total_r = float(group.get("total_r") or 0.0)
+    wins = int(group.get("by_status", {}).get("WIN_TP2", 0))
+    losses = int(group.get("by_status", {}).get("LOSS_SL", 0))
+    partial = int(group.get("by_status", {}).get("PARTIAL_TP1_THEN_SL", 0))
+    open_count = int(group.get("by_status", {}).get("OPEN", 0)) + int(group.get("by_status", {}).get("OPEN_AFTER_TP1", 0))
+    bt_pf = to_float_or_none((backtest or {}).get("profit_factor"))
+    bt_trades = to_float_or_none((backtest or {}).get("trades"))
+
+    status = "WATCH"
+    reasons = []
+    action = "Collect more PAPER data"
+
+    if closed == 0:
+        reasons.append("No closed PAPER outcomes yet")
+    if closed < PAPER_DECISION_MIN_SAMPLE_REJECT:
+        reasons.append(f"Low sample size: {closed} closed < {PAPER_DECISION_MIN_SAMPLE_REJECT}")
+
+    if avg_r is not None:
+        avg_r_float = float(avg_r)
+        if closed >= PAPER_DECISION_MIN_SAMPLE_REJECT and avg_r_float <= PAPER_DECISION_REJECT_AVG_R:
+            status = "REJECT"
+            action = "Set to OFF or re-optimize before further use"
+            reasons.append(f"Average R {avg_r_float:.3f} <= reject threshold {PAPER_DECISION_REJECT_AVG_R:.3f}")
+        elif closed >= PAPER_DECISION_MIN_SAMPLE_PROMOTE and avg_r_float >= PAPER_DECISION_PROMOTE_AVG_R and (bt_pf is None or bt_pf >= PAPER_DECISION_PROMOTE_BACKTEST_PF):
+            status = "PROMOTE_CANDIDATE"
+            action = "Eligible for cautious MICRO review"
+            reasons.append(f"Average R {avg_r_float:.3f} >= promote threshold {PAPER_DECISION_PROMOTE_AVG_R:.3f}")
+            if bt_pf is not None:
+                reasons.append(f"Backtest PF {bt_pf:.3f} supports promotion")
+        elif closed >= PAPER_DECISION_MIN_SAMPLE_KEEP and avg_r_float >= PAPER_DECISION_KEEP_AVG_R:
+            status = "KEEP"
+            action = "Keep PAPER running; not enough for MICRO yet"
+            reasons.append(f"Average R {avg_r_float:.3f} >= keep threshold {PAPER_DECISION_KEEP_AVG_R:.3f}")
+        elif closed >= PAPER_DECISION_MIN_SAMPLE_REJECT:
+            status = "WATCH_NEGATIVE" if avg_r_float < 0 else "WATCH"
+            action = "Keep PAPER only; review after more samples"
+            reasons.append(f"Average R {avg_r_float:.3f} is not strong enough")
+
+    if bt_pf is None:
+        reasons.append("No imported backtest benchmark for this strategy/symbol/side")
+    elif bt_pf < 1.0:
+        reasons.append(f"Backtest PF {bt_pf:.3f} is below 1.0")
+        if status not in {"REJECT"} and closed >= PAPER_DECISION_MIN_SAMPLE_REJECT:
+            status = "WATCH_BACKTEST_WEAK"
+    else:
+        reasons.append(f"Backtest PF {bt_pf:.3f} available")
+
+    win_rate_closed = (wins / closed * 100.0) if closed else None
+    return {
+        "status": status,
+        "action": action,
+        "reasons": reasons,
+        "metrics": {
+            "count": count,
+            "closed_count": closed,
+            "open_count": open_count,
+            "wins_tp2": wins,
+            "losses_sl": losses,
+            "partial_tp1_then_sl": partial,
+            "win_rate_closed_pct": win_rate_closed,
+            "total_r": total_r,
+            "average_r_closed": avg_r,
+            "backtest_profit_factor": bt_pf,
+            "backtest_trades": bt_trades,
+        },
+    }
+
+
+def build_paper_outcome_decision_report(days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS, include_outcomes: bool = False) -> Dict[str, Any]:
+    safe_days = max(1, min(int(days), 60))
+    safe_limit = max(1, min(int(limit), PAPER_OUTCOME_MAX_EVENTS))
+    events = fetch_paper_events_for_outcome(days=safe_days, limit=safe_limit)
+    try:
+        equity = get_equity_usdt()
+    except Exception:
+        equity = None
+    outcomes = [enrich_paper_outcome(evaluate_paper_trade(event), equity=equity) for event in events]
+    summary = summarize_paper_outcomes(outcomes)
+    bt_index = backtest_index_by_candidate()
+
+    decisions = []
+    for key, group in sorted((summary.get("by_strategy_symbol") or {}).items()):
+        bt = bt_index.get(key)
+        decision = classify_paper_candidate(group, bt)
+        decisions.append({
+            "key": key,
+            "strategy": group.get("strategy"),
+            "symbol": group.get("symbol"),
+            "side": group.get("side"),
+            "decision": decision,
+            "backtest": bt,
+            "paper": group,
+        })
+
+    status_counts: Dict[str, int] = {}
+    for item in decisions:
+        st = item.get("decision", {}).get("status", "UNKNOWN")
+        status_counts[st] = status_counts.get(st, 0) + 1
+
+    result = {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "days": safe_days,
+        "count": len(outcomes),
+        "equity_for_pnl_estimate": equity,
+        "summary": summary,
+        "decision_thresholds": {
+            "min_sample_reject": PAPER_DECISION_MIN_SAMPLE_REJECT,
+            "min_sample_keep": PAPER_DECISION_MIN_SAMPLE_KEEP,
+            "min_sample_promote": PAPER_DECISION_MIN_SAMPLE_PROMOTE,
+            "reject_avg_r": PAPER_DECISION_REJECT_AVG_R,
+            "keep_avg_r": PAPER_DECISION_KEEP_AVG_R,
+            "promote_avg_r": PAPER_DECISION_PROMOTE_AVG_R,
+            "promote_backtest_pf": PAPER_DECISION_PROMOTE_BACKTEST_PF,
+        },
+        "status_counts": status_counts,
+        "decisions": decisions,
+    }
+    if include_outcomes:
+        result["outcomes"] = outcomes
+    return result
+
+
+def format_paper_decision_report_message(report: Dict[str, Any]) -> str:
+    lines = [
+        f"📄 PAPER outcome monitor — {report.get('days')}d",
+        f"Signals: {report.get('count')} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Avg R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))}",
+    ]
+    for item in report.get("decisions", [])[:12]:
+        d = item.get("decision", {})
+        m = d.get("metrics", {})
+        lines.append(
+            f"{d.get('status')}: {item.get('strategy')} {item.get('symbol')} {item.get('side')} "
+            f"closed={m.get('closed_count')} avgR={fmt_num(m.get('average_r_closed'))} btPF={fmt_num(m.get('backtest_profit_factor'))}"
+        )
+    return "\n".join(lines)
+
+
+@app.get("/paper_outcome_decisions")
+def paper_outcome_decisions(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS, include_outcomes: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_paper_outcome_decision_report(days=days, limit=limit, include_outcomes=include_outcomes)
+
+
+@app.get("/candidate_monitor")
+def candidate_monitor(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return build_paper_outcome_decision_report(days=days, limit=limit, include_outcomes=False)
+
+
+@app.get("/candidate_monitor_dashboard", response_class=HTMLResponse)
+def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    report = build_paper_outcome_decision_report(days=days, limit=limit, include_outcomes=False)
+    rows = []
+    badge_class = {"PROMOTE_CANDIDATE": "good", "KEEP": "good", "WATCH": "watch", "WATCH_NEGATIVE": "watch", "WATCH_BACKTEST_WEAK": "watch", "REJECT": "bad"}
+    for item in report.get("decisions", []):
+        d = item.get("decision", {})
+        m = d.get("metrics", {})
+        cls = badge_class.get(d.get("status"), "watch")
+        rows.append(f"""
+        <tr>
+          <td>{h(item.get('strategy'))}</td><td>{h(item.get('symbol'))}</td><td>{h(item.get('side'))}</td>
+          <td><span class='{cls}'>{h(d.get('status'))}</span></td>
+          <td>{h(m.get('closed_count'))}</td><td>{fmt_num(m.get('average_r_closed'))}</td><td>{fmt_num(m.get('total_r'))}</td>
+          <td>{fmt_num(m.get('win_rate_closed_pct'))}%</td><td>{fmt_num(m.get('backtest_profit_factor'))}</td>
+          <td>{h(d.get('action'))}</td>
+        </tr>
+        """)
+    if not rows:
+        rows.append("<tr><td colspan='10'>No PAPER candidates found in selected window.</td></tr>")
+    return HTMLResponse(f"""
+    <html><head><title>Candidate Monitor</title><style>
+    body{{font-family:Arial;margin:24px;background:#f6f8fb;color:#111827}}
+    table{{border-collapse:collapse;width:100%;background:white;border-radius:10px;overflow:hidden}}
+    th,td{{border-bottom:1px solid #e5e7eb;padding:9px;text-align:left;font-size:14px}}
+    th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
+    .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
+    </style></head><body>
+    <h1>Candidate Strategy Monitor v6.8.0</h1>
+    <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
+    <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>Action</th></tr>{''.join(rows)}</table>
+    <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
+    </body></html>
+    """)
+
+
+@app.get("/paper_backtest_alignment")
+def paper_backtest_alignment(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    report = build_paper_outcome_decision_report(days=days, limit=limit, include_outcomes=False)
+    return {
+        "ok": True,
+        "days": report.get("days"),
+        "backtest_rows": len(load_backtest_results()),
+        "alignment": [
+            {
+                "strategy": x.get("strategy"),
+                "symbol": x.get("symbol"),
+                "side": x.get("side"),
+                "paper_avg_r": x.get("decision", {}).get("metrics", {}).get("average_r_closed"),
+                "paper_closed": x.get("decision", {}).get("metrics", {}).get("closed_count"),
+                "backtest_profit_factor": x.get("decision", {}).get("metrics", {}).get("backtest_profit_factor"),
+                "decision_status": x.get("decision", {}).get("status"),
+            }
+            for x in report.get("decisions", [])
+        ],
+    }
+
+
+@app.get("/candidate_backtest_template")
+def candidate_backtest_template(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    state = load_strategy_state()
+    rows = []
+    for strategy, cfg in (state.get("strategies") or {}).items():
+        for symbol, sym_cfg in ((cfg or {}).get("symbols") or {}).items():
+            for side in ["LONG", "SHORT"]:
+                sc = (sym_cfg or {}).get(side) or {}
+                if str(sc.get("mode", "OFF")).upper() != "OFF":
+                    rows.append({
+                        "strategy": strategy,
+                        "symbol": normalize_symbol(symbol),
+                        "side": side,
+                        "trades": None,
+                        "profit_factor": None,
+                        "win_rate": None,
+                        "net_pnl": None,
+                        "max_drawdown": None,
+                    })
+    return {"ok": True, "rows": rows, "import_endpoint": "/backtest_import", "method": "POST", "note": "Fill the metrics from TradingView Strategy Tester exports and POST as {'secret':'...','rows':[...]}"}
+
+
+@app.get("/cron_paper_outcome_report")
+def cron_paper_outcome_report(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, force: bool = False):
+    verify_cron_secret(secret)
+    state = read_json_file(PAPER_MONITOR_STATE_FILE, {})
+    now_ts = time.time()
+    last_sent = float(state.get("last_sent_ts") or 0)
+    min_seconds = PAPER_MONITOR_REPORT_MIN_HOURS * 3600.0
+    if not force and last_sent and now_ts - last_sent < min_seconds:
+        return {"ok": True, "sent": False, "reason": "TOO_SOON", "last_sent_at": state.get("last_sent_at"), "min_hours": PAPER_MONITOR_REPORT_MIN_HOURS}
+    report = build_paper_outcome_decision_report(days=days, limit=PAPER_OUTCOME_MAX_EVENTS, include_outcomes=False)
+    message = format_paper_decision_report_message(report)
+    notify = safe_notify_event("📄 PAPER candidate monitor", message, important=False)
+    if notify.get("sent"):
+        state.update({"last_sent_ts": now_ts, "last_sent_at": now_iso(), "last_days": days})
+        write_json_file(PAPER_MONITOR_STATE_FILE, state)
+    return {"ok": True, "sent": bool(notify.get("sent")), "notify": notify, "report": report}
 
 
 # ============================================================
@@ -6616,7 +6964,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "6.7.0"
+APP_FEATURE_LEVEL = "6.8.0"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -7250,7 +7598,7 @@ def config_validation_dashboard(secret: str):
     return HTMLResponse(f"""
     <html><head><title>Config Validation</title><style>
     body{{font-family:Arial;margin:24px;background:#f6f8fb;color:#111827}} table{{border-collapse:collapse;width:100%;background:white}} td,th{{border-bottom:1px solid #e5e7eb;padding:10px}} .bad{{color:#991b1b;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .good{{color:#166534;font-weight:700}} pre{{background:white;padding:12px;border-radius:8px}}
-    </style></head><body><h1>Configuration Validation v6.7.0</h1><table><tr><th>Level</th><th>Message</th></tr>{''.join(rows)}</table><h2>Environment</h2><pre>{h(data.get('env'))}</pre><p><a href='/dashboard_v2?secret={h(secret)}&days=7'>Back to dashboard</a></p></body></html>
+    </style></head><body><h1>Configuration Validation v6.8.0</h1><table><tr><th>Level</th><th>Message</th></tr>{''.join(rows)}</table><h2>Environment</h2><pre>{h(data.get('env'))}</pre><p><a href='/dashboard_v2?secret={h(secret)}&days=7'>Back to dashboard</a></p></body></html>
     """)
 
 
@@ -7265,7 +7613,7 @@ def control_panel(secret: str, days: int = 7):
     return HTMLResponse(f"""
     <html><head><title>Trading Control Panel</title><style>
     body{{font-family:Arial;margin:0;background:#0f172a;color:#e5e7eb}} header{{padding:20px;background:#111827}} main{{padding:20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}} .card{{background:#1f2937;border:1px solid #374151;border-radius:14px;padding:16px;box-shadow:0 4px 14px rgba(0,0,0,.25)}} a,button{{display:inline-block;margin:4px;padding:8px 10px;border-radius:8px;background:#2563eb;color:white;text-decoration:none;border:0}} .danger{{background:#991b1b}} .warn{{background:#92400e}} .good{{background:#166534}} .muted{{color:#9ca3af}} pre{{white-space:pre-wrap;background:#111827;padding:10px;border-radius:8px}}
-    </style></head><body><header><h1>Trading Control Panel v6.7.0</h1><div class='muted'>Lightweight frontend separated from the main dashboard logic.</div></header><main>
+    </style></head><body><header><h1>Trading Control Panel v6.8.0</h1><div class='muted'>Lightweight frontend separated from the main dashboard logic.</div></header><main>
     <section class='card'><h2>Runtime</h2><p>real_orders={ENABLE_REAL_ORDERS}</p><p>paused={h(runtime.get('trading_paused'))}</p><a class='warn' href='/trading_pause_on?secret={h(secret)}&reason=Control%20panel%20pause'>Pause</a><a class='good' href='/trading_pause_off?secret={h(secret)}'>Resume</a></section>
     <section class='card'><h2>Open Risk</h2><p>positions={h(risk.get('open_positions'))}</p><p>value={fmt_num(risk.get('total_position_value'))}</p><p>unrealized={fmt_num(risk.get('total_unrealized_pnl'))}</p><a href='/open_risk_summary?secret={h(secret)}'>JSON</a></section>
     <section class='card'><h2>Health</h2><p>production_ok={h(prod.get('ok'))}</p><p>config_ok={h(config.get('ok'))}</p><a href='/production_health?secret={h(secret)}'>Production health</a><a href='/config_validation_dashboard?secret={h(secret)}'>Config validation</a></section>
@@ -7280,7 +7628,7 @@ def supabase_physical_schema_sql(secret: str):
     if secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
     sql = """
--- Optional v6.7.0 physical split tables. Run manually in Supabase SQL editor if needed.
+-- Optional v6.8.0 physical split tables. Run manually in Supabase SQL editor if needed.
 create table if not exists orders (id bigserial primary key, created_at timestamptz default now(), timestamp_utc text, strategy text, symbol text, side text, mode text, order_id text, decision text, status text, raw_payload jsonb);
 create table if not exists positions (id bigserial primary key, created_at timestamptz default now(), timestamp_utc text, symbol text, side text, size numeric, position_value numeric, unrealized_pnl numeric, raw_position jsonb);
 create table if not exists system_events (id bigserial primary key, created_at timestamptz default now(), timestamp_utc text, event_type text, status text, payload_hash text, payload jsonb);
@@ -7296,4 +7644,4 @@ create table if not exists backtest_results (id bigserial primary key, created_a
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "cron_paper_outcome_report"]}
