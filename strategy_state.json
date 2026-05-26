@@ -139,6 +139,36 @@
           }
         }
       }
+    },
+    "trend_continuation_nil_v11": {
+      "enabled": true,
+      "symbols": {
+        "NILUSDT": {
+          "LONG": {
+            "mode": "PAPER",
+            "risk_pct": 0.05
+          },
+          "SHORT": {
+            "mode": "OFF",
+            "risk_pct": 0.0
+          }
+        }
+      }
+    },
+    "trend_continuation_wld_v11": {
+      "enabled": true,
+      "symbols": {
+        "WLDUSDT": {
+          "LONG": {
+            "mode": "PAPER",
+            "risk_pct": 0.05
+          },
+          "SHORT": {
+            "mode": "OFF",
+            "risk_pct": 0.0
+          }
+        }
+      }
     }
   }
 }
