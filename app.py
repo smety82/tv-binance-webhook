@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.0.1")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.1.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6251,7 +6251,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor v6.9.0</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.1.0</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7300,7 +7300,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.0.1"
+APP_FEATURE_LEVEL = "9.1.0"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8721,7 +8721,7 @@ def v7_control_center(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap"]}
 
 
 # ============================================================
@@ -9686,7 +9686,7 @@ def discovery_candidate_dashboard(secret: str, max_symbols: int = MINI_BACKTEST_
     bc = data.get("summary", {}).get("bucket_counts", {})
     return HTMLResponse(f"""
     <html><head><title>Discovery Candidate Dashboard</title><style>body{{font-family:Arial;margin:20px;background:#f6f8fb}} .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}} table{{border-collapse:collapse;width:100%;background:white;font-size:13px}} th{{background:#111827;color:white}} td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}} .STRONG_CANDIDATE{{color:#047857;font-weight:bold}} .CANDIDATE{{color:#0369a1;font-weight:bold}} .WATCHLIST{{color:#92400e;font-weight:bold}} .NEAR_MISS{{color:#7c2d12;font-weight:bold}}</style></head>
-    <body><h1>Discovery Candidate Dashboard v8.4.4</h1><div class='card'><b>Interval:</b> {h(interval)} | <b>Rows:</b> {data.get('total_rows_evaluated')} | <b>Shown:</b> {data.get('count')}<br><b>Bucket counts:</b> {h(json.dumps(bc, ensure_ascii=False))}</div>
+    <body><h1>Discovery Candidate Dashboard · Platform v9.1.0</h1><div class='card'><b>Interval:</b> {h(interval)} | <b>Rows:</b> {data.get('total_rows_evaluated')} | <b>Shown:</b> {data.get('count')}<br><b>Bucket counts:</b> {h(json.dumps(bc, ensure_ascii=False))}</div>
     <table><tr><th>Bucket</th><th>Symbol</th><th>Family</th><th>PF</th><th>Trades</th><th>Win %</th><th>Avg R</th><th>Score</th><th>Discovery reason</th><th>Strict failures</th><th>Action</th></tr>{rows}</table>
     <p><a href='/discovery_candidate_plan?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}&include_rejected={str(include_rejected).lower()}'>JSON</a> · <a href='/auto_paper_candidate_plan?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}'>Strict auto plan</a> · <a href='/mini_backtest_dashboard?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}'>Mini backtest</a> · <a href='/ai_market_opportunity_dashboard?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}'>AI opportunity</a></p></body></html>
     """)
@@ -10620,3 +10620,583 @@ def v9_multi_market_research_dashboard(secret: str, max_symbols: int = 20, crypt
     <p><a href='/v9_crypto_higher_tf_dashboard?secret={h(secret)}&max_symbols={max_symbols}&intervals={h(crypto_intervals)}'>Crypto HTF</a> · <a href='/v9_external_market_dashboard?secret={h(secret)}&market=forex&interval={h(external_interval)}&range={h(external_range)}'>Forex POC</a> · <a href='/v9_external_market_dashboard?secret={h(secret)}&market=etf&interval={h(external_interval)}&range={h(external_range)}'>ETF POC</a> · <a href='/v9_market_catalog?secret={h(secret)}'>Market catalog</a></p>
     </body></html>
     """)
+
+
+# ============================================================
+# v9.1.0 PERSISTENT STRATEGY REGISTRY + UNIVERSAL INSTANCE LAYER
+# ============================================================
+# The generic Supabase registry is optional. If the SQL table has not been
+# created yet, all functionality falls back to local JSON files and the API
+# reports the fallback explicitly. This keeps deploys safe while allowing
+# Render's ephemeral filesystem to be removed as a source of truth later.
+
+PERSISTENT_REGISTRY_ENABLED = os.getenv("PERSISTENT_REGISTRY_ENABLED", "true").lower() == "true"
+SUPABASE_REGISTRY_TABLE = os.getenv("SUPABASE_REGISTRY_TABLE", "strategy_registry")
+REGISTRY_HTTP_TIMEOUT = float(os.getenv("REGISTRY_HTTP_TIMEOUT", "12"))
+REGISTRY_CLOUD_RETRY_SEC = int(os.getenv("REGISTRY_CLOUD_RETRY_SEC", "60"))
+STRATEGY_INSTANCE_REGISTRY_FILE = APP_DIR / "strategy_instance_registry.json"
+PROMOTION_HISTORY_FILE = APP_DIR / "promotion_history.json"
+
+EARLY_WARNING_ENABLED = os.getenv("EARLY_WARNING_ENABLED", "true").lower() == "true"
+EARLY_WARNING_WATCH_MIN_CLOSED = int(os.getenv("EARLY_WARNING_WATCH_MIN_CLOSED", "3"))
+EARLY_WARNING_WATCH_AVG_R = float(os.getenv("EARLY_WARNING_WATCH_AVG_R", "-0.75"))
+EARLY_WARNING_REVIEW_MIN_CLOSED = int(os.getenv("EARLY_WARNING_REVIEW_MIN_CLOSED", "5"))
+EARLY_WARNING_REVIEW_AVG_R = float(os.getenv("EARLY_WARNING_REVIEW_AVG_R", "-0.50"))
+EARLY_WARNING_REJECT_MIN_CLOSED = int(os.getenv("EARLY_WARNING_REJECT_MIN_CLOSED", "10"))
+EARLY_WARNING_REJECT_AVG_R = float(os.getenv("EARLY_WARNING_REJECT_AVG_R", "-0.30"))
+
+_registry_cloud_state: Dict[str, Any] = {
+    "last_error": None,
+    "last_error_at": 0.0,
+    "last_success_at": None,
+    "last_success_operation": None,
+}
+
+
+def registry_cloud_configured() -> bool:
+    return bool(PERSISTENT_REGISTRY_ENABLED and supabase_enabled() and SUPABASE_REGISTRY_TABLE)
+
+
+def registry_cloud_backoff_active() -> bool:
+    last = float(_registry_cloud_state.get("last_error_at") or 0.0)
+    return bool(last and (time.time() - last) < max(1, REGISTRY_CLOUD_RETRY_SEC))
+
+
+def _registry_cloud_fail(operation: str, exc: Any) -> None:
+    msg = f"{operation}: {exc}"
+    _registry_cloud_state["last_error"] = msg
+    _registry_cloud_state["last_error_at"] = time.time()
+    log(f"[WARN] persistent registry cloud fallback: {msg}")
+
+
+def _registry_cloud_ok(operation: str) -> None:
+    _registry_cloud_state["last_success_at"] = now_iso()
+    _registry_cloud_state["last_success_operation"] = operation
+    _registry_cloud_state["last_error"] = None
+    _registry_cloud_state["last_error_at"] = 0.0
+
+
+def registry_table_url() -> str:
+    return f"{SUPABASE_URL}/rest/v1/{SUPABASE_REGISTRY_TABLE}"
+
+
+def registry_cloud_fetch(registry_type: str) -> Optional[list[Dict[str, Any]]]:
+    if not registry_cloud_configured() or registry_cloud_backoff_active():
+        return None
+    try:
+        response = client.get(
+            registry_table_url(),
+            headers=supabase_headers(prefer=""),
+            params={
+                "select": "registry_key,payload,updated_at",
+                "registry_type": f"eq.{registry_type}",
+                "order": "updated_at.asc",
+            },
+            timeout=REGISTRY_HTTP_TIMEOUT,
+        )
+        if response.status_code >= 300:
+            _registry_cloud_fail(f"fetch:{registry_type}", f"HTTP_{response.status_code} {response.text[:240]}")
+            return None
+        raw_rows = response.json()
+        rows = []
+        for raw in raw_rows if isinstance(raw_rows, list) else []:
+            payload = raw.get("payload") if isinstance(raw, dict) else None
+            if isinstance(payload, dict):
+                row = dict(payload)
+                row.setdefault("registry_key", raw.get("registry_key"))
+                row.setdefault("updated_at", raw.get("updated_at"))
+                rows.append(row)
+        _registry_cloud_ok(f"fetch:{registry_type}")
+        return rows
+    except Exception as exc:
+        _registry_cloud_fail(f"fetch:{registry_type}", exc)
+        return None
+
+
+def registry_cloud_replace(registry_type: str, rows: list[Dict[str, Any]], key_fn) -> bool:
+    if not registry_cloud_configured() or registry_cloud_backoff_active():
+        return False
+    try:
+        # Replace the logical registry atomically enough for administrative use:
+        # delete its old rows, then upsert its new normalized rows.
+        delete_response = client.delete(
+            registry_table_url(),
+            headers=supabase_headers(prefer="return=minimal"),
+            params={"registry_type": f"eq.{registry_type}"},
+            timeout=REGISTRY_HTTP_TIMEOUT,
+        )
+        if delete_response.status_code >= 300:
+            _registry_cloud_fail(f"delete:{registry_type}", f"HTTP_{delete_response.status_code} {delete_response.text[:240]}")
+            return False
+        records = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            key = str(key_fn(row) or "").strip()
+            if not key:
+                continue
+            records.append({
+                "registry_type": registry_type,
+                "registry_key": key,
+                "payload": row,
+                "updated_at": now_iso(),
+            })
+        if records:
+            headers = supabase_headers(prefer="resolution=merge-duplicates,return=minimal")
+            upsert_response = client.post(
+                registry_table_url(),
+                headers=headers,
+                params={"on_conflict": "registry_type,registry_key"},
+                json=records,
+                timeout=REGISTRY_HTTP_TIMEOUT,
+            )
+            if upsert_response.status_code >= 300:
+                _registry_cloud_fail(f"upsert:{registry_type}", f"HTTP_{upsert_response.status_code} {upsert_response.text[:240]}")
+                return False
+        _registry_cloud_ok(f"replace:{registry_type}")
+        return True
+    except Exception as exc:
+        _registry_cloud_fail(f"replace:{registry_type}", exc)
+        return False
+
+
+def registry_cloud_append(registry_type: str, row: Dict[str, Any], key: str) -> bool:
+    if not registry_cloud_configured() or registry_cloud_backoff_active():
+        return False
+    try:
+        record = {"registry_type": registry_type, "registry_key": key, "payload": row, "updated_at": now_iso()}
+        response = client.post(
+            registry_table_url(),
+            headers=supabase_headers(prefer="resolution=merge-duplicates,return=minimal"),
+            params={"on_conflict": "registry_type,registry_key"},
+            json=record,
+            timeout=REGISTRY_HTTP_TIMEOUT,
+        )
+        if response.status_code >= 300:
+            _registry_cloud_fail(f"append:{registry_type}", f"HTTP_{response.status_code} {response.text[:240]}")
+            return False
+        _registry_cloud_ok(f"append:{registry_type}")
+        return True
+    except Exception as exc:
+        _registry_cloud_fail(f"append:{registry_type}", exc)
+        return False
+
+
+# Preserve the local-file implementations as a safe fallback.
+_load_backtest_results_file_v901 = load_backtest_results
+_save_backtest_results_file_v901 = save_backtest_results
+_load_discovery_validations_file_v901 = load_discovery_validations
+_save_discovery_validations_file_v901 = save_discovery_validations
+_classify_paper_candidate_v901 = classify_paper_candidate
+_apply_strategy_action_v901 = _apply_strategy_action
+_build_default_candidate_backtest_rows_v901 = build_default_candidate_backtest_rows
+
+
+def load_backtest_results() -> list[Dict[str, Any]]:
+    cloud_rows = registry_cloud_fetch("backtest")
+    if cloud_rows is not None:
+        return cloud_rows
+    return _load_backtest_results_file_v901()
+
+
+def save_backtest_results(rows: list[Dict[str, Any]]) -> None:
+    # Local copy remains as a disaster-recovery cache.
+    _save_backtest_results_file_v901(rows)
+    registry_cloud_replace(
+        "backtest",
+        rows,
+        lambda r: backtest_key(str(r.get("strategy", "UNKNOWN")), str(r.get("symbol", "")), str(r.get("side", "BOTH"))),
+    )
+
+
+def load_discovery_validations() -> Dict[str, Any]:
+    cloud_rows = registry_cloud_fetch("discovery_validation")
+    if cloud_rows is None:
+        return _load_discovery_validations_file_v901()
+    by_key: Dict[str, Dict[str, Any]] = {}
+    for r in cloud_rows:
+        key = r.get("key") or discovery_key(r.get("symbol", ""), r.get("family", ""), r.get("side", "LONG"), r.get("interval", "15"))
+        if str(key).strip("|"):
+            r["key"] = key
+            by_key[key] = r
+    return {"rows": list(by_key.values()), "by_key": by_key}
+
+
+def save_discovery_validations(rows: list) -> None:
+    _save_discovery_validations_file_v901(rows)
+    unique: Dict[str, Dict[str, Any]] = {}
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+        key = row.get("key") or discovery_key(row.get("symbol", ""), row.get("family", ""), row.get("side", "LONG"), row.get("interval", "15"))
+        if str(key).strip("|"):
+            row["key"] = key
+            unique[str(key)] = row
+    registry_cloud_replace("discovery_validation", list(unique.values()), lambda r: r.get("key"))
+
+
+def build_default_candidate_backtest_rows() -> list[Dict[str, Any]]:
+    rows = _build_default_candidate_backtest_rows_v901()
+    rows += [
+        {"strategy": "trend_continuation_nil_v11", "symbol": "NILUSDT", "side": "LONG", "profit_factor": 1.745, "trades": 47, "win_rate": 63.8, "source": "manual_tradingview"},
+        {"strategy": "trend_continuation_wld_v11", "symbol": "WLDUSDT", "side": "LONG", "profit_factor": 1.582, "trades": 76, "win_rate": 51.3, "source": "manual_tradingview"},
+    ]
+    return merge_backtest_rows([], rows)
+
+
+def classify_paper_candidate(group: Dict[str, Any], backtest: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    result = _classify_paper_candidate_v901(group, backtest)
+    if not EARLY_WARNING_ENABLED:
+        return result
+    metrics = result.get("metrics") or {}
+    closed = int(metrics.get("closed_count") or 0)
+    avg_r = to_float_or_none(metrics.get("average_r_closed"))
+    if avg_r is None:
+        return result
+    # Existing hard reject remains the final rule. Earlier layers surface risk
+    # before a full rejection threshold is reached.
+    if closed >= EARLY_WARNING_REJECT_MIN_CLOSED and avg_r <= EARLY_WARNING_REJECT_AVG_R:
+        result["status"] = "REJECT"
+        result["action"] = "Set to OFF or re-optimize before further use"
+        result.setdefault("reasons", []).append(
+            f"Early-warning hard reject: {closed} closed and Avg R {avg_r:.3f} <= {EARLY_WARNING_REJECT_AVG_R:.3f}"
+        )
+    elif closed >= EARLY_WARNING_REVIEW_MIN_CLOSED and avg_r <= EARLY_WARNING_REVIEW_AVG_R:
+        result["status"] = "REJECT_REVIEW"
+        result["action"] = "Manual OFF/re-optimization review required before more exposure"
+        result.setdefault("reasons", []).append(
+            f"Early-warning review: {closed} closed and Avg R {avg_r:.3f} <= {EARLY_WARNING_REVIEW_AVG_R:.3f}"
+        )
+    elif closed >= EARLY_WARNING_WATCH_MIN_CLOSED and avg_r <= EARLY_WARNING_WATCH_AVG_R:
+        result["status"] = "WATCH_NEGATIVE"
+        result["action"] = "Keep PAPER only; review again after the next outcomes"
+        result.setdefault("reasons", []).append(
+            f"Early-warning watch: {closed} closed and Avg R {avg_r:.3f} <= {EARLY_WARNING_WATCH_AVG_R:.3f}"
+        )
+    return result
+
+
+def infer_strategy_family(strategy: str) -> str:
+    value = str(strategy or "").lower()
+    if "structure_swing" in value:
+        return "structure_swing"
+    if "momentum_breakout" in value:
+        return "momentum_breakout"
+    if "intraday_trend_pullback" in value:
+        return "intraday_trend_pullback"
+    if "trend_pullback" in value:
+        return "trend_pullback"
+    if "trend_continuation" in value:
+        return "trend_continuation"
+    return "custom"
+
+
+def family_master_script(family: str) -> str:
+    return {
+        "trend_continuation": "universal_trend_continuation_v1",
+        "trend_pullback": "universal_trend_pullback_v1",
+        "intraday_trend_pullback": "universal_intraday_trend_pullback_v1",
+        "momentum_breakout": "universal_momentum_breakout_v1",
+        "structure_swing": "universal_structure_swing_v1",
+    }.get(str(family), "custom_strategy")
+
+
+def strategy_instance_key(row: Dict[str, Any]) -> str:
+    return backtest_key(str(row.get("strategy", "UNKNOWN")), str(row.get("symbol", "")), str(row.get("side", "LONG")))
+
+
+def load_strategy_instances() -> list[Dict[str, Any]]:
+    cloud = registry_cloud_fetch("strategy_instance")
+    if cloud is not None:
+        return cloud
+    data = read_json_file(STRATEGY_INSTANCE_REGISTRY_FILE, {"rows": []})
+    return data.get("rows", []) if isinstance(data, dict) else []
+
+
+def save_strategy_instances(rows: list[Dict[str, Any]]) -> None:
+    unique: Dict[str, Dict[str, Any]] = {}
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+        key = strategy_instance_key(row)
+        row["key"] = key
+        unique[key] = row
+    values = list(unique.values())
+    write_json_file(STRATEGY_INSTANCE_REGISTRY_FILE, {"updated_at": now_iso(), "rows": values})
+    registry_cloud_replace("strategy_instance", values, strategy_instance_key)
+
+
+def derive_strategy_instances_from_state(include_off: bool = False) -> list[Dict[str, Any]]:
+    state = load_state()
+    bt_index = backtest_index_by_candidate()
+    existing = {strategy_instance_key(r): r for r in load_strategy_instances() if isinstance(r, dict)}
+    rows = []
+    for strategy, strategy_cfg in (state.get("strategies") or {}).items():
+        family = infer_strategy_family(strategy)
+        for symbol, symbol_cfg in (strategy_cfg.get("symbols") or {}).items():
+            for side, side_cfg in (symbol_cfg or {}).items():
+                mode = str((side_cfg or {}).get("mode", "OFF")).upper()
+                if not include_off and mode == "OFF":
+                    continue
+                key = backtest_key(strategy, symbol, side)
+                prev = existing.get(key, {})
+                bt = bt_index.get(key, {})
+                rows.append({
+                    **prev,
+                    "key": key,
+                    "strategy": strategy,
+                    "family": family,
+                    "base_script": prev.get("base_script") or family_master_script(family),
+                    "symbol": normalize_symbol(symbol),
+                    "side": str(side).upper(),
+                    "mode": mode,
+                    "risk_pct": to_float_or_none((side_cfg or {}).get("risk_pct")),
+                    "enabled": bool(strategy_cfg.get("enabled", True)),
+                    "tv_pf": prev.get("tv_pf", bt.get("profit_factor")),
+                    "tv_trades": prev.get("tv_trades", bt.get("trades")),
+                    "tv_win_rate": prev.get("tv_win_rate", bt.get("win_rate")),
+                    "source": prev.get("source") or "strategy_state_sync",
+                    "updated_at": now_iso(),
+                })
+    return rows
+
+
+def promotion_history_key(row: Dict[str, Any]) -> str:
+    return str(row.get("history_id") or row.get("created_at") or now_ms())
+
+
+def load_promotion_history(limit: int = 500) -> list[Dict[str, Any]]:
+    cloud = registry_cloud_fetch("promotion_history")
+    if cloud is not None:
+        return sorted(cloud, key=lambda x: str(x.get("created_at", "")), reverse=True)[:max(1, limit)]
+    data = read_json_file(PROMOTION_HISTORY_FILE, {"rows": []})
+    rows = data.get("rows", []) if isinstance(data, dict) else []
+    return sorted(rows, key=lambda x: str(x.get("created_at", "")), reverse=True)[:max(1, limit)]
+
+
+def append_promotion_history(row: Dict[str, Any]) -> Dict[str, Any]:
+    item = dict(row)
+    item.setdefault("created_at", now_iso())
+    item.setdefault("history_id", f"{int(time.time() * 1000)}-{hashlib.sha256(json.dumps(item, sort_keys=True, default=str).encode()).hexdigest()[:8]}")
+    current = load_promotion_history(limit=2000)
+    current.append(item)
+    # Keep local cache bounded.
+    current = sorted(current, key=lambda x: str(x.get("created_at", "")), reverse=True)[:2000]
+    write_json_file(PROMOTION_HISTORY_FILE, {"updated_at": now_iso(), "rows": current})
+    registry_cloud_append("promotion_history", item, promotion_history_key(item))
+    return item
+
+
+def _apply_strategy_action(action: Dict[str, Any], reason_prefix: str = "promotion_manager") -> Dict[str, Any]:
+    before = {"strategy": action.get("strategy"), "symbol": action.get("symbol"), "side": action.get("side"), "current_mode": action.get("current_mode")}
+    result = _apply_strategy_action_v901(action, reason_prefix=reason_prefix)
+    append_promotion_history({
+        "event_type": "STRATEGY_ACTION",
+        "reason_prefix": reason_prefix,
+        "before": before,
+        "action": action,
+        "result": result,
+    })
+    # Keep the instance registry synchronized after administrative changes.
+    try:
+        save_strategy_instances(derive_strategy_instances_from_state(include_off=False))
+    except Exception as exc:
+        log(f"[WARN] instance registry post-action sync failed: {exc}")
+    return result
+
+
+def registry_backend_status() -> Dict[str, Any]:
+    return {
+        "persistent_registry_enabled": PERSISTENT_REGISTRY_ENABLED,
+        "supabase_enabled": supabase_enabled(),
+        "registry_cloud_configured": registry_cloud_configured(),
+        "supabase_registry_table": SUPABASE_REGISTRY_TABLE,
+        "cloud_backoff_active": registry_cloud_backoff_active(),
+        "cloud_state": dict(_registry_cloud_state),
+        "fallback": "local_json_cache",
+    }
+
+
+@app.get("/v9_1_registry_health")
+def v9_1_registry_health(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    probes = {}
+    for registry_type in ["backtest", "discovery_validation", "strategy_instance", "promotion_history"]:
+        cloud = registry_cloud_fetch(registry_type)
+        probes[registry_type] = {
+            "cloud_available": cloud is not None,
+            "row_count": len(cloud or []),
+        }
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "backend": registry_backend_status(), "probes": probes}
+
+
+@app.post("/v9_1_registry_bootstrap")
+async def v9_1_registry_bootstrap(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    # Merge the known TradingView benchmarks, then persist them.
+    bt_rows = merge_backtest_rows(load_backtest_results(), build_default_candidate_backtest_rows())
+    save_backtest_results(bt_rows)
+    # Persist any previously local TV validation rows.
+    local_validations = _load_discovery_validations_file_v901().get("rows", [])
+    existing_validations = load_discovery_validations().get("rows", [])
+    save_discovery_validations(existing_validations + local_validations)
+    # Build the universal family/instance view from strategy_state.json.
+    instances = derive_strategy_instances_from_state(include_off=bool(body.get("include_off", False)))
+    save_strategy_instances(instances)
+    history = append_promotion_history({
+        "event_type": "REGISTRY_BOOTSTRAP",
+        "backtest_rows": len(bt_rows),
+        "validation_rows": len(load_discovery_validations().get("rows", [])),
+        "instance_rows": len(instances),
+    })
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "backend": registry_backend_status(),
+        "backtest_rows": len(bt_rows),
+        "validation_rows": len(load_discovery_validations().get("rows", [])),
+        "instance_rows": len(instances),
+        "history": history,
+    }
+
+
+@app.get("/strategy_instance_registry")
+def strategy_instance_registry(secret: str, include_off: bool = False, sync: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    if sync:
+        rows = derive_strategy_instances_from_state(include_off=include_off)
+        save_strategy_instances(rows)
+    else:
+        rows = load_strategy_instances()
+        if not include_off:
+            rows = [r for r in rows if str(r.get("mode", "OFF")).upper() != "OFF"]
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "backend": registry_backend_status(), "count": len(rows), "rows": rows}
+
+
+@app.post("/strategy_instance_sync")
+async def strategy_instance_sync(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    rows = derive_strategy_instances_from_state(include_off=bool(body.get("include_off", False)))
+    save_strategy_instances(rows)
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "count": len(rows), "rows": rows}
+
+
+@app.post("/strategy_instance_import")
+async def strategy_instance_import(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    incoming = body.get("rows") or body.get("items") or []
+    if not isinstance(incoming, list):
+        raise HTTPException(400, "Expected rows/items list")
+    mode = str(body.get("mode", "upsert")).lower()
+    if mode not in {"upsert", "replace"}:
+        raise HTTPException(400, "mode must be upsert or replace")
+    existing = [] if mode == "replace" else load_strategy_instances()
+    index = {strategy_instance_key(r): r for r in existing if isinstance(r, dict)}
+    for raw in incoming:
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+        row["strategy"] = str(row.get("strategy") or "UNKNOWN")
+        row["symbol"] = normalize_symbol(str(row.get("symbol") or ""))
+        row["side"] = str(row.get("side") or "LONG").upper()
+        row.setdefault("family", infer_strategy_family(row["strategy"]))
+        row.setdefault("base_script", family_master_script(row["family"]))
+        row.setdefault("updated_at", now_iso())
+        index[strategy_instance_key(row)] = {**index.get(strategy_instance_key(row), {}), **row}
+    rows = list(index.values())
+    save_strategy_instances(rows)
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "mode": mode, "count": len(rows), "rows": rows}
+
+
+@app.get("/strategy_instance_dashboard", response_class=HTMLResponse)
+def strategy_instance_dashboard(secret: str, sync: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    rows = derive_strategy_instances_from_state(include_off=False) if sync else load_strategy_instances()
+    if sync:
+        save_strategy_instances(rows)
+    body_rows = "".join([
+        f"<tr><td>{h(r.get('family'))}</td><td>{h(r.get('strategy'))}</td><td>{h(r.get('base_script'))}</td><td>{h(r.get('symbol'))}</td><td>{h(r.get('side'))}</td><td>{h(r.get('mode'))}</td><td>{fmt_num(r.get('risk_pct'))}</td><td>{fmt_num(r.get('tv_pf'))}</td><td>{h(r.get('tv_trades'))}</td></tr>"
+        for r in rows if str(r.get("mode", "OFF")).upper() != "OFF"
+    ]) or "<tr><td colspan='9'>No synchronized strategy instances yet. Use /strategy_instance_sync.</td></tr>"
+    return HTMLResponse(f"""
+    <html><head><title>Universal Strategy Instances</title><style>body{{font-family:Arial;margin:20px;background:#f6f8fb}}.card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}table{{border-collapse:collapse;width:100%;background:white}}th{{background:#111827;color:white}}td,th{{padding:8px;border-bottom:1px solid #ddd;text-align:left}}</style></head>
+    <body><h1>Universal Strategy Instance Registry · Platform v9.1.0</h1><div class='card'>Instances: {len(rows)} | Cloud configured: {registry_cloud_configured()} | Source: Supabase registry with local JSON fallback</div>
+    <table><tr><th>Family</th><th>Instance</th><th>Master Pine Script</th><th>Symbol</th><th>Side</th><th>Mode</th><th>Risk %</th><th>TV PF</th><th>TV Trades</th></tr>{body_rows}</table>
+    <p><a href='/strategy_instance_registry?secret={h(secret)}'>JSON</a> · <a href='/candidate_monitor_dashboard?secret={h(secret)}&days=14&limit=500'>Candidate monitor</a> · <a href='/v9_1_registry_health?secret={h(secret)}'>Registry health</a></p></body></html>
+    """)
+
+
+@app.get("/promotion_history")
+def promotion_history(secret: str, limit: int = 200):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    rows = load_promotion_history(limit=max(1, min(limit, 2000)))
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "count": len(rows), "rows": rows}
+
+
+@app.post("/promotion_history_snapshot")
+async def promotion_history_snapshot(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    days = int(body.get("days", 14))
+    limit = int(body.get("limit", 500))
+    plan = build_strategy_promotion_plan(days=days, limit=limit)
+    item = append_promotion_history({"event_type": "PROMOTION_PLAN_SNAPSHOT", "days": days, "plan": plan})
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "history": item}
+
+
+@app.get("/early_warning_report")
+def early_warning_report(secret: str, days: int = 14, limit: int = 500):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    report = build_paper_outcome_decision_report(days=days, limit=limit, include_outcomes=False)
+    flagged = []
+    for item in report.get("decisions", []):
+        status = str((item.get("decision") or {}).get("status") or "")
+        if status in {"WATCH_NEGATIVE", "REJECT_REVIEW", "REJECT"}:
+            flagged.append(item)
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "thresholds": {
+            "watch": {"min_closed": EARLY_WARNING_WATCH_MIN_CLOSED, "avg_r_lte": EARLY_WARNING_WATCH_AVG_R},
+            "reject_review": {"min_closed": EARLY_WARNING_REVIEW_MIN_CLOSED, "avg_r_lte": EARLY_WARNING_REVIEW_AVG_R},
+            "reject": {"min_closed": EARLY_WARNING_REJECT_MIN_CLOSED, "avg_r_lte": EARLY_WARNING_REJECT_AVG_R},
+        },
+        "flagged_count": len(flagged),
+        "flagged": flagged,
+        "full_report": report,
+    }
+
+
+@app.get("/early_warning_dashboard", response_class=HTMLResponse)
+def early_warning_dashboard(secret: str, days: int = 14, limit: int = 500):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = early_warning_report(secret=secret, days=days, limit=limit)
+    rows = "".join([
+        f"<tr><td>{h(x.get('strategy'))}</td><td>{h(x.get('symbol'))}</td><td>{h(x.get('side'))}</td><td>{h((x.get('decision') or {}).get('status'))}</td><td>{fmt_num(((x.get('decision') or {}).get('metrics') or {}).get('closed_count'))}</td><td>{fmt_num(((x.get('decision') or {}).get('metrics') or {}).get('average_r_closed'))}</td><td>{h((x.get('decision') or {}).get('action'))}</td></tr>"
+        for x in data.get("flagged", [])
+    ]) or "<tr><td colspan='7'>No early-warning strategy flags in the selected window.</td></tr>"
+    return HTMLResponse(f"""
+    <html><head><title>Early Warning</title><style>body{{font-family:Arial;margin:20px;background:#f6f8fb}}.card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}table{{border-collapse:collapse;width:100%;background:white}}th{{background:#111827;color:white}}td,th{{padding:8px;border-bottom:1px solid #ddd;text-align:left}}</style></head>
+    <body><h1>Strategy Early Warning Dashboard · Platform v9.1.0</h1><div class='card'>Flagged: {data.get('flagged_count')} | WATCH: ≥{EARLY_WARNING_WATCH_MIN_CLOSED} trades and Avg R ≤ {EARLY_WARNING_WATCH_AVG_R} | REVIEW: ≥{EARLY_WARNING_REVIEW_MIN_CLOSED} trades and Avg R ≤ {EARLY_WARNING_REVIEW_AVG_R} | REJECT: ≥{EARLY_WARNING_REJECT_MIN_CLOSED} trades and Avg R ≤ {EARLY_WARNING_REJECT_AVG_R}</div>
+    <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Status</th><th>Closed</th><th>Avg R</th><th>Action</th></tr>{rows}</table>
+    <p><a href='/early_warning_report?secret={h(secret)}&days={days}&limit={limit}'>JSON</a> · <a href='/candidate_monitor_dashboard?secret={h(secret)}&days={days}&limit={limit}'>Candidate monitor</a></p></body></html>
+    """)
+
+
+@app.get("/persistent_registry_schema_sql", response_class=HTMLResponse)
+def persistent_registry_schema_sql(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    sql = """-- v9.1.0 generic persistent registry. Run once in Supabase SQL Editor.\ncreate table if not exists public.strategy_registry (\n  registry_type text not null,\n  registry_key text not null,\n  payload jsonb not null default '{}'::jsonb,\n  updated_at timestamptz not null default now(),\n  primary key (registry_type, registry_key)\n);\ncreate index if not exists strategy_registry_type_updated_idx\n  on public.strategy_registry (registry_type, updated_at desc);\nalter table public.strategy_registry enable row level security;\n-- The Render app uses SUPABASE_SERVICE_ROLE_KEY, which bypasses RLS.\n"""
+    return HTMLResponse(f"<html><body><h1>Supabase persistent registry SQL</h1><pre>{h(sql)}</pre></body></html>")
