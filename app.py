@@ -9,6 +9,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -169,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="7.6.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.0.1")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -7299,7 +7300,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.0.0"
+APP_FEATURE_LEVEL = "9.0.1"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8720,7 +8721,7 @@ def v7_control_center(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics"]}
 
 
 # ============================================================
@@ -10067,6 +10068,8 @@ V9_EXTERNAL_ENABLED = os.getenv("V9_EXTERNAL_ENABLED", "true").lower() == "true"
 V9_EXTERNAL_DEFAULT_RANGE = os.getenv("V9_EXTERNAL_DEFAULT_RANGE", "6mo")
 V9_EXTERNAL_DEFAULT_INTERVAL = os.getenv("V9_EXTERNAL_DEFAULT_INTERVAL", "60")
 V9_EXTERNAL_MAX_TICKERS = int(os.getenv("V9_EXTERNAL_MAX_TICKERS", "20"))
+V9_YAHOO_QUERY_BASES = [x.strip().rstrip("/") for x in os.getenv("V9_YAHOO_QUERY_BASES", "https://query1.finance.yahoo.com,https://query2.finance.yahoo.com").split(",") if x.strip()]
+V9_YAHOO_USER_AGENT = os.getenv("V9_YAHOO_USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36")
 V9_FOREX_TICKERS = [x.strip() for x in os.getenv("V9_FOREX_TICKERS", "EURUSD=X,GBPUSD=X,USDJPY=X,AUDUSD=X,USDCAD=X,USDCHF=X,EURJPY=X,GBPJPY=X").split(",") if x.strip()]
 V9_ETF_TICKERS = [x.strip() for x in os.getenv("V9_ETF_TICKERS", "SPY,QQQ,IWM,DIA,TLT,GLD,SLV,USO").split(",") if x.strip()]
 V9_RESEARCH_MIN_PF = float(os.getenv("V9_RESEARCH_MIN_PF", "1.15"))
@@ -10229,48 +10232,120 @@ def v9_yahoo_interval(interval: str) -> Tuple[str, int]:
     return "60m", 60
 
 
-def v9_fetch_yahoo_candles(ticker: str, interval: str = V9_EXTERNAL_DEFAULT_INTERVAL, range_: str = V9_EXTERNAL_DEFAULT_RANGE) -> list:
+def v9_extract_yahoo_candles(data: Dict[str, Any]) -> Tuple[list, Optional[Dict[str, Any]]]:
+    chart = data.get("chart") or {}
+    chart_error = chart.get("error")
+    results = chart.get("result") or []
+    if not results:
+        return [], chart_error
+    result = results[0] or {}
+    ts = result.get("timestamp") or []
+    quote_rows = (result.get("indicators") or {}).get("quote") or []
+    quote_row = quote_rows[0] if quote_rows else {}
+    opens = quote_row.get("open") or []
+    highs = quote_row.get("high") or []
+    lows = quote_row.get("low") or []
+    closes = quote_row.get("close") or []
+    volumes = quote_row.get("volume") or []
+    candles = []
+    for i, t in enumerate(ts):
+        try:
+            if i >= len(opens) or i >= len(highs) or i >= len(lows) or i >= len(closes):
+                continue
+            o, h_, l, c = opens[i], highs[i], lows[i], closes[i]
+            if o is None or h_ is None or l is None or c is None:
+                continue
+            candles.append({
+                "start_ms": int(t) * 1000,
+                "open": float(o),
+                "high": float(h_),
+                "low": float(l),
+                "close": float(c),
+                "volume": float(volumes[i] or 0.0) if i < len(volumes) else 0.0,
+                "turnover": 0.0,
+            })
+        except Exception:
+            continue
+    candles.sort(key=lambda x: x["start_ms"])
+    return candles, chart_error
+
+
+def v9_fetch_yahoo_candles_diagnostics(ticker: str, interval: str = V9_EXTERNAL_DEFAULT_INTERVAL, range_: str = V9_EXTERNAL_DEFAULT_RANGE) -> Dict[str, Any]:
     yahoo_interval, base_minutes = v9_yahoo_interval(interval)
     requested_minutes = 1440 if str(interval).upper() in {"1D", "D", "1440"} else v8_int(interval, 60)
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
-    try:
-        resp = client.get(url, params={"range": range_, "interval": yahoo_interval, "includePrePost": "false"})
-        if resp.status_code >= 400:
-            return []
-        data = resp.json()
-        result = (((data.get("chart") or {}).get("result") or []) + [{}])[0]
-        ts = result.get("timestamp") or []
-        quote = (((result.get("indicators") or {}).get("quote") or []) + [{}])[0]
-        opens = quote.get("open") or []
-        highs = quote.get("high") or []
-        lows = quote.get("low") or []
-        closes = quote.get("close") or []
-        volumes = quote.get("volume") or []
-        candles = []
-        for i, t in enumerate(ts):
-            try:
-                o, h_, l, c = opens[i], highs[i], lows[i], closes[i]
-                if o is None or h_ is None or l is None or c is None:
-                    continue
-                candles.append({
-                    "start_ms": int(t) * 1000,
-                    "open": float(o),
-                    "high": float(h_),
-                    "low": float(l),
-                    "close": float(c),
-                    "volume": float(volumes[i] or 0.0) if i < len(volumes) else 0.0,
-                    "turnover": 0.0,
-                })
-            except Exception:
+    ticker_encoded = quote(str(ticker), safe="")
+    params = {
+        "range": str(range_),
+        "interval": yahoo_interval,
+        "includePrePost": "false",
+        "events": "history",
+    }
+    headers = {
+        "User-Agent": V9_YAHOO_USER_AGENT,
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+    }
+    attempts = []
+    for base in V9_YAHOO_QUERY_BASES:
+        url = f"{base}/v8/finance/chart/{ticker_encoded}"
+        attempt = {"base": base, "ticker": ticker, "interval": yahoo_interval, "range": str(range_)}
+        try:
+            resp = client.get(url, params=params, headers=headers, follow_redirects=True)
+            attempt["status_code"] = resp.status_code
+            attempt["content_type"] = resp.headers.get("content-type")
+            if resp.status_code >= 400:
+                attempt["error"] = f"HTTP_{resp.status_code}"
+                attempt["body_preview"] = resp.text[:300]
+                attempts.append(attempt)
                 continue
-        candles.sort(key=lambda x: x["start_ms"])
-        if requested_minutes > base_minutes and base_minutes > 0 and requested_minutes % base_minutes == 0:
-            factor = requested_minutes // base_minutes
-            if factor > 1:
-                return v9_aggregate_candles(candles, factor)
-        return candles
-    except Exception:
-        return []
+            try:
+                payload = resp.json()
+            except Exception as exc:
+                attempt["error"] = f"JSON_DECODE_ERROR_{type(exc).__name__}"
+                attempt["body_preview"] = resp.text[:300]
+                attempts.append(attempt)
+                continue
+            candles, chart_error = v9_extract_yahoo_candles(payload)
+            attempt["raw_candle_count"] = len(candles)
+            if chart_error:
+                attempt["chart_error"] = chart_error
+            if requested_minutes > base_minutes and base_minutes > 0 and requested_minutes % base_minutes == 0:
+                factor = requested_minutes // base_minutes
+                if factor > 1:
+                    candles = v9_aggregate_candles(candles, factor)
+                    attempt["aggregation_factor"] = factor
+            attempt["final_candle_count"] = len(candles)
+            attempts.append(attempt)
+            if candles:
+                return {
+                    "ok": True,
+                    "ticker": ticker,
+                    "requested_interval": str(interval),
+                    "yahoo_interval": yahoo_interval,
+                    "range": str(range_),
+                    "candle_count": len(candles),
+                    "candles": candles,
+                    "attempts": attempts,
+                }
+        except Exception as exc:
+            attempt["error"] = f"{type(exc).__name__}: {str(exc)}"
+            attempts.append(attempt)
+    return {
+        "ok": False,
+        "ticker": ticker,
+        "requested_interval": str(interval),
+        "yahoo_interval": yahoo_interval,
+        "range": str(range_),
+        "candle_count": 0,
+        "candles": [],
+        "attempts": attempts,
+        "reason": "YAHOO_DATA_UNAVAILABLE",
+    }
+
+
+def v9_fetch_yahoo_candles(ticker: str, interval: str = V9_EXTERNAL_DEFAULT_INTERVAL, range_: str = V9_EXTERNAL_DEFAULT_RANGE) -> list:
+    return v9_fetch_yahoo_candles_diagnostics(ticker=ticker, interval=interval, range_=range_).get("candles") or []
 
 
 def v9_aggregate_candles(candles: list, factor: int) -> list:
@@ -10449,6 +10524,13 @@ def v9_crypto_higher_tf_dashboard(secret: str, max_symbols: int = V9_CRYPTO_HTF_
     <body><h1>v9 Crypto Higher Timeframe Research</h1><div class='card'><b>Intervals:</b> {h(','.join(data.get('intervals') or []))} | <b>Rows:</b> {data.get('count')}<br><b>Summary:</b> {h(json.dumps(data.get('summary', {}), ensure_ascii=False))}</div><table><tr><th>Label</th><th>Symbol</th><th>TF</th><th>Family</th><th>PF</th><th>Trades</th><th>Win %</th><th>Avg R</th><th>Score</th><th>Rank</th></tr>{rows}</table>
     <p><a href='/v9_multi_market_research_dashboard?secret={h(secret)}'>Combined v9 dashboard</a> · <a href='/v9_market_regime_gate?secret={h(secret)}'>Market regime gate</a></p></body></html>
     """)
+
+
+@app.get("/v9_external_data_diagnostics")
+def v9_external_data_diagnostics_endpoint(secret: str, ticker: str = "SPY", interval: str = V9_EXTERNAL_DEFAULT_INTERVAL, range: str = V9_EXTERNAL_DEFAULT_RANGE):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_fetch_yahoo_candles_diagnostics(ticker=ticker, interval=interval, range_=range)
 
 
 @app.get("/v9_external_market_research")
