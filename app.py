@@ -7299,7 +7299,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "8.4.4"
+APP_FEATURE_LEVEL = "9.0.0"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8720,7 +8720,7 @@ def v7_control_center(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard"]}
 
 
 # ============================================================
@@ -10044,3 +10044,497 @@ def discovery_quality_dashboard(secret: str, max_symbols: int = MINI_BACKTEST_MA
     <p><a href='/discovery_top_candidates?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}'>Top JSON</a> · <a href='/discovery_validation_registry?secret={h(secret)}'>Validation registry</a> · <a href='/discovery_candidate_dashboard?secret={h(secret)}&max_symbols={max_symbols}&interval={h(interval)}'>Classic discovery</a></p></body></html>
     """)
 
+
+# ============================================================
+# v9.0.0 - MULTI-MARKET RESEARCH FRAMEWORK
+# ============================================================
+# Purpose:
+# - keep crypto execution/risk engine intact
+# - add research-only higher timeframe crypto scans/backtests
+# - add optional forex/ETF research branch through public Yahoo Finance chart data
+# - add external TradingView/CSV result registry for manual validation
+# - provide a combined dashboard to compare crypto 15m/1h/4h, forex and ETF candidates
+# Safety:
+# - no direct orders
+# - no automatic promotion from v9 endpoints
+# - all results are RESEARCH_ONLY / PAPER_REVIEW_ONLY
+
+V9_RESEARCH_ENABLED = os.getenv("V9_RESEARCH_ENABLED", "true").lower() == "true"
+V9_CRYPTO_HTF_INTERVALS = os.getenv("V9_CRYPTO_HTF_INTERVALS", "60,240")
+V9_CRYPTO_HTF_MAX_SYMBOLS = int(os.getenv("V9_CRYPTO_HTF_MAX_SYMBOLS", "25"))
+V9_CRYPTO_HTF_KLINE_LIMIT = int(os.getenv("V9_CRYPTO_HTF_KLINE_LIMIT", "1000"))
+V9_EXTERNAL_ENABLED = os.getenv("V9_EXTERNAL_ENABLED", "true").lower() == "true"
+V9_EXTERNAL_DEFAULT_RANGE = os.getenv("V9_EXTERNAL_DEFAULT_RANGE", "6mo")
+V9_EXTERNAL_DEFAULT_INTERVAL = os.getenv("V9_EXTERNAL_DEFAULT_INTERVAL", "60")
+V9_EXTERNAL_MAX_TICKERS = int(os.getenv("V9_EXTERNAL_MAX_TICKERS", "20"))
+V9_FOREX_TICKERS = [x.strip() for x in os.getenv("V9_FOREX_TICKERS", "EURUSD=X,GBPUSD=X,USDJPY=X,AUDUSD=X,USDCAD=X,USDCHF=X,EURJPY=X,GBPJPY=X").split(",") if x.strip()]
+V9_ETF_TICKERS = [x.strip() for x in os.getenv("V9_ETF_TICKERS", "SPY,QQQ,IWM,DIA,TLT,GLD,SLV,USO").split(",") if x.strip()]
+V9_RESEARCH_MIN_PF = float(os.getenv("V9_RESEARCH_MIN_PF", "1.15"))
+V9_RESEARCH_MIN_TRADES = int(os.getenv("V9_RESEARCH_MIN_TRADES", "10"))
+V9_RESEARCH_TOP_N = int(os.getenv("V9_RESEARCH_TOP_N", "30"))
+
+V9_CRYPTO_HTF_RESEARCH_FILE = APP_DIR / "v9_crypto_htf_research.json"
+V9_EXTERNAL_RESEARCH_FILE = APP_DIR / "v9_external_research.json"
+V9_EXTERNAL_BACKTEST_REGISTRY_FILE = APP_DIR / "v9_external_backtest_registry.json"
+
+
+def v9_parse_interval_list(value: str) -> list:
+    out = []
+    for part in str(value or "").replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            n = int(float(part))
+            if n > 0:
+                out.append(str(n))
+        except Exception:
+            pass
+    return out or ["60", "240"]
+
+
+def v9_market_catalog() -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "mode": "RESEARCH_ONLY",
+        "markets": [
+            {
+                "market": "crypto_bybit_linear",
+                "status": "ACTIVE",
+                "data_source": "Bybit public market endpoints",
+                "execution_supported": True,
+                "research_timeframes": v9_parse_interval_list(V9_CRYPTO_HTF_INTERVALS),
+                "notes": "Execution remains controlled by strategy_state, risk engine and approval workflow.",
+            },
+            {
+                "market": "forex_major_yahoo",
+                "status": "RESEARCH_ONLY",
+                "data_source": "Yahoo Finance chart API, tickers such as EURUSD=X",
+                "execution_supported": False,
+                "research_timeframes": ["60", "240"],
+                "notes": "No broker execution integration. Use for proof-of-concept only.",
+            },
+            {
+                "market": "etf_yahoo",
+                "status": "RESEARCH_ONLY",
+                "data_source": "Yahoo Finance chart API, tickers such as SPY/QQQ",
+                "execution_supported": False,
+                "research_timeframes": ["60", "240", "1D"],
+                "notes": "No broker execution integration. Useful for swing / capital-growth research.",
+            },
+        ],
+        "safety_rules": [
+            "v9 endpoints do not send orders",
+            "AI/research output may suggest watchlists only",
+            "promotion to MICRO still requires existing promotion/risk rules",
+            "forex/ETF are research-only until a regulated broker/API integration is explicitly added",
+        ],
+    }
+
+
+def v9_research_label(row: Dict[str, Any]) -> str:
+    pf = row.get("profit_factor")
+    trades = v8_int(row.get("trade_count"), 0)
+    avg_r = v8_float(row.get("average_r"), 0.0)
+    if pf is None:
+        return "NO_PF"
+    try:
+        pfv = float(pf)
+    except Exception:
+        return "NO_PF"
+    if trades < max(5, V9_RESEARCH_MIN_TRADES):
+        return "THIN_SAMPLE"
+    if pfv >= 1.4 and trades >= 20 and avg_r > 0:
+        return "STRONG_RESEARCH_CANDIDATE"
+    if pfv >= V9_RESEARCH_MIN_PF and trades >= V9_RESEARCH_MIN_TRADES and avg_r > 0:
+        return "RESEARCH_CANDIDATE"
+    if pfv >= 1.0 and avg_r >= 0:
+        return "WATCHLIST"
+    return "REJECT"
+
+
+def v9_quality_rank(row: Dict[str, Any]) -> float:
+    pf = row.get("profit_factor")
+    pf_score = min(60.0, max(0.0, (v8_float(pf, 0.0) - 1.0) * 80.0)) if pf is not None else 0.0
+    trades = v8_int(row.get("trade_count"), 0)
+    trade_score = min(25.0, trades / 2.0)
+    avg_score = max(-20.0, min(20.0, v8_float(row.get("average_r"), 0.0) * 20.0))
+    current_score = min(15.0, max(0.0, v8_float(row.get("current_score"), 0.0) / 8.0))
+    return round(pf_score + trade_score + avg_score + current_score, 4)
+
+
+def v9_crypto_higher_tf_research(max_symbols: int = V9_CRYPTO_HTF_MAX_SYMBOLS, intervals: Optional[str] = None, force: bool = False) -> Dict[str, Any]:
+    if not V9_RESEARCH_ENABLED:
+        return {"ok": False, "reason": "V9_RESEARCH_DISABLED"}
+    interval_list = v9_parse_interval_list(intervals or V9_CRYPTO_HTF_INTERVALS)
+    cached = read_json_file(V9_CRYPTO_HTF_RESEARCH_FILE, {})
+    if cached and not force and cached.get("max_symbols") == max_symbols and cached.get("intervals") == interval_list:
+        age = v8_now_ts() - v8_int(cached.get("created_ts"), 0)
+        if age < max(900, UNIVERSE_CACHE_TTL_SEC):
+            return cached
+    rows = []
+    for interval in interval_list:
+        bt = run_python_mini_backtests(max_symbols=max_symbols, interval=interval, kline_limit=V9_CRYPTO_HTF_KLINE_LIMIT)
+        for r in bt.get("rows") or []:
+            row = dict(r)
+            row["market"] = "crypto_bybit_linear"
+            row["timeframe"] = interval
+            row["research_label"] = v9_research_label(row)
+            row["rank_score"] = v9_quality_rank(row)
+            row["execution_supported"] = True
+            row["research_only"] = True
+            rows.append(row)
+    rows.sort(key=lambda x: (x.get("research_label") in {"STRONG_RESEARCH_CANDIDATE", "RESEARCH_CANDIDATE"}, x.get("rank_score") or 0), reverse=True)
+    summary = {
+        "total": len(rows),
+        "by_label": {},
+        "by_timeframe": {},
+    }
+    for r in rows:
+        summary["by_label"][r.get("research_label")] = summary["by_label"].get(r.get("research_label"), 0) + 1
+        summary["by_timeframe"][str(r.get("timeframe"))] = summary["by_timeframe"].get(str(r.get("timeframe")), 0) + 1
+    result = {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "created_ts": v8_now_ts(),
+        "market": "crypto_bybit_linear",
+        "max_symbols": max_symbols,
+        "intervals": interval_list,
+        "summary": summary,
+        "count": len(rows),
+        "top": rows[:V9_RESEARCH_TOP_N],
+        "rows": rows,
+    }
+    write_json_file(V9_CRYPTO_HTF_RESEARCH_FILE, result)
+    return result
+
+
+def v9_yahoo_interval(interval: str) -> Tuple[str, int]:
+    s = str(interval or "60").strip().upper()
+    if s in {"1D", "D", "1440"}:
+        return "1d", 1440
+    try:
+        minutes = int(float(s))
+    except Exception:
+        minutes = 60
+    if minutes <= 5:
+        return "5m", 5
+    if minutes <= 15:
+        return "15m", 15
+    if minutes <= 30:
+        return "30m", 30
+    # Yahoo supports 60m; 240m is created by aggregation below.
+    return "60m", 60
+
+
+def v9_fetch_yahoo_candles(ticker: str, interval: str = V9_EXTERNAL_DEFAULT_INTERVAL, range_: str = V9_EXTERNAL_DEFAULT_RANGE) -> list:
+    yahoo_interval, base_minutes = v9_yahoo_interval(interval)
+    requested_minutes = 1440 if str(interval).upper() in {"1D", "D", "1440"} else v8_int(interval, 60)
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+    try:
+        resp = client.get(url, params={"range": range_, "interval": yahoo_interval, "includePrePost": "false"})
+        if resp.status_code >= 400:
+            return []
+        data = resp.json()
+        result = (((data.get("chart") or {}).get("result") or []) + [{}])[0]
+        ts = result.get("timestamp") or []
+        quote = (((result.get("indicators") or {}).get("quote") or []) + [{}])[0]
+        opens = quote.get("open") or []
+        highs = quote.get("high") or []
+        lows = quote.get("low") or []
+        closes = quote.get("close") or []
+        volumes = quote.get("volume") or []
+        candles = []
+        for i, t in enumerate(ts):
+            try:
+                o, h_, l, c = opens[i], highs[i], lows[i], closes[i]
+                if o is None or h_ is None or l is None or c is None:
+                    continue
+                candles.append({
+                    "start_ms": int(t) * 1000,
+                    "open": float(o),
+                    "high": float(h_),
+                    "low": float(l),
+                    "close": float(c),
+                    "volume": float(volumes[i] or 0.0) if i < len(volumes) else 0.0,
+                    "turnover": 0.0,
+                })
+            except Exception:
+                continue
+        candles.sort(key=lambda x: x["start_ms"])
+        if requested_minutes > base_minutes and base_minutes > 0 and requested_minutes % base_minutes == 0:
+            factor = requested_minutes // base_minutes
+            if factor > 1:
+                return v9_aggregate_candles(candles, factor)
+        return candles
+    except Exception:
+        return []
+
+
+def v9_aggregate_candles(candles: list, factor: int) -> list:
+    out = []
+    if factor <= 1:
+        return candles
+    for i in range(0, len(candles), factor):
+        chunk = candles[i:i + factor]
+        if len(chunk) < factor:
+            continue
+        out.append({
+            "start_ms": chunk[0]["start_ms"],
+            "open": chunk[0]["open"],
+            "high": max(x["high"] for x in chunk),
+            "low": min(x["low"] for x in chunk),
+            "close": chunk[-1]["close"],
+            "volume": sum(x.get("volume") or 0.0 for x in chunk),
+            "turnover": 0.0,
+        })
+    return out
+
+
+def v9_external_ticker_list(market: str, tickers: Optional[str]) -> list:
+    if tickers:
+        return [x.strip() for x in str(tickers).split(",") if x.strip()][:V9_EXTERNAL_MAX_TICKERS]
+    market_l = str(market or "forex").lower()
+    if market_l == "etf":
+        return V9_ETF_TICKERS[:V9_EXTERNAL_MAX_TICKERS]
+    if market_l == "all":
+        return (V9_FOREX_TICKERS + V9_ETF_TICKERS)[:V9_EXTERNAL_MAX_TICKERS]
+    return V9_FOREX_TICKERS[:V9_EXTERNAL_MAX_TICKERS]
+
+
+def v9_external_market_research(market: str = "forex", tickers: Optional[str] = None, interval: str = V9_EXTERNAL_DEFAULT_INTERVAL, range_: str = V9_EXTERNAL_DEFAULT_RANGE, families: Optional[list] = None) -> Dict[str, Any]:
+    if not V9_EXTERNAL_ENABLED:
+        return {"ok": False, "reason": "V9_EXTERNAL_DISABLED"}
+    ticker_list = v9_external_ticker_list(market, tickers)
+    families = families or V8_STRATEGY_FAMILIES
+    rows = []
+    for ticker in ticker_list:
+        candles = v9_fetch_yahoo_candles(ticker, interval=interval, range_=range_)
+        if len(candles) < 230:
+            rows.append({"market": market, "symbol": ticker, "timeframe": interval, "ok": False, "reason": f"INSUFFICIENT_CANDLES_{len(candles)}"})
+            continue
+        for fam in families:
+            bt = run_strategy_mini_backtest(candles, fam)
+            score_current = score_current_opportunity(candles, fam)
+            row = {
+                "ok": True,
+                "market": str(market).lower(),
+                "symbol": ticker,
+                "timeframe": interval,
+                "family": fam,
+                "profit_factor": bt.get("profit_factor") if bt.get("ok") else None,
+                "trade_count": bt.get("trade_count") if bt.get("ok") else 0,
+                "win_rate": bt.get("win_rate") if bt.get("ok") else None,
+                "total_r": bt.get("total_r") if bt.get("ok") else None,
+                "average_r": bt.get("average_r") if bt.get("ok") else None,
+                "current_score": score_current.get("score") if score_current.get("ok") else None,
+                "current_recommendation": score_current.get("recommendation") if score_current.get("ok") else None,
+                "signal_now": score_current.get("signal_now") if score_current.get("ok") else False,
+                "execution_supported": False,
+                "research_only": True,
+                "data_source": "yahoo_chart_api",
+            }
+            row["research_label"] = v9_research_label(row)
+            row["rank_score"] = v9_quality_rank(row)
+            rows.append(row)
+    rows.sort(key=lambda x: (x.get("research_label") in {"STRONG_RESEARCH_CANDIDATE", "RESEARCH_CANDIDATE"}, x.get("rank_score") or 0), reverse=True)
+    summary = {"total": len(rows), "by_label": {}, "failed": len([r for r in rows if not r.get("ok", True)])}
+    for r in rows:
+        summary["by_label"][r.get("research_label") or r.get("reason") or "UNKNOWN"] = summary["by_label"].get(r.get("research_label") or r.get("reason") or "UNKNOWN", 0) + 1
+    result = {"ok": True, "version": APP_FEATURE_LEVEL, "created_at": now_iso(), "market": market, "interval": interval, "range": range_, "summary": summary, "count": len(rows), "top": rows[:V9_RESEARCH_TOP_N], "rows": rows}
+    write_json_file(V9_EXTERNAL_RESEARCH_FILE, result)
+    return result
+
+
+def v9_normalize_external_backtest_row(x: Dict[str, Any]) -> Dict[str, Any]:
+    market = str(x.get("market") or x.get("asset_class") or "external").lower()
+    symbol = str(x.get("symbol") or x.get("ticker") or "").upper()
+    family = str(x.get("family") or x.get("strategy_family") or x.get("strategy") or "manual").lower()
+    side = str(x.get("side") or "LONG").upper()
+    interval = str(x.get("interval") or x.get("timeframe") or "60")
+    return {
+        "market": market,
+        "symbol": symbol,
+        "family": family,
+        "side": side,
+        "interval": interval,
+        "profit_factor": v8_float(x.get("profit_factor") if x.get("profit_factor") is not None else x.get("pf"), 0.0),
+        "trades": v8_int(x.get("trades") if x.get("trades") is not None else x.get("trade_count"), 0),
+        "win_rate": v8_float(x.get("win_rate"), 0.0),
+        "max_drawdown": v8_float(x.get("max_drawdown"), 0.0),
+        "net_profit": v8_float(x.get("net_profit"), 0.0),
+        "date_from": str(x.get("date_from") or ""),
+        "date_to": str(x.get("date_to") or ""),
+        "decision": str(x.get("decision") or "UNVALIDATED").upper(),
+        "source": str(x.get("source") or "manual"),
+        "notes": str(x.get("notes") or ""),
+        "updated_at": now_iso(),
+    }
+
+
+def v9_load_external_registry() -> Dict[str, Any]:
+    return read_json_file(V9_EXTERNAL_BACKTEST_REGISTRY_FILE, {"rows": [], "updated_at": now_iso()})
+
+
+def v9_save_external_registry(rows: list) -> None:
+    dedup = {}
+    for r in rows:
+        key = (str(r.get("market")), str(r.get("symbol")), str(r.get("family")), str(r.get("side")), str(r.get("interval")))
+        dedup[key] = r
+    write_json_file(V9_EXTERNAL_BACKTEST_REGISTRY_FILE, {"rows": list(dedup.values()), "updated_at": now_iso()})
+
+
+def v9_market_regime_gate(days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS) -> Dict[str, Any]:
+    paper = build_paper_outcome_decisions(days=days, limit=limit)
+    risk = build_ai_risk_supervisor_report(days=days, limit=limit, include_plan=False).get("risk") or {}
+    btc60 = score_current_opportunity(fetch_bybit_klines("BTCUSDT", interval="60", limit=300), "trend_continuation")
+    eth60 = score_current_opportunity(fetch_bybit_klines("ETHUSDT", interval="60", limit=300), "trend_continuation")
+    avg_r = v8_float((paper.get("summary") or {}).get("average_r_closed"), 0.0)
+    closed = v8_int((paper.get("summary") or {}).get("closed_count"), 0)
+    crypto_trend_score = round((v8_float(btc60.get("score"), 0.0) + v8_float(eth60.get("score"), 0.0)) / 2.0, 2)
+    level = "NORMAL"
+    reasons = []
+    if risk.get("level") == "HIGH":
+        level = "HIGH"
+        reasons.append("AI_RISK_SUPERVISOR_HIGH")
+    if closed >= 5 and avg_r <= -0.5:
+        level = "HIGH"
+        reasons.append(f"PAPER_AVG_R_LOW_{avg_r:.2f}")
+    elif closed >= 5 and avg_r <= -0.2 and level != "HIGH":
+        level = "ELEVATED"
+        reasons.append(f"PAPER_AVG_R_NEGATIVE_{avg_r:.2f}")
+    if crypto_trend_score < 45 and level == "NORMAL":
+        level = "CAUTIOUS"
+        reasons.append(f"BTC_ETH_TREND_SCORE_LOW_{crypto_trend_score:.1f}")
+    allow_new_micro = level in {"LOW", "NORMAL"}
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "gate_level": level,
+        "allow_new_micro": allow_new_micro,
+        "allow_new_paper": True,
+        "recommendation": "Do not promote to MICRO" if not allow_new_micro else "MICRO review allowed if strategy-level rules pass",
+        "reasons": reasons or ["NO_BLOCKING_MARKET_REGIME_REASON"],
+        "paper": {"closed_count": closed, "average_r_closed": avg_r, "total_r": (paper.get("summary") or {}).get("total_r")},
+        "ai_risk": risk,
+        "crypto_context": {"btc_1h": btc60, "eth_1h": eth60, "btc_eth_avg_score": crypto_trend_score},
+    }
+
+
+@app.get("/v9_market_catalog")
+def v9_market_catalog_endpoint(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_market_catalog()
+
+
+@app.get("/v9_crypto_higher_tf_research")
+def v9_crypto_higher_tf_research_endpoint(secret: str, max_symbols: int = V9_CRYPTO_HTF_MAX_SYMBOLS, intervals: str = V9_CRYPTO_HTF_INTERVALS, force: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_crypto_higher_tf_research(max_symbols=max_symbols, intervals=intervals, force=force)
+
+
+@app.get("/v9_crypto_higher_tf_dashboard", response_class=HTMLResponse)
+def v9_crypto_higher_tf_dashboard(secret: str, max_symbols: int = V9_CRYPTO_HTF_MAX_SYMBOLS, intervals: str = V9_CRYPTO_HTF_INTERVALS, force: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = v9_crypto_higher_tf_research(max_symbols=max_symbols, intervals=intervals, force=force)
+    rows = "".join([f"<tr><td>{h(x.get('research_label'))}</td><td>{h(x.get('symbol'))}</td><td>{h(x.get('timeframe'))}</td><td>{h(x.get('family'))}</td><td>{fmt_num(x.get('profit_factor'))}</td><td>{x.get('trade_count')}</td><td>{fmt_num(x.get('win_rate'))}</td><td>{fmt_num(x.get('average_r'))}</td><td>{fmt_num(x.get('current_score'))}</td><td>{fmt_num(x.get('rank_score'))}</td></tr>" for x in data.get("top", [])])
+    return HTMLResponse(f"""
+    <html><head><title>v9 Crypto Higher TF Research</title><style>body{{font-family:Arial;margin:20px;background:#f6f8fb}} .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}} table{{border-collapse:collapse;width:100%;background:white}} th{{background:#111827;color:white}} td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}</style></head>
+    <body><h1>v9 Crypto Higher Timeframe Research</h1><div class='card'><b>Intervals:</b> {h(','.join(data.get('intervals') or []))} | <b>Rows:</b> {data.get('count')}<br><b>Summary:</b> {h(json.dumps(data.get('summary', {}), ensure_ascii=False))}</div><table><tr><th>Label</th><th>Symbol</th><th>TF</th><th>Family</th><th>PF</th><th>Trades</th><th>Win %</th><th>Avg R</th><th>Score</th><th>Rank</th></tr>{rows}</table>
+    <p><a href='/v9_multi_market_research_dashboard?secret={h(secret)}'>Combined v9 dashboard</a> · <a href='/v9_market_regime_gate?secret={h(secret)}'>Market regime gate</a></p></body></html>
+    """)
+
+
+@app.get("/v9_external_market_research")
+def v9_external_market_research_endpoint(secret: str, market: str = "forex", tickers: Optional[str] = None, interval: str = V9_EXTERNAL_DEFAULT_INTERVAL, range: str = V9_EXTERNAL_DEFAULT_RANGE):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_external_market_research(market=market, tickers=tickers, interval=interval, range_=range)
+
+
+@app.get("/v9_external_market_dashboard", response_class=HTMLResponse)
+def v9_external_market_dashboard(secret: str, market: str = "forex", tickers: Optional[str] = None, interval: str = V9_EXTERNAL_DEFAULT_INTERVAL, range: str = V9_EXTERNAL_DEFAULT_RANGE):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = v9_external_market_research(market=market, tickers=tickers, interval=interval, range_=range)
+    rows = "".join([f"<tr><td>{h(x.get('research_label') or x.get('reason'))}</td><td>{h(x.get('symbol'))}</td><td>{h(x.get('timeframe'))}</td><td>{h(x.get('family'))}</td><td>{fmt_num(x.get('profit_factor'))}</td><td>{x.get('trade_count') or ''}</td><td>{fmt_num(x.get('win_rate'))}</td><td>{fmt_num(x.get('average_r'))}</td><td>{fmt_num(x.get('rank_score'))}</td></tr>" for x in data.get("rows", [])[:100]])
+    return HTMLResponse(f"""
+    <html><head><title>v9 External Market Research</title><style>body{{font-family:Arial;margin:20px;background:#f6f8fb}} .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}} table{{border-collapse:collapse;width:100%;background:white}} th{{background:#111827;color:white}} td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}</style></head>
+    <body><h1>v9 External Market Research · {h(market.upper())}</h1><div class='card'><b>Interval:</b> {h(interval)} | <b>Range:</b> {h(range)} | <b>Rows:</b> {data.get('count')}<br><b>Summary:</b> {h(json.dumps(data.get('summary', {}), ensure_ascii=False))}<br><b>Note:</b> research-only; no broker execution integration.</div><table><tr><th>Label</th><th>Ticker</th><th>TF</th><th>Family</th><th>PF</th><th>Trades</th><th>Win %</th><th>Avg R</th><th>Rank</th></tr>{rows}</table>
+    <p><a href='/v9_external_market_dashboard?secret={h(secret)}&market=etf&interval={h(interval)}'>ETF research</a> · <a href='/v9_multi_market_research_dashboard?secret={h(secret)}'>Combined v9 dashboard</a></p></body></html>
+    """)
+
+
+@app.post("/v9_external_backtest_import")
+async def v9_external_backtest_import(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    rows_in = body.get("items") or body.get("rows") or []
+    if not isinstance(rows_in, list):
+        raise HTTPException(400, "items/rows must be a list")
+    normalized = [v9_normalize_external_backtest_row(x) for x in rows_in if isinstance(x, dict)]
+    existing = v9_load_external_registry().get("rows", [])
+    v9_save_external_registry(existing + normalized)
+    final = v9_load_external_registry().get("rows", [])
+    return {"ok": True, "imported": len(normalized), "total_registry_rows": len(final), "rows": normalized}
+
+
+@app.get("/v9_external_backtest_registry")
+def v9_external_backtest_registry(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = v9_load_external_registry()
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "count": len(data.get("rows", [])), "rows": data.get("rows", []), "updated_at": data.get("updated_at")}
+
+
+@app.get("/v9_market_regime_gate")
+def v9_market_regime_gate_endpoint(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_market_regime_gate(days=days, limit=limit)
+
+
+@app.get("/v9_multi_market_research")
+def v9_multi_market_research(secret: str, max_symbols: int = 20, crypto_intervals: str = "60,240", external_interval: str = "60", external_range: str = V9_EXTERNAL_DEFAULT_RANGE, include_external: bool = True, force: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    crypto = v9_crypto_higher_tf_research(max_symbols=max_symbols, intervals=crypto_intervals, force=force)
+    forex = v9_external_market_research(market="forex", interval=external_interval, range_=external_range) if include_external else {"rows": []}
+    etf = v9_external_market_research(market="etf", interval=external_interval, range_=external_range) if include_external else {"rows": []}
+    all_rows = (crypto.get("rows") or []) + (forex.get("rows") or []) + (etf.get("rows") or [])
+    for r in all_rows:
+        r["global_rank_score"] = v9_quality_rank(r)
+    all_rows.sort(key=lambda x: (x.get("research_label") in {"STRONG_RESEARCH_CANDIDATE", "RESEARCH_CANDIDATE"}, x.get("global_rank_score") or 0), reverse=True)
+    gate = v9_market_regime_gate()
+    summary = {
+        "total_rows": len(all_rows),
+        "crypto_rows": len(crypto.get("rows") or []),
+        "forex_rows": len(forex.get("rows") or []),
+        "etf_rows": len(etf.get("rows") or []),
+        "gate_level": gate.get("gate_level"),
+        "allow_new_micro": gate.get("allow_new_micro"),
+    }
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "created_at": now_iso(), "summary": summary, "market_regime_gate": gate, "top": all_rows[:V9_RESEARCH_TOP_N], "crypto": crypto.get("top", []), "forex": forex.get("top", []), "etf": etf.get("top", [])}
+
+
+@app.get("/v9_multi_market_research_dashboard", response_class=HTMLResponse)
+def v9_multi_market_research_dashboard(secret: str, max_symbols: int = 20, crypto_intervals: str = "60,240", external_interval: str = "60", external_range: str = V9_EXTERNAL_DEFAULT_RANGE, include_external: bool = True, force: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = v9_multi_market_research(secret=secret, max_symbols=max_symbols, crypto_intervals=crypto_intervals, external_interval=external_interval, external_range=external_range, include_external=include_external, force=force)
+    rows = "".join([f"<tr><td>{h(x.get('market'))}</td><td>{h(x.get('research_label'))}</td><td>{h(x.get('symbol'))}</td><td>{h(x.get('timeframe') or x.get('interval'))}</td><td>{h(x.get('family'))}</td><td>{fmt_num(x.get('profit_factor'))}</td><td>{x.get('trade_count') or ''}</td><td>{fmt_num(x.get('win_rate'))}</td><td>{fmt_num(x.get('average_r'))}</td><td>{fmt_num(x.get('global_rank_score') or x.get('rank_score'))}</td><td>{'YES' if x.get('execution_supported') else 'NO'}</td></tr>" for x in data.get("top", [])])
+    s = data.get("summary", {})
+    gate = data.get("market_regime_gate", {})
+    return HTMLResponse(f"""
+    <html><head><title>v9 Multi-Market Research Framework</title><style>body{{font-family:Arial;margin:20px;background:#f6f8fb}} .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}} table{{border-collapse:collapse;width:100%;background:white;font-size:13px}} th{{background:#111827;color:white}} td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}} .HIGH{{color:#991b1b;font-weight:bold}} .ELEVATED{{color:#92400e;font-weight:bold}} .NORMAL{{color:#047857;font-weight:bold}}</style></head>
+    <body><h1>v9 Multi-Market Research Framework</h1><div class='card'><b>Rows:</b> {s.get('total_rows')} | <b>Crypto:</b> {s.get('crypto_rows')} | <b>Forex:</b> {s.get('forex_rows')} | <b>ETF:</b> {s.get('etf_rows')}<br><b>Market regime gate:</b> <span class='{h(gate.get('gate_level'))}'>{h(gate.get('gate_level'))}</span> | <b>Allow new MICRO:</b> {h(gate.get('allow_new_micro'))}<br><b>Recommendation:</b> {h(gate.get('recommendation'))}<br><b>Safety:</b> v9 is research-only; external markets have no execution integration.</div>
+    <table><tr><th>Market</th><th>Label</th><th>Symbol/Ticker</th><th>TF</th><th>Family</th><th>PF</th><th>Trades</th><th>Win %</th><th>Avg R</th><th>Rank</th><th>Execution supported</th></tr>{rows}</table>
+    <p><a href='/v9_crypto_higher_tf_dashboard?secret={h(secret)}&max_symbols={max_symbols}&intervals={h(crypto_intervals)}'>Crypto HTF</a> · <a href='/v9_external_market_dashboard?secret={h(secret)}&market=forex&interval={h(external_interval)}&range={h(external_range)}'>Forex POC</a> · <a href='/v9_external_market_dashboard?secret={h(secret)}&market=etf&interval={h(external_interval)}&range={h(external_range)}'>ETF POC</a> · <a href='/v9_market_catalog?secret={h(secret)}'>Market catalog</a></p>
+    </body></html>
+    """)
