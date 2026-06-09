@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.1.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.1.1")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -707,11 +707,71 @@ def summarize_trade_log() -> Dict[str, Any]:
     return summary
 
 
-def fetch_supabase_logs(limit: int = 100) -> list[Dict[str, Any]]:
-    if not supabase_enabled():
-        return []
+# Supabase trade-event reporting state.
+# Trade-event reports must remain available even if Supabase has a transient
+# DNS/network outage or the SUPABASE_URL environment variable is malformed.
+# The local CSV log is always written first and acts as a degraded-mode cache.
+_supabase_trade_log_state: Dict[str, Any] = {
+    "last_error": None,
+    "last_error_at": 0.0,
+    "last_success_at": None,
+    "last_success_operation": None,
+    "last_source": "local_csv",
+}
 
-    safe_limit = max(1, min(limit, 1000))
+
+def _trade_log_cloud_fail(operation: str, exc: Any) -> None:
+    msg = f"{operation}: {exc}"
+    _supabase_trade_log_state["last_error"] = msg
+    _supabase_trade_log_state["last_error_at"] = time.time()
+    _supabase_trade_log_state["last_source"] = "local_csv_fallback"
+    log(f"[WARN] Supabase trade-log fallback: {msg}")
+
+
+def _trade_log_cloud_ok(operation: str) -> None:
+    _supabase_trade_log_state["last_error"] = None
+    _supabase_trade_log_state["last_error_at"] = 0.0
+    _supabase_trade_log_state["last_success_at"] = now_iso()
+    _supabase_trade_log_state["last_success_operation"] = operation
+    _supabase_trade_log_state["last_source"] = "supabase"
+
+
+def _local_trade_log_rows_for_reporting(limit: int = 100, days: Optional[int] = None) -> list[Dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 10000))
+    rows = read_trade_log_rows(limit=0)
+
+    if days is not None:
+        safe_days = max(1, min(int(days), 90))
+        cutoff = time.time() - safe_days * 24 * 60 * 60
+        filtered: list[Dict[str, Any]] = []
+        for row in rows:
+            raw_ts = row.get("created_at") or row.get("timestamp_utc") or row.get("timestamp")
+            if not raw_ts:
+                filtered.append(row)
+                continue
+            try:
+                import datetime as _dt
+                cleaned = str(raw_ts).replace("Z", "+00:00")
+                parsed = _dt.datetime.fromisoformat(cleaned)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=_dt.timezone.utc)
+                if parsed.timestamp() >= cutoff:
+                    filtered.append(row)
+            except Exception:
+                # Keep malformed legacy rows visible rather than making reports fail.
+                filtered.append(row)
+        rows = filtered
+
+    # Supabase queries return created_at.desc. Mirror that order in degraded mode.
+    return list(reversed(rows[-safe_limit:]))
+
+
+def fetch_supabase_logs(limit: int = 100) -> list[Dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 1000))
+
+    if not supabase_enabled():
+        _supabase_trade_log_state["last_source"] = "local_csv_supabase_disabled"
+        return _local_trade_log_rows_for_reporting(limit=safe_limit)
 
     params = {
         "select": "*",
@@ -719,27 +779,35 @@ def fetch_supabase_logs(limit: int = 100) -> list[Dict[str, Any]]:
         "limit": str(safe_limit),
     }
 
-    resp = client.get(
-        supabase_table_url(),
-        headers=supabase_headers(prefer=""),
-        params=params,
-    )
-
-    if resp.status_code >= 400:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Supabase fetch failed: {resp.status_code} {resp.text}",
+    try:
+        resp = client.get(
+            supabase_table_url(),
+            headers=supabase_headers(prefer=""),
+            params=params,
         )
+        if resp.status_code >= 400:
+            _trade_log_cloud_fail("fetch_recent", f"HTTP_{resp.status_code} {resp.text[:240]}")
+            return _local_trade_log_rows_for_reporting(limit=safe_limit)
 
-    return resp.json()
+        rows = resp.json()
+        if not isinstance(rows, list):
+            _trade_log_cloud_fail("fetch_recent", "INVALID_JSON_RESPONSE_NOT_LIST")
+            return _local_trade_log_rows_for_reporting(limit=safe_limit)
+
+        _trade_log_cloud_ok("fetch_recent")
+        return rows
+    except Exception as exc:
+        _trade_log_cloud_fail("fetch_recent", exc)
+        return _local_trade_log_rows_for_reporting(limit=safe_limit)
 
 
 def fetch_supabase_logs_since(days: int = 1, limit: int = 5000) -> list[Dict[str, Any]]:
-    if not supabase_enabled():
-        return []
+    safe_days = max(1, min(int(days), 90))
+    safe_limit = max(1, min(int(limit), 10000))
 
-    safe_days = max(1, min(days, 30))
-    safe_limit = max(1, min(limit, 10000))
+    if not supabase_enabled():
+        _supabase_trade_log_state["last_source"] = "local_csv_supabase_disabled"
+        return _local_trade_log_rows_for_reporting(limit=safe_limit, days=safe_days)
 
     start_s = int(time.time()) - safe_days * 24 * 60 * 60
     start_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(start_s))
@@ -751,19 +819,26 @@ def fetch_supabase_logs_since(days: int = 1, limit: int = 5000) -> list[Dict[str
         "limit": str(safe_limit),
     }
 
-    resp = client.get(
-        supabase_table_url(),
-        headers=supabase_headers(prefer=""),
-        params=params,
-    )
-
-    if resp.status_code >= 400:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Supabase report fetch failed: {resp.status_code} {resp.text}",
+    try:
+        resp = client.get(
+            supabase_table_url(),
+            headers=supabase_headers(prefer=""),
+            params=params,
         )
+        if resp.status_code >= 400:
+            _trade_log_cloud_fail("fetch_since", f"HTTP_{resp.status_code} {resp.text[:240]}")
+            return _local_trade_log_rows_for_reporting(limit=safe_limit, days=safe_days)
 
-    return resp.json()
+        rows = resp.json()
+        if not isinstance(rows, list):
+            _trade_log_cloud_fail("fetch_since", "INVALID_JSON_RESPONSE_NOT_LIST")
+            return _local_trade_log_rows_for_reporting(limit=safe_limit, days=safe_days)
+
+        _trade_log_cloud_ok("fetch_since")
+        return rows
+    except Exception as exc:
+        _trade_log_cloud_fail("fetch_since", exc)
+        return _local_trade_log_rows_for_reporting(limit=safe_limit, days=safe_days)
 
 
 def fetch_recent_duplicate_candidate(
@@ -6251,7 +6326,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.1.0</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.1.1</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7300,7 +7375,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.1.0"
+APP_FEATURE_LEVEL = "9.1.1"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8715,6 +8790,35 @@ def v7_control_center(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit
     </div></body></html>
     """)
 
+
+
+@app.get("/supabase_trade_log_health")
+def supabase_trade_log_health(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    base_url = str(SUPABASE_URL or "")
+    safe_url = ""
+    if base_url:
+        try:
+            from urllib.parse import urlsplit
+            parsed = urlsplit(base_url)
+            safe_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else base_url
+        except Exception:
+            safe_url = base_url
+
+    probe_rows = fetch_supabase_logs(limit=1)
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "supabase_enabled": supabase_enabled(),
+        "configured_base_url": safe_url,
+        "trade_event_table": SUPABASE_TABLE,
+        "state": dict(_supabase_trade_log_state),
+        "probe_row_count": len(probe_rows),
+        "effective_source": _supabase_trade_log_state.get("last_source"),
+        "fallback": "local_csv",
+    }
 
 
 @app.get("/version")
