@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.1.1")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.1.2")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6326,7 +6326,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.1.1</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.1.2</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7375,7 +7375,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.1.1"
+APP_FEATURE_LEVEL = "9.1.2"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -10565,30 +10565,138 @@ def v9_save_external_registry(rows: list) -> None:
     write_json_file(V9_EXTERNAL_BACKTEST_REGISTRY_FILE, {"rows": list(dedup.values()), "updated_at": now_iso()})
 
 
+def _finite_or_default(value: Any, default: float = 0.0) -> float:
+    try:
+        num = float(value)
+        return num if math.isfinite(num) else default
+    except Exception:
+        return default
+
+
+def _json_safe_value(value: Any) -> Any:
+    """Recursively sanitize NaN/Infinity and unknown objects before JSON serialization."""
+    if isinstance(value, dict):
+        return {str(k): _json_safe_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe_value(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_safe_value(v) for v in value]
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    try:
+        return str(value)
+    except Exception:
+        return None
+
+
+def _safe_market_context(symbol: str, interval: str = "60", limit: int = 300) -> Dict[str, Any]:
+    """Best-effort market context. The regime gate must never fail because public market data is unavailable."""
+    try:
+        candles = fetch_bybit_klines(symbol, interval=interval, limit=limit)
+        if not candles:
+            return {
+                "ok": False,
+                "symbol": symbol,
+                "interval": interval,
+                "reason": "BYBIT_KLINES_EMPTY_OR_UNAVAILABLE",
+                "score": 0.0,
+            }
+        result = score_current_opportunity(candles, "trend_continuation")
+        if not isinstance(result, dict):
+            return {
+                "ok": False,
+                "symbol": symbol,
+                "interval": interval,
+                "reason": "INVALID_OPPORTUNITY_RESULT",
+                "score": 0.0,
+            }
+        result = dict(result)
+        result["symbol"] = symbol
+        result["interval"] = interval
+        result["score"] = _finite_or_default(result.get("score"), 0.0)
+        return _json_safe_value(result)
+    except Exception as exc:
+        log(f"[WARN] v9 market context fallback for {symbol}: {exc}")
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "interval": interval,
+            "reason": "MARKET_CONTEXT_EXCEPTION",
+            "error": str(exc),
+            "score": 0.0,
+        }
+
+
 def v9_market_regime_gate(days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS) -> Dict[str, Any]:
-    paper = build_paper_outcome_decisions(days=days, limit=limit)
-    risk = build_ai_risk_supervisor_report(days=days, limit=limit, include_plan=False).get("risk") or {}
-    btc60 = score_current_opportunity(fetch_bybit_klines("BTCUSDT", interval="60", limit=300), "trend_continuation")
-    eth60 = score_current_opportunity(fetch_bybit_klines("ETHUSDT", interval="60", limit=300), "trend_continuation")
-    avg_r = v8_float((paper.get("summary") or {}).get("average_r_closed"), 0.0)
-    closed = v8_int((paper.get("summary") or {}).get("closed_count"), 0)
-    crypto_trend_score = round((v8_float(btc60.get("score"), 0.0) + v8_float(eth60.get("score"), 0.0)) / 2.0, 2)
+    safe_days = max(1, min(v8_int(days, PAPER_OUTCOME_DEFAULT_DAYS), 90))
+    safe_limit = max(1, min(v8_int(limit, PAPER_OUTCOME_MAX_EVENTS), 10000))
+    degraded_reasons: list[str] = []
+
+    try:
+        paper = build_paper_outcome_decisions(days=safe_days, limit=safe_limit)
+        if not isinstance(paper, dict):
+            paper = {"summary": {}}
+            degraded_reasons.append("PAPER_OUTCOME_INVALID_RESPONSE")
+    except Exception as exc:
+        log(f"[WARN] v9 market regime paper fallback: {exc}")
+        paper = {"summary": {}}
+        degraded_reasons.append(f"PAPER_OUTCOME_UNAVAILABLE:{exc}")
+
+    try:
+        risk_report = build_ai_risk_supervisor_report(days=safe_days, limit=safe_limit, include_plan=False)
+        risk = (risk_report or {}).get("risk") or {}
+        if not isinstance(risk, dict):
+            risk = {}
+            degraded_reasons.append("AI_RISK_INVALID_RESPONSE")
+    except Exception as exc:
+        log(f"[WARN] v9 market regime AI risk fallback: {exc}")
+        risk = {}
+        degraded_reasons.append(f"AI_RISK_UNAVAILABLE:{exc}")
+
+    btc60 = _safe_market_context("BTCUSDT", interval="60", limit=300)
+    eth60 = _safe_market_context("ETHUSDT", interval="60", limit=300)
+
+    paper_summary = paper.get("summary") or {}
+    avg_r = _finite_or_default(paper_summary.get("average_r_closed"), 0.0)
+    closed = v8_int(paper_summary.get("closed_count"), 0)
+    btc_score = _finite_or_default(btc60.get("score"), 0.0)
+    eth_score = _finite_or_default(eth60.get("score"), 0.0)
+    crypto_trend_score = round((btc_score + eth_score) / 2.0, 2)
+
     level = "NORMAL"
-    reasons = []
+    reasons: list[str] = []
+
     if risk.get("level") == "HIGH":
         level = "HIGH"
         reasons.append("AI_RISK_SUPERVISOR_HIGH")
+
     if closed >= 5 and avg_r <= -0.5:
         level = "HIGH"
         reasons.append(f"PAPER_AVG_R_LOW_{avg_r:.2f}")
     elif closed >= 5 and avg_r <= -0.2 and level != "HIGH":
         level = "ELEVATED"
         reasons.append(f"PAPER_AVG_R_NEGATIVE_{avg_r:.2f}")
+
+    market_data_complete = bool(btc60.get("ok")) and bool(eth60.get("ok"))
+    if not market_data_complete:
+        if level == "NORMAL":
+            level = "CAUTIOUS"
+        reasons.append("BTC_ETH_MARKET_CONTEXT_PARTIAL_OR_UNAVAILABLE")
+
     if crypto_trend_score < 45 and level == "NORMAL":
         level = "CAUTIOUS"
         reasons.append(f"BTC_ETH_TREND_SCORE_LOW_{crypto_trend_score:.1f}")
+
+    if degraded_reasons:
+        if level == "NORMAL":
+            level = "CAUTIOUS"
+        reasons.append("DEGRADED_DATA_MODE")
+
     allow_new_micro = level in {"LOW", "NORMAL"}
-    return {
+
+    payload = {
         "ok": True,
         "version": APP_FEATURE_LEVEL,
         "created_at": now_iso(),
@@ -10597,10 +10705,22 @@ def v9_market_regime_gate(days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = P
         "allow_new_paper": True,
         "recommendation": "Do not promote to MICRO" if not allow_new_micro else "MICRO review allowed if strategy-level rules pass",
         "reasons": reasons or ["NO_BLOCKING_MARKET_REGIME_REASON"],
-        "paper": {"closed_count": closed, "average_r_closed": avg_r, "total_r": (paper.get("summary") or {}).get("total_r")},
+        "degraded_mode": bool(degraded_reasons) or not market_data_complete,
+        "degraded_reasons": degraded_reasons,
+        "paper": {
+            "closed_count": closed,
+            "average_r_closed": avg_r,
+            "total_r": _finite_or_default(paper_summary.get("total_r"), 0.0),
+        },
         "ai_risk": risk,
-        "crypto_context": {"btc_1h": btc60, "eth_1h": eth60, "btc_eth_avg_score": crypto_trend_score},
+        "crypto_context": {
+            "btc_1h": btc60,
+            "eth_1h": eth60,
+            "btc_eth_avg_score": crypto_trend_score,
+            "market_data_complete": market_data_complete,
+        },
     }
+    return _json_safe_value(payload)
 
 
 @app.get("/v9_market_catalog")
@@ -10684,6 +10804,45 @@ def v9_market_regime_gate_endpoint(secret: str, days: int = PAPER_OUTCOME_DEFAUL
     if secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
     return v9_market_regime_gate(days=days, limit=limit)
+
+
+@app.get("/v9_market_regime_diagnostics")
+def v9_market_regime_diagnostics(secret: str, days: int = PAPER_OUTCOME_DEFAULT_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    diagnostics: Dict[str, Any] = {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "checks": {},
+    }
+
+    try:
+        diagnostics["checks"]["paper_outcome"] = {
+            "ok": True,
+            "data": _json_safe_value(build_paper_outcome_decisions(days=days, limit=limit)),
+        }
+    except Exception as exc:
+        diagnostics["checks"]["paper_outcome"] = {"ok": False, "error": str(exc)}
+
+    try:
+        diagnostics["checks"]["ai_risk"] = {
+            "ok": True,
+            "data": _json_safe_value(build_ai_risk_supervisor_report(days=days, limit=limit, include_plan=False)),
+        }
+    except Exception as exc:
+        diagnostics["checks"]["ai_risk"] = {"ok": False, "error": str(exc)}
+
+    diagnostics["checks"]["btc_1h"] = _safe_market_context("BTCUSDT", interval="60", limit=300)
+    diagnostics["checks"]["eth_1h"] = _safe_market_context("ETHUSDT", interval="60", limit=300)
+
+    try:
+        diagnostics["gate"] = v9_market_regime_gate(days=days, limit=limit)
+    except Exception as exc:
+        diagnostics["gate"] = {"ok": False, "error": str(exc)}
+
+    return _json_safe_value(diagnostics)
 
 
 @app.get("/v9_multi_market_research")
