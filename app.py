@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.1.3")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.2.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -5142,6 +5142,40 @@ async def tv_webhook(request: Request):
             }
         )
 
+    # v9.2.0 optional directional execution gate.
+    # Disabled by default: research output must be validated before enforcement.
+    directional_gate = v9_2_directional_execution_gate(body=body, mode=mode)
+    if not directional_gate.get("ok", False):
+        write_trade_log(
+            body=body,
+            mode=mode,
+            risk_pct_used=risk_pct_used,
+            decision="DIRECTIONAL_REGIME_REJECTED",
+            decision_reason=directional_gate.get("reason", "DIRECTIONAL_REGIME_REJECTED"),
+            status="rejected_by_directional_regime_gate",
+        )
+
+        if NOTIFY_REJECTIONS:
+            safe_notify_event(
+                "🚫 Directional regime gate rejected signal",
+                short_event_line(strategy, symbol, side, mode, directional_gate.get("reason", "DIRECTIONAL_REGIME_REJECTED")),
+                important=True,
+            )
+
+        return ok(
+            {
+                "order_sent": False,
+                "decision": {
+                    **decision,
+                    "allow_order": False,
+                    "decision": "DIRECTIONAL_REGIME_REJECTED",
+                    "reason": directional_gate.get("reason", "DIRECTIONAL_REGIME_REJECTED"),
+                },
+                "directional_gate": directional_gate,
+                "msg": "Risk engine approved, but the optional directional market-regime gate rejected the signal.",
+            }
+        )
+
     quality = validate_order_quality(body)
     if not quality["ok"]:
         write_trade_log(
@@ -6326,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.1.3</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.2.0</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7375,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.1.3"
+APP_FEATURE_LEVEL = "9.2.0"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8825,7 +8859,7 @@ def supabase_trade_log_health(secret: str):
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan"]}
 
 
 # ============================================================
@@ -11463,3 +11497,1025 @@ def persistent_registry_schema_sql(secret: str):
         raise HTTPException(401, "Unauthorized")
     sql = """-- v9.1.0 generic persistent registry. Run once in Supabase SQL Editor.\ncreate table if not exists public.strategy_registry (\n  registry_type text not null,\n  registry_key text not null,\n  payload jsonb not null default '{}'::jsonb,\n  updated_at timestamptz not null default now(),\n  primary key (registry_type, registry_key)\n);\ncreate index if not exists strategy_registry_type_updated_idx\n  on public.strategy_registry (registry_type, updated_at desc);\nalter table public.strategy_registry enable row level security;\n-- The Render app uses SUPABASE_SERVICE_ROLE_KEY, which bypasses RLS.\n"""
     return HTMLResponse(f"<html><body><h1>Supabase persistent registry SQL</h1><pre>{h(sql)}</pre></body></html>")
+
+
+# ============================================================
+# v9.2.0 BEAR REGIME SHORT RESEARCH LAYER
+# ============================================================
+# Safety model:
+# - Research endpoints are active by default.
+# - SHORT candidates are not added automatically to strategy_state.json.
+# - TradingView validation remains mandatory before PAPER onboarding.
+# - Directional order enforcement is disabled by default.
+# - If explicitly enabled later, the directional execution gate applies
+#   only after the existing risk engine has approved an order.
+
+V92_SHORT_RESEARCH_ENABLED = os.getenv("V92_SHORT_RESEARCH_ENABLED", "true").lower() == "true"
+V92_SHORT_INTERVALS = os.getenv("V92_SHORT_INTERVALS", "60,240")
+V92_SHORT_MAX_SYMBOLS = int(os.getenv("V92_SHORT_MAX_SYMBOLS", "40"))
+V92_SHORT_KLINE_LIMIT = int(os.getenv("V92_SHORT_KLINE_LIMIT", "1000"))
+V92_SHORT_TOP_N = int(os.getenv("V92_SHORT_TOP_N", "60"))
+V92_SHORT_MIN_PF = float(os.getenv("V92_SHORT_MIN_PF", "1.15"))
+V92_SHORT_MIN_TRADES = int(os.getenv("V92_SHORT_MIN_TRADES", "10"))
+V92_SHORT_STRONG_MIN_PF = float(os.getenv("V92_SHORT_STRONG_MIN_PF", "1.40"))
+V92_SHORT_STRONG_MIN_TRADES = int(os.getenv("V92_SHORT_STRONG_MIN_TRADES", "20"))
+V92_DIRECTIONAL_EXECUTION_GATE_ENABLED = os.getenv("V92_DIRECTIONAL_EXECUTION_GATE_ENABLED", "false").lower() == "true"
+V92_BLOCK_LONG_IN_BEAR = os.getenv("V92_BLOCK_LONG_IN_BEAR", "true").lower() == "true"
+V92_BLOCK_SHORT_IN_BULL = os.getenv("V92_BLOCK_SHORT_IN_BULL", "true").lower() == "true"
+V92_BLOCK_MICRO_LIVE_IN_CHOPPY = os.getenv("V92_BLOCK_MICRO_LIVE_IN_CHOPPY", "true").lower() == "true"
+V92_REGIME_CACHE_TTL_SEC = int(os.getenv("V92_REGIME_CACHE_TTL_SEC", "300"))
+
+V92_SHORT_RESEARCH_FILE = APP_DIR / "v9_2_crypto_short_research.json"
+V92_REGIME_CACHE_FILE = APP_DIR / "v9_2_directional_regime_cache.json"
+
+
+def v9_2_short_research_label(row: Dict[str, Any]) -> str:
+    pf = row.get("profit_factor")
+    trades = v8_int(row.get("trade_count"), 0)
+    avg_r = v8_float(row.get("average_r"), 0.0)
+
+    if pf is None:
+        return "NO_PF"
+
+    try:
+        pf_value = float(pf)
+    except Exception:
+        return "NO_PF"
+
+    if trades < max(5, V92_SHORT_MIN_TRADES):
+        return "THIN_SAMPLE"
+
+    if pf_value >= V92_SHORT_STRONG_MIN_PF and trades >= V92_SHORT_STRONG_MIN_TRADES and avg_r > 0:
+        return "STRONG_SHORT_RESEARCH_CANDIDATE"
+
+    if pf_value >= V92_SHORT_MIN_PF and trades >= V92_SHORT_MIN_TRADES and avg_r > 0:
+        return "SHORT_RESEARCH_CANDIDATE"
+
+    if pf_value >= 1.0 and avg_r >= 0:
+        return "SHORT_WATCHLIST"
+
+    return "SHORT_REJECT"
+
+
+def v9_2_short_quality_rank(row: Dict[str, Any]) -> float:
+    pf = row.get("profit_factor")
+    pf_score = min(60.0, max(0.0, (v8_float(pf, 0.0) - 1.0) * 80.0)) if pf is not None else 0.0
+    trades = v8_int(row.get("trade_count"), 0)
+    trade_score = min(25.0, trades / 2.0)
+    avg_score = max(-20.0, min(20.0, v8_float(row.get("average_r"), 0.0) * 20.0))
+    current_score = min(15.0, max(0.0, v8_float(row.get("current_score"), 0.0) / 8.0))
+    alignment_bonus = 10.0 if row.get("regime_alignment") == "ALIGNED_BEAR" else 0.0
+    return round(pf_score + trade_score + avg_score + current_score + alignment_bonus, 4)
+
+
+def v9_2_regime_snapshot_for_symbol(symbol: str, interval: str = "60", limit: int = 300) -> Dict[str, Any]:
+    try:
+        candles = fetch_bybit_klines(symbol, interval=interval, limit=limit)
+        if len(candles) < 220:
+            return {
+                "ok": False,
+                "symbol": symbol,
+                "interval": interval,
+                "reason": "NOT_ENOUGH_CANDLES",
+                "count": len(candles),
+                "bull_score": 0.0,
+                "bear_score": 0.0,
+                "regime": "UNKNOWN",
+            }
+
+        ind = prepare_indicators(candles)
+        i = len(candles) - 1
+        c = candles[i]
+        close = c["close"]
+        ema20 = ind["ema20"][i]
+        ema50 = ind["ema50"][i]
+        ema200 = ind["ema200"][i]
+        ema50_prev = ind["ema50"][max(0, i - 5)]
+        plus_di = ind["plus_di"][i]
+        minus_di = ind["minus_di"][i]
+        adx = ind["adx14"][i]
+        rsi = ind["rsi14"][i]
+
+        bull = 0.0
+        bear = 0.0
+
+        if close > ema200:
+            bull += 25.0
+        elif close < ema200:
+            bear += 25.0
+
+        if ema20 > ema50:
+            bull += 20.0
+        elif ema20 < ema50:
+            bear += 20.0
+
+        if ema50 > ema50_prev:
+            bull += 15.0
+        elif ema50 < ema50_prev:
+            bear += 15.0
+
+        if plus_di >= minus_di:
+            bull += 10.0
+        else:
+            bear += 10.0
+
+        if rsi >= 55:
+            bull += 10.0
+        elif rsi <= 45:
+            bear += 10.0
+
+        trend_strength = min(20.0, max(0.0, float(adx)))
+        if bull > bear:
+            bull += trend_strength
+        elif bear > bull:
+            bear += trend_strength
+
+        spread = abs(bull - bear)
+        if bull >= 65.0 and bull >= bear + 15.0:
+            regime = "BULL"
+        elif bear >= 65.0 and bear >= bull + 15.0:
+            regime = "BEAR"
+        elif spread <= 12.0:
+            regime = "CHOPPY"
+        else:
+            regime = "TRANSITION"
+
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "interval": interval,
+            "regime": regime,
+            "bull_score": round(bull, 2),
+            "bear_score": round(bear, 2),
+            "details": {
+                "close": close,
+                "ema20": ema20,
+                "ema50": ema50,
+                "ema200": ema200,
+                "ema50_prev_5": ema50_prev,
+                "rsi": round(rsi, 2),
+                "adx": round(adx, 2),
+                "plus_di": round(plus_di, 2),
+                "minus_di": round(minus_di, 2),
+            },
+        }
+    except Exception as exc:
+        log(f"[WARN] v9.2 regime snapshot fallback {symbol} {interval}: {exc}")
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "interval": interval,
+            "reason": "REGIME_SNAPSHOT_EXCEPTION",
+            "error": str(exc),
+            "bull_score": 0.0,
+            "bear_score": 0.0,
+            "regime": "UNKNOWN",
+        }
+
+
+def v9_2_directional_market_regime(force: bool = False) -> Dict[str, Any]:
+    cached = read_json_file(V92_REGIME_CACHE_FILE, {})
+    if cached and not force:
+        age = v8_now_ts() - v8_int(cached.get("created_ts"), 0)
+        if age < max(30, V92_REGIME_CACHE_TTL_SEC):
+            return cached
+
+    snapshots = [
+        v9_2_regime_snapshot_for_symbol("BTCUSDT", "60", 300),
+        v9_2_regime_snapshot_for_symbol("BTCUSDT", "240", 300),
+        v9_2_regime_snapshot_for_symbol("ETHUSDT", "60", 300),
+        v9_2_regime_snapshot_for_symbol("ETHUSDT", "240", 300),
+    ]
+
+    weights = {
+        ("BTCUSDT", "60"): 0.35,
+        ("BTCUSDT", "240"): 0.35,
+        ("ETHUSDT", "60"): 0.15,
+        ("ETHUSDT", "240"): 0.15,
+    }
+
+    valid = [x for x in snapshots if x.get("ok")]
+    weight_total = 0.0
+    bull_weighted = 0.0
+    bear_weighted = 0.0
+
+    for snap in valid:
+        weight = weights.get((snap.get("symbol"), str(snap.get("interval"))), 0.0)
+        weight_total += weight
+        bull_weighted += v8_float(snap.get("bull_score"), 0.0) * weight
+        bear_weighted += v8_float(snap.get("bear_score"), 0.0) * weight
+
+    if weight_total > 0:
+        bull_score = bull_weighted / weight_total
+        bear_score = bear_weighted / weight_total
+    else:
+        bull_score = 0.0
+        bear_score = 0.0
+
+    spread = abs(bull_score - bear_score)
+
+    if len(valid) < 2:
+        regime = "UNKNOWN"
+    elif bull_score >= 62.0 and bull_score >= bear_score + 12.0:
+        regime = "BULL"
+    elif bear_score >= 62.0 and bear_score >= bull_score + 12.0:
+        regime = "BEAR"
+    elif spread <= 12.0:
+        regime = "CHOPPY"
+    else:
+        regime = "TRANSITION"
+
+    allow_long_research = regime in {"BULL", "TRANSITION", "CHOPPY"}
+    allow_short_research = regime in {"BEAR", "TRANSITION", "CHOPPY"}
+    preferred_direction = "LONG" if regime == "BULL" else "SHORT" if regime == "BEAR" else "NO_PREFERENCE"
+
+    result = {
+        "ok": bool(valid),
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "created_ts": v8_now_ts(),
+        "regime": regime,
+        "preferred_direction": preferred_direction,
+        "bull_score": round(bull_score, 2),
+        "bear_score": round(bear_score, 2),
+        "allow_long_research": allow_long_research,
+        "allow_short_research": allow_short_research,
+        "market_data_complete": len(valid) == len(snapshots),
+        "valid_snapshot_count": len(valid),
+        "snapshot_count": len(snapshots),
+        "snapshots": snapshots,
+    }
+
+    write_json_file(V92_REGIME_CACHE_FILE, result)
+    return result
+
+
+def v9_2_signal_for_family_short(candles: list, ind: Dict[str, Any], i: int, family: str) -> Optional[Dict[str, Any]]:
+    if i < 220:
+        return None
+
+    c = candles[i]
+    close = c["close"]
+    ema20 = ind["ema20"][i]
+    ema50 = ind["ema50"][i]
+    ema200 = ind["ema200"][i]
+    rsi = ind["rsi14"][i]
+    atr = ind["atr14"][i]
+    adx = ind["adx14"][i]
+    minus_di = ind["minus_di"][i]
+    plus_di = ind["plus_di"][i]
+    vol20 = ind["vol20"][i]
+    vol = c["volume"]
+
+    body = candle_body_pct(c)
+    is_red = c["close"] < c["open"]
+    recent_high8 = max(x["high"] for x in candles[max(0, i - 8): i + 1])
+    recent_low20 = min(x["low"] for x in candles[max(0, i - 20): i]) if i >= 20 else 0.0
+    prev_low = candles[i - 1]["low"] if i > 0 else c["low"]
+
+    if family == "trend_continuation":
+        ok = (
+            close < ema200
+            and ema20 < ema50
+            and ema50 < ind["ema50"][max(0, i - 5)]
+            and adx >= 20.0
+            and minus_di >= plus_di
+            and vol >= vol20 * 1.35
+            and (recent_high8 >= ema20 or recent_high8 >= ema50)
+            and close < ema20
+            and close < candles[i - 1]["close"]
+            and 28.0 <= rsi <= 50.0
+            and is_red
+            and body >= 35.0
+        )
+        if not ok:
+            return None
+        sl = close + atr * 1.5
+        risk = sl - close
+        return {
+            "family": family,
+            "side": "SHORT",
+            "entry": close,
+            "sl": sl,
+            "tp1": close - risk,
+            "tp2": close - risk * 2.1,
+        }
+
+    if family == "momentum_breakout":
+        break_level = recent_low20 * 0.9997
+        ok = (
+            close < ema50
+            and ema20 < ema50
+            and close < break_level
+            and vol >= vol20 * 1.20
+            and 22.0 <= rsi <= 45.0
+            and is_red
+            and body >= 45.0
+            and abs(close - ema20) / close * 100.0 <= 1.20
+        )
+        if not ok:
+            return None
+        sl = close + atr * 1.4
+        risk = sl - close
+        return {
+            "family": family,
+            "side": "SHORT",
+            "entry": close,
+            "sl": sl,
+            "tp1": close - risk,
+            "tp2": close - risk * 2.4,
+        }
+
+    if family == "trend_pullback":
+        ok = (
+            close < ema50
+            and ema20 < ema50
+            and close < ema200
+            and adx >= 20.0
+            and minus_di >= plus_di
+            and vol >= vol20 * 1.10
+            and (c["high"] >= ema20 or c["high"] >= ema50 or recent_high8 >= ema20)
+            and close < ema20
+            and close < prev_low
+            and 25.0 <= rsi <= 55.0
+            and is_red
+            and body >= 35.0
+        )
+        if not ok:
+            return None
+        sl = close + atr * 1.6
+        risk = sl - close
+        return {
+            "family": family,
+            "side": "SHORT",
+            "entry": close,
+            "sl": sl,
+            "tp1": close - risk,
+            "tp2": close - risk * 2.1,
+        }
+
+    return None
+
+
+def v9_2_score_current_short_opportunity(candles: list, family: str) -> Dict[str, Any]:
+    if len(candles) < 220:
+        return {"ok": False, "reason": "NOT_ENOUGH_CANDLES", "score": 0.0}
+
+    ind = prepare_indicators(candles)
+    i = len(candles) - 1
+    c = candles[i]
+    close = c["close"]
+    ema20 = ind["ema20"][i]
+    ema50 = ind["ema50"][i]
+    ema200 = ind["ema200"][i]
+    rsi = ind["rsi14"][i]
+    atr = ind["atr14"][i]
+    adx = ind["adx14"][i]
+    vol = c["volume"]
+    vol20 = ind["vol20"][i]
+    atr_pct = atr / close * 100.0 if close else 0.0
+
+    bear_score = 0.0
+    if close < ema200:
+        bear_score += 25.0
+    if ema20 < ema50:
+        bear_score += 25.0
+    if ema50 < ind["ema50"][max(0, i - 5)]:
+        bear_score += 20.0
+    if ind["minus_di"][i] >= ind["plus_di"][i]:
+        bear_score += 10.0
+    bear_score += min(20.0, max(0.0, adx))
+
+    momentum_score = max(0.0, 100.0 - abs(rsi - 40.0) * 2.5)
+    volume_score = min(100.0, (vol / max(vol20, 1e-9)) * 55.0)
+    volatility_score = 100.0 if 0.10 <= atr_pct <= 6.0 else max(0.0, 70.0 - abs(atr_pct - 3.0) * 10.0)
+
+    signal = v9_2_signal_for_family_short(candles, ind, i, family)
+    trigger_bonus = 20.0 if signal else 0.0
+
+    score = min(
+        100.0,
+        bear_score * 0.30
+        + momentum_score * 0.20
+        + volume_score * 0.20
+        + volatility_score * 0.15
+        + trigger_bonus,
+    )
+
+    if score >= 90:
+        recommendation = "SHORT_MICRO_REVIEW_CANDIDATE"
+    elif score >= 75:
+        recommendation = "STRONG_SHORT_PAPER_CANDIDATE"
+    elif score >= 60:
+        recommendation = "SHORT_PAPER_CANDIDATE"
+    elif score >= 40:
+        recommendation = "SHORT_WATCH"
+    else:
+        recommendation = "SHORT_IGNORE"
+
+    return {
+        "ok": True,
+        "family": family,
+        "side": "SHORT",
+        "score": round(score, 2),
+        "recommendation": recommendation,
+        "signal_now": bool(signal),
+        "signal": signal,
+        "details": {
+            "close": close,
+            "ema20": ema20,
+            "ema50": ema50,
+            "ema200": ema200,
+            "rsi": round(rsi, 2),
+            "adx": round(adx, 2),
+            "atr_pct": round(atr_pct, 3),
+            "volume_ratio": round(vol / max(vol20, 1e-9), 3),
+            "bear_score": round(bear_score, 2),
+            "momentum_score": round(momentum_score, 2),
+            "volume_score": round(volume_score, 2),
+            "volatility_score": round(volatility_score, 2),
+        },
+    }
+
+
+def v9_2_run_short_mini_backtest(candles: list, family: str, same_candle_rule: str = "SL_FIRST") -> Dict[str, Any]:
+    if len(candles) < 230:
+        return {"ok": False, "reason": "NOT_ENOUGH_CANDLES", "family": family, "side": "SHORT"}
+
+    ind = prepare_indicators(candles)
+    trades: list[Dict[str, Any]] = []
+    i = 220
+
+    while i < len(candles) - 2:
+        signal = v9_2_signal_for_family_short(candles, ind, i, family)
+        if not signal:
+            i += 1
+            continue
+
+        entry = signal["entry"]
+        sl = signal["sl"]
+        tp1 = signal["tp1"]
+        tp2 = signal["tp2"]
+        risk = sl - entry
+
+        if risk <= 0:
+            i += 1
+            continue
+
+        tp1_hit = False
+        terminal = None
+        terminal_i = None
+
+        for j in range(i + 1, len(candles)):
+            cj = candles[j]
+            sl_hit = cj["high"] >= sl
+            tp1_now = cj["low"] <= tp1
+            tp2_now = cj["low"] <= tp2
+
+            if not tp1_hit:
+                if sl_hit and tp1_now and same_candle_rule == "SL_FIRST":
+                    terminal = "LOSS_SL"
+                    terminal_i = j
+                    break
+                if sl_hit:
+                    terminal = "LOSS_SL"
+                    terminal_i = j
+                    break
+                if tp2_now:
+                    terminal = "WIN_TP2"
+                    terminal_i = j
+                    break
+                if tp1_now:
+                    tp1_hit = True
+                    continue
+            else:
+                if sl_hit and tp2_now and same_candle_rule == "SL_FIRST":
+                    terminal = "PARTIAL_TP1_THEN_SL"
+                    terminal_i = j
+                    break
+                if tp2_now:
+                    terminal = "WIN_TP2"
+                    terminal_i = j
+                    break
+                if sl_hit:
+                    terminal = "PARTIAL_TP1_THEN_SL"
+                    terminal_i = j
+                    break
+
+        if terminal is None:
+            terminal = "OPEN"
+            terminal_i = len(candles) - 1
+            r_value = 0.0
+        elif terminal == "LOSS_SL":
+            r_value = -1.0
+        elif terminal == "WIN_TP2":
+            tp1_r = (entry - tp1) / risk
+            tp2_r = (entry - tp2) / risk
+            r_value = 0.5 * tp1_r + 0.5 * tp2_r
+        else:
+            r_value = 0.0
+
+        trades.append(
+            {
+                "side": "SHORT",
+                "family": family,
+                "entry_i": i,
+                "exit_i": terminal_i,
+                "entry_time": candles[i]["start_ms"],
+                "exit_time": candles[terminal_i]["start_ms"] if terminal_i is not None else None,
+                "status": terminal,
+                "r": r_value,
+                "entry": entry,
+                "sl": sl,
+                "tp1": tp1,
+                "tp2": tp2,
+            }
+        )
+
+        i = max(i + 1, (terminal_i or i) + 1)
+
+    closed = [x for x in trades if x["status"] != "OPEN"]
+    wins = [x for x in closed if x["r"] > 0]
+    losses = [x for x in closed if x["r"] < 0]
+    gross_profit = sum(x["r"] for x in wins)
+    gross_loss = abs(sum(x["r"] for x in losses))
+    pf = gross_profit / gross_loss if gross_loss > 0 else (None if gross_profit == 0 else 999.0)
+    total_r = sum(x["r"] for x in closed)
+    average_r = total_r / len(closed) if closed else None
+
+    return {
+        "ok": True,
+        "family": family,
+        "side": "SHORT",
+        "trade_count": len(closed),
+        "open_count": len(trades) - len(closed),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": len(wins) / len(closed) * 100.0 if closed else None,
+        "profit_factor": pf,
+        "total_r": total_r,
+        "average_r": average_r,
+        "by_status": {status: sum(1 for x in trades if x["status"] == status) for status in sorted({x["status"] for x in trades})},
+        "latest_trades": trades[-10:],
+    }
+
+
+def v9_2_crypto_short_research(max_symbols: int = V92_SHORT_MAX_SYMBOLS, intervals: Optional[str] = None, force: bool = False) -> Dict[str, Any]:
+    if not V92_SHORT_RESEARCH_ENABLED:
+        return {"ok": False, "reason": "V92_SHORT_RESEARCH_DISABLED"}
+
+    interval_list = v9_parse_interval_list(intervals or V92_SHORT_INTERVALS)
+    cached = read_json_file(V92_SHORT_RESEARCH_FILE, {})
+
+    if cached and not force and cached.get("max_symbols") == max_symbols and cached.get("intervals") == interval_list:
+        age = v8_now_ts() - v8_int(cached.get("created_ts"), 0)
+        if age < max(900, UNIVERSE_CACHE_TTL_SEC):
+            return cached
+
+    universe = build_bybit_universe(force=False, max_symbols=max_symbols)
+    regime = v9_2_directional_market_regime(force=force)
+    rows: list[Dict[str, Any]] = []
+
+    for interval in interval_list:
+        for item in universe.get("items") or []:
+            symbol = item.get("symbol")
+            candles = fetch_bybit_klines(symbol, interval=interval, limit=V92_SHORT_KLINE_LIMIT)
+
+            if len(candles) < 230:
+                continue
+
+            for family in V8_STRATEGY_FAMILIES:
+                bt = v9_2_run_short_mini_backtest(candles, family)
+                current = v9_2_score_current_short_opportunity(candles, family)
+
+                row: Dict[str, Any] = {
+                    "market": "crypto_bybit_linear",
+                    "symbol": symbol,
+                    "timeframe": interval,
+                    "interval": interval,
+                    "family": family,
+                    "side": "SHORT",
+                    "profit_factor": bt.get("profit_factor"),
+                    "trade_count": bt.get("trade_count"),
+                    "open_count": bt.get("open_count"),
+                    "wins": bt.get("wins"),
+                    "losses": bt.get("losses"),
+                    "win_rate": bt.get("win_rate"),
+                    "total_r": bt.get("total_r"),
+                    "average_r": bt.get("average_r"),
+                    "by_status": bt.get("by_status"),
+                    "current_score": current.get("score"),
+                    "current_recommendation": current.get("recommendation"),
+                    "signal_now": current.get("signal_now"),
+                    "signal": current.get("signal"),
+                    "turnover24h": item.get("turnover24h"),
+                    "liquidity_score": item.get("liquidity_score"),
+                    "regime": regime.get("regime"),
+                    "regime_alignment": "ALIGNED_BEAR" if regime.get("regime") == "BEAR" else "NOT_BEAR",
+                    "execution_supported": True,
+                    "research_only": True,
+                    "requires_tradingview_validation": True,
+                    "requires_manual_approval": True,
+                }
+
+                row["research_label"] = v9_2_short_research_label(row)
+                row["rank_score"] = v9_2_short_quality_rank(row)
+                rows.append(row)
+
+    rows.sort(
+        key=lambda x: (
+            x.get("research_label") in {"STRONG_SHORT_RESEARCH_CANDIDATE", "SHORT_RESEARCH_CANDIDATE"},
+            x.get("regime_alignment") == "ALIGNED_BEAR",
+            x.get("rank_score") or 0.0,
+            x.get("turnover24h") or 0.0,
+        ),
+        reverse=True,
+    )
+
+    summary: Dict[str, Any] = {
+        "total": len(rows),
+        "by_label": {},
+        "by_timeframe": {},
+        "regime": regime.get("regime"),
+    }
+
+    for row in rows:
+        label = row.get("research_label")
+        timeframe = str(row.get("timeframe"))
+        summary["by_label"][label] = summary["by_label"].get(label, 0) + 1
+        summary["by_timeframe"][timeframe] = summary["by_timeframe"].get(timeframe, 0) + 1
+
+    result = {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "created_ts": v8_now_ts(),
+        "market": "crypto_bybit_linear",
+        "mode": "SHORT_RESEARCH_ONLY",
+        "max_symbols": max_symbols,
+        "intervals": interval_list,
+        "market_regime": regime,
+        "summary": summary,
+        "count": len(rows),
+        "top": rows[:V92_SHORT_TOP_N],
+        "rows": rows,
+        "safety": {
+            "auto_order_execution": False,
+            "auto_strategy_state_update": False,
+            "tradingview_validation_required": True,
+            "paper_only_after_manual_approval": True,
+        },
+    }
+
+    write_json_file(V92_SHORT_RESEARCH_FILE, result)
+    return result
+
+
+def v9_2_short_candidate_onboarding_plan(max_symbols: int = V92_SHORT_MAX_SYMBOLS, intervals: Optional[str] = None, force: bool = False) -> Dict[str, Any]:
+    research = v9_2_crypto_short_research(max_symbols=max_symbols, intervals=intervals, force=force)
+    rows = research.get("rows") or []
+    state = load_state()
+    plans: list[Dict[str, Any]] = []
+
+    existing = set()
+    for strategy_name, strategy_cfg in (state.get("strategies") or {}).items():
+        for symbol, symbol_cfg in (strategy_cfg.get("symbols") or {}).items():
+            for side, side_cfg in (symbol_cfg or {}).items():
+                if str((side_cfg or {}).get("mode", "OFF")).upper() != "OFF":
+                    existing.add((strategy_name, normalize_symbol(symbol), str(side).upper()))
+
+    for row in rows:
+        if row.get("research_label") not in {"STRONG_SHORT_RESEARCH_CANDIDATE", "SHORT_RESEARCH_CANDIDATE"}:
+            continue
+
+        symbol = normalize_symbol(row.get("symbol", ""))
+        family = str(row.get("family") or "unknown")
+        strategy_name = f"short_{family}_{symbol.lower()}_v1"
+        key = (strategy_name, symbol, "SHORT")
+
+        plans.append(
+            {
+                "action": "ALREADY_ACTIVE" if key in existing else "REVIEW_IN_TRADINGVIEW",
+                "strategy": strategy_name,
+                "symbol": symbol,
+                "side": "SHORT",
+                "family": family,
+                "timeframe": row.get("timeframe"),
+                "target_mode_after_validation": "PAPER",
+                "risk_pct": 0.05,
+                "profit_factor": row.get("profit_factor"),
+                "trade_count": row.get("trade_count"),
+                "win_rate": row.get("win_rate"),
+                "average_r": row.get("average_r"),
+                "rank_score": row.get("rank_score"),
+                "regime": row.get("regime"),
+                "regime_alignment": row.get("regime_alignment"),
+                "requires_tradingview_validation": True,
+                "requires_manual_approval": True,
+                "direct_live_execution": False,
+            }
+        )
+
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "count": len(plans),
+        "plans": plans[:50],
+        "safety": "Research output only. Validate manually in TradingView before adding any SHORT PAPER alert.",
+    }
+
+
+def v9_2_directional_performance(days: int = 30, limit: int = PAPER_OUTCOME_MAX_EVENTS) -> Dict[str, Any]:
+    safe_days = max(1, min(v8_int(days, 30), 60))
+    safe_limit = max(1, min(v8_int(limit, PAPER_OUTCOME_MAX_EVENTS), PAPER_OUTCOME_MAX_EVENTS))
+    events = fetch_paper_events_for_outcome(days=safe_days, limit=safe_limit)
+    outcomes = [evaluate_paper_trade(event) for event in events]
+
+    result: Dict[str, Any] = {
+        "LONG": {"count": 0, "closed_count": 0, "open_count": 0, "total_r": 0.0, "average_r_closed": None, "by_status": {}},
+        "SHORT": {"count": 0, "closed_count": 0, "open_count": 0, "total_r": 0.0, "average_r_closed": None, "by_status": {}},
+        "UNKNOWN": {"count": 0, "closed_count": 0, "open_count": 0, "total_r": 0.0, "average_r_closed": None, "by_status": {}},
+    }
+
+    for outcome in outcomes:
+        event = outcome.get("event") or {}
+        side = str(event.get("side") or "UNKNOWN").upper()
+        if side not in result:
+            side = "UNKNOWN"
+
+        bucket = result[side]
+        status = str(outcome.get("status") or "UNKNOWN")
+        bucket["count"] += 1
+        bucket["by_status"][status] = bucket["by_status"].get(status, 0) + 1
+
+        if status in {"OPEN", "OPEN_AFTER_TP1"}:
+            bucket["open_count"] += 1
+            continue
+
+        bucket["closed_count"] += 1
+        r_multiple = outcome.get("r_multiple")
+        if r_multiple is not None:
+            bucket["total_r"] += v8_float(r_multiple, 0.0)
+
+    for bucket in result.values():
+        if bucket["closed_count"]:
+            bucket["average_r_closed"] = bucket["total_r"] / bucket["closed_count"]
+
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "days": safe_days,
+        "count": len(outcomes),
+        "by_side": result,
+    }
+
+
+def v9_2_directional_execution_gate(body: Dict[str, Any], mode: str) -> Dict[str, Any]:
+    """
+    Optional order-level directional gate.
+    Disabled by default. When disabled it never blocks.
+    When enabled, it fails closed for MICRO/LIVE in unavailable or choppy regimes.
+    """
+    side = str(body.get("side") or "").upper()
+    mode_up = str(mode or "OFF").upper()
+
+    if not V92_DIRECTIONAL_EXECUTION_GATE_ENABLED:
+        return {
+            "ok": True,
+            "enabled": False,
+            "reason": "DIRECTIONAL_EXECUTION_GATE_DISABLED",
+        }
+
+    if mode_up not in {"MICRO", "LIVE"}:
+        return {
+            "ok": True,
+            "enabled": True,
+            "reason": "NON_EXECUTION_MODE_ALLOWED",
+            "mode": mode_up,
+        }
+
+    regime = v9_2_directional_market_regime(force=False)
+    market_regime = str(regime.get("regime") or "UNKNOWN").upper()
+
+    if market_regime == "UNKNOWN":
+        return {
+            "ok": False,
+            "enabled": True,
+            "reason": "MARKET_REGIME_UNKNOWN_FAIL_CLOSED",
+            "regime": regime,
+        }
+
+    if side == "LONG" and market_regime == "BEAR" and V92_BLOCK_LONG_IN_BEAR:
+        return {
+            "ok": False,
+            "enabled": True,
+            "reason": "LONG_BLOCKED_IN_BEAR_REGIME",
+            "regime": regime,
+        }
+
+    if side == "SHORT" and market_regime == "BULL" and V92_BLOCK_SHORT_IN_BULL:
+        return {
+            "ok": False,
+            "enabled": True,
+            "reason": "SHORT_BLOCKED_IN_BULL_REGIME",
+            "regime": regime,
+        }
+
+    if market_regime == "CHOPPY" and V92_BLOCK_MICRO_LIVE_IN_CHOPPY:
+        return {
+            "ok": False,
+            "enabled": True,
+            "reason": "MICRO_LIVE_BLOCKED_IN_CHOPPY_REGIME",
+            "regime": regime,
+        }
+
+    return {
+        "ok": True,
+        "enabled": True,
+        "reason": "DIRECTIONAL_REGIME_ALLOWED",
+        "side": side,
+        "mode": mode_up,
+        "regime": regime,
+    }
+
+
+@app.get("/v9_2_directional_market_regime")
+def v9_2_directional_market_regime_endpoint(secret: str, force: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_2_directional_market_regime(force=force)
+
+
+@app.get("/v9_2_crypto_short_research")
+def v9_2_crypto_short_research_endpoint(secret: str, max_symbols: int = V92_SHORT_MAX_SYMBOLS, intervals: str = V92_SHORT_INTERVALS, force: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_2_crypto_short_research(max_symbols=max_symbols, intervals=intervals, force=force)
+
+
+@app.get("/v9_2_crypto_short_research_dashboard", response_class=HTMLResponse)
+def v9_2_crypto_short_research_dashboard(secret: str, max_symbols: int = V92_SHORT_MAX_SYMBOLS, intervals: str = V92_SHORT_INTERVALS, force: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    data = v9_2_crypto_short_research(max_symbols=max_symbols, intervals=intervals, force=force)
+    summary = data.get("summary") or {}
+    regime = data.get("market_regime") or {}
+
+    rows = "".join(
+        [
+            f"<tr><td>{h(x.get('research_label'))}</td><td>{h(x.get('symbol'))}</td><td>{h(x.get('timeframe'))}</td><td>{h(x.get('family'))}</td><td>{fmt_num(x.get('profit_factor'))}</td><td>{x.get('trade_count') or ''}</td><td>{fmt_num(x.get('win_rate'))}</td><td>{fmt_num(x.get('average_r'))}</td><td>{fmt_num(x.get('current_score'))}</td><td>{h(x.get('regime_alignment'))}</td><td>{fmt_num(x.get('rank_score'))}</td><td>{'YES' if x.get('requires_tradingview_validation') else 'NO'}</td></tr>"
+            for x in (data.get("top") or [])
+        ]
+    )
+
+    return HTMLResponse(
+        f"""
+        <html>
+        <head>
+          <title>v9.2 Bear Regime SHORT Research</title>
+          <style>
+            body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+            .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+            table{{border-collapse:collapse;width:100%;background:white;font-size:13px}}
+            th{{background:#111827;color:white}}
+            td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}
+            .BEAR{{color:#991b1b;font-weight:bold}}
+            .BULL{{color:#047857;font-weight:bold}}
+            .CHOPPY,.TRANSITION{{color:#92400e;font-weight:bold}}
+          </style>
+        </head>
+        <body>
+          <h1>v9.2 Bear Regime SHORT Research</h1>
+          <div class="card">
+            <b>Mode:</b> SHORT RESEARCH ONLY — no automatic strategy_state update and no direct order execution.<br>
+            <b>Current directional market regime:</b> <span class="{h(regime.get('regime'))}">{h(regime.get('regime'))}</span> |
+            <b>Bull score:</b> {fmt_num(regime.get('bull_score'))} |
+            <b>Bear score:</b> {fmt_num(regime.get('bear_score'))}<br>
+            <b>Intervals:</b> {h(','.join(data.get('intervals') or []))} |
+            <b>Rows:</b> {data.get('count')} |
+            <b>Summary:</b> {h(summary)}
+          </div>
+          <table>
+            <tr>
+              <th>Label</th><th>Symbol</th><th>TF</th><th>Family</th><th>PF</th><th>Trades</th>
+              <th>Win %</th><th>Avg R</th><th>Current score</th><th>Regime alignment</th><th>Rank</th><th>TV validation</th>
+            </tr>
+            {rows}
+          </table>
+          <p>
+            <a href="/v9_2_short_candidate_onboarding_plan?secret={h(secret)}&max_symbols={max_symbols}&intervals={h(intervals)}">SHORT onboarding plan JSON</a> ·
+            <a href="/v9_2_directional_market_regime?secret={h(secret)}">Directional regime JSON</a> ·
+            <a href="/v9_2_directional_performance_dashboard?secret={h(secret)}&days=30">LONG / SHORT PAPER performance</a>
+          </p>
+        </body>
+        </html>
+        """
+    )
+
+
+@app.get("/v9_2_short_candidate_onboarding_plan")
+def v9_2_short_candidate_onboarding_plan_endpoint(secret: str, max_symbols: int = V92_SHORT_MAX_SYMBOLS, intervals: str = V92_SHORT_INTERVALS, force: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_2_short_candidate_onboarding_plan(max_symbols=max_symbols, intervals=intervals, force=force)
+
+
+@app.get("/v9_2_directional_performance")
+def v9_2_directional_performance_endpoint(secret: str, days: int = 30, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_2_directional_performance(days=days, limit=limit)
+
+
+@app.get("/v9_2_directional_performance_dashboard", response_class=HTMLResponse)
+def v9_2_directional_performance_dashboard(secret: str, days: int = 30, limit: int = PAPER_OUTCOME_MAX_EVENTS):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    data = v9_2_directional_performance(days=days, limit=limit)
+    rows = "".join(
+        [
+            f"<tr><td>{h(side)}</td><td>{bucket.get('count')}</td><td>{bucket.get('closed_count')}</td><td>{bucket.get('open_count')}</td><td>{fmt_num(bucket.get('total_r'))}</td><td>{fmt_num(bucket.get('average_r_closed'))}</td><td>{h(bucket.get('by_status'))}</td></tr>"
+            for side, bucket in (data.get("by_side") or {}).items()
+        ]
+    )
+
+    return HTMLResponse(
+        f"""
+        <html>
+        <head>
+          <title>v9.2 LONG / SHORT PAPER Performance</title>
+          <style>
+            body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+            table{{border-collapse:collapse;width:100%;background:white}}
+            th{{background:#111827;color:white}}
+            td,th{{padding:8px;border-bottom:1px solid #ddd;text-align:left}}
+          </style>
+        </head>
+        <body>
+          <h1>v9.2 LONG / SHORT PAPER Performance</h1>
+          <p>Days: {data.get('days')} | Outcomes: {data.get('count')}</p>
+          <table>
+            <tr><th>Side</th><th>Total</th><th>Closed</th><th>Open</th><th>Total R</th><th>Avg R</th><th>Status breakdown</th></tr>
+            {rows}
+          </table>
+          <p><a href="/v9_2_crypto_short_research_dashboard?secret={h(secret)}">SHORT research dashboard</a></p>
+        </body>
+        </html>
+        """
+    )
+
+
+@app.get("/v9_2_directional_execution_gate")
+def v9_2_directional_execution_gate_endpoint(secret: str, side: str = "LONG", mode: str = "MICRO"):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_2_directional_execution_gate(body={"side": side}, mode=mode)
+
+
+@app.get("/v9_2_control_panel", response_class=HTMLResponse)
+def v9_2_control_panel(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    regime = v9_2_directional_market_regime(force=False)
+    gate_status = {
+        "enabled": V92_DIRECTIONAL_EXECUTION_GATE_ENABLED,
+        "block_long_in_bear": V92_BLOCK_LONG_IN_BEAR,
+        "block_short_in_bull": V92_BLOCK_SHORT_IN_BULL,
+        "block_micro_live_in_choppy": V92_BLOCK_MICRO_LIVE_IN_CHOPPY,
+    }
+
+    return HTMLResponse(
+        f"""
+        <html>
+        <head>
+          <title>v9.2 Crypto Directional Control Panel</title>
+          <style>
+            body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+            .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+          </style>
+        </head>
+        <body>
+          <h1>v9.2 Crypto Directional Control Panel</h1>
+          <div class="card">
+            <b>Current regime:</b> {h(regime.get('regime'))}<br>
+            <b>Preferred direction:</b> {h(regime.get('preferred_direction'))}<br>
+            <b>Bull score:</b> {fmt_num(regime.get('bull_score'))}<br>
+            <b>Bear score:</b> {fmt_num(regime.get('bear_score'))}<br>
+            <b>Directional execution gate:</b> {h(gate_status)}<br>
+            <b>Safety:</b> Keep execution-gate enforcement disabled until SHORT research candidates have been validated manually in TradingView and collected PAPER outcomes.
+          </div>
+          <p>
+            <a href="/v9_2_crypto_short_research_dashboard?secret={h(secret)}">SHORT research dashboard</a> ·
+            <a href="/v9_2_directional_performance_dashboard?secret={h(secret)}&days=30">LONG / SHORT PAPER performance</a> ·
+            <a href="/v9_market_regime_gate?secret={h(secret)}&days=30&limit=1000">Existing risk gate</a>
+          </p>
+        </body>
+        </html>
+        """
+    )
+
