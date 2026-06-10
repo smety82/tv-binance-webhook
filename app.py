@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.2.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.2.1")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.2.0</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.2.1</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.2.0"
+APP_FEATURE_LEVEL = "9.2.1"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8859,7 +8859,7 @@ def supabase_trade_log_health(secret: str):
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan", "tv_validation_registry", "validation_aware_short_calibration", "calibrated_short_research_dashboard", "deduplicated_short_portfolio_proposal"]}
 
 
 # ============================================================
@@ -12513,6 +12513,622 @@ def v9_2_control_panel(secret: str):
             <a href="/v9_2_crypto_short_research_dashboard?secret={h(secret)}">SHORT research dashboard</a> ·
             <a href="/v9_2_directional_performance_dashboard?secret={h(secret)}&days=30">LONG / SHORT PAPER performance</a> ·
             <a href="/v9_market_regime_gate?secret={h(secret)}&days=30&limit=1000">Existing risk gate</a>
+          </p>
+        </body>
+        </html>
+        """
+    )
+
+
+# ============================================================
+# v9.2.1 TV-VALIDATION-AWARE SHORT CALIBRATION LAYER
+# ============================================================
+# Design decision:
+# - TradingView Strategy Tester remains the source of truth for promotion.
+# - Python mini-backtests remain a fast universe pre-filter.
+# - Manual TV validation rows calibrate the Python ranking and expose drift.
+# - No automatic PAPER onboarding and no direct execution are introduced.
+# - The calibrated proposal deduplicates correlated candidates by symbol.
+
+V921_TV_VALIDATION_FILE = APP_DIR / "v9_2_1_tv_short_validation_registry.json"
+V921_CALIBRATED_CACHE_FILE = APP_DIR / "v9_2_1_calibrated_short_research.json"
+
+V921_VALIDATED_MIN_TV_PF = float(os.getenv("V921_VALIDATED_MIN_TV_PF", "1.20"))
+V921_VALIDATED_MIN_TV_TRADES = int(os.getenv("V921_VALIDATED_MIN_TV_TRADES", "8"))
+V921_ESTIMATED_MIN_PF = float(os.getenv("V921_ESTIMATED_MIN_PF", "1.20"))
+V921_MAX_PORTFOLIO_PROPOSALS = int(os.getenv("V921_MAX_PORTFOLIO_PROPOSALS", "4"))
+V921_MAX_PER_SYMBOL = int(os.getenv("V921_MAX_PER_SYMBOL", "1"))
+V921_REQUIRE_TV_VALIDATION_FOR_PAPER = os.getenv("V921_REQUIRE_TV_VALIDATION_FOR_PAPER", "true").lower() == "true"
+
+# Seed rows derived from the manually exported TradingView Strategy Tester CSV files.
+# The values are deliberately stored as validation metadata rather than hardcoded
+# execution permissions. Every future validation can be imported through the API.
+V921_KNOWN_TV_VALIDATIONS = [
+    {
+        "symbol": "BTCUSDT",
+        "timeframe": "60",
+        "family": "trend_pullback",
+        "side": "SHORT",
+        "tv_profit_factor": None,
+        "tv_trades": 0,
+        "tv_win_rate": None,
+        "tv_net_pnl": 0.0,
+        "python_profit_factor": 1.8083,
+        "python_trades": 15,
+        "validation_status": "NO_TRADES",
+        "source": "manual_tradingview_csv_or_manual_check",
+        "note": "No TradingView Strategy Tester trade with the validated Pine profile.",
+    },
+    {
+        "symbol": "ETHUSDT",
+        "timeframe": "60",
+        "family": "trend_pullback",
+        "side": "SHORT",
+        "tv_profit_factor": 7.6666666667,
+        "tv_trades": 3,
+        "tv_win_rate": 66.6666666667,
+        "tv_net_pnl": 0.20,
+        "python_profit_factor": 2.5833,
+        "python_trades": 10,
+        "validation_status": "THIN_SAMPLE",
+        "source": "manual_tradingview_csv",
+        "note": "Positive but too few TV trades for PAPER onboarding.",
+    },
+    {
+        "symbol": "SOLUSDT",
+        "timeframe": "240",
+        "family": "trend_pullback",
+        "side": "SHORT",
+        "tv_profit_factor": 0.4393939394,
+        "tv_trades": 6,
+        "tv_win_rate": 50.0,
+        "tv_net_pnl": -0.37,
+        "python_profit_factor": 3.10,
+        "python_trades": 10,
+        "validation_status": "TV_REJECT",
+        "source": "manual_tradingview_csv",
+        "note": "Python pre-filter materially overestimated the Pine result.",
+    },
+    {
+        "symbol": "XRPUSDT",
+        "timeframe": "60",
+        "family": "trend_pullback",
+        "side": "SHORT",
+        "tv_profit_factor": 1.40,
+        "tv_trades": 9,
+        "tv_win_rate": 55.5555555556,
+        "tv_net_pnl": 0.24,
+        "python_profit_factor": 3.6167,
+        "python_trades": 10,
+        "validation_status": "TV_VALIDATED_PAPER_REVIEW",
+        "source": "manual_tradingview_csv",
+        "note": "TV PF above onboarding threshold with a still-small sample.",
+    },
+    {
+        "symbol": "SUIUSDT",
+        "timeframe": "60",
+        "family": "trend_pullback",
+        "side": "SHORT",
+        "tv_profit_factor": 0.7685950413,
+        "tv_trades": 9,
+        "tv_win_rate": 33.3333333333,
+        "tv_net_pnl": -0.28,
+        "python_profit_factor": 1.86,
+        "python_trades": 14,
+        "validation_status": "TV_REJECT",
+        "source": "manual_tradingview_csv",
+        "note": "TV did not confirm Python pre-filter profitability.",
+    },
+    {
+        "symbol": "LTCUSDT",
+        "timeframe": "60",
+        "family": "trend_pullback",
+        "side": "SHORT",
+        "tv_profit_factor": 0.3253968254,
+        "tv_trades": 11,
+        "tv_win_rate": 18.1818181818,
+        "tv_net_pnl": -0.85,
+        "python_profit_factor": 1.55,
+        "python_trades": 13,
+        "validation_status": "TV_REJECT",
+        "source": "manual_tradingview_csv",
+        "note": "Trend-pullback TV validation rejected.",
+    },
+    {
+        "symbol": "TONUSDT",
+        "timeframe": "60",
+        "family": "trend_pullback",
+        "side": "SHORT",
+        "tv_profit_factor": 0.0,
+        "tv_trades": 3,
+        "tv_win_rate": 0.0,
+        "tv_net_pnl": -0.99,
+        "python_profit_factor": 1.9375,
+        "python_trades": 10,
+        "validation_status": "TV_REJECT_THIN_SAMPLE",
+        "source": "manual_tradingview_csv",
+        "note": "Three TV losses; do not onboard.",
+    },
+    {
+        "symbol": "XRPUSDT",
+        "timeframe": "240",
+        "family": "trend_continuation",
+        "side": "SHORT",
+        "tv_profit_factor": 2.3909090909,
+        "tv_trades": 17,
+        "tv_win_rate": 70.5882352941,
+        "tv_net_pnl": 0.153,
+        "python_profit_factor": 2.5833,
+        "python_trades": 10,
+        "validation_status": "TV_VALIDATED_PAPER_REVIEW",
+        "source": "manual_tradingview_csv",
+        "note": "Best current validated SHORT incubation candidate.",
+    },
+    {
+        "symbol": "LTCUSDT",
+        "timeframe": "60",
+        "family": "trend_continuation",
+        "side": "SHORT",
+        "tv_profit_factor": 1.0142095915,
+        "tv_trades": 70,
+        "tv_win_rate": 42.8571428571,
+        "tv_net_pnl": 0.24,
+        "python_profit_factor": 2.17,
+        "python_trades": 14,
+        "validation_status": "TV_WATCHLIST",
+        "source": "manual_tradingview_csv",
+        "note": "Large TV sample but PF is too close to breakeven after execution costs.",
+    },
+]
+
+
+def v9_2_1_validation_key(row: Dict[str, Any]) -> str:
+    return "|".join(
+        [
+            normalize_symbol(str(row.get("symbol") or "")),
+            str(row.get("timeframe") or row.get("interval") or "").strip(),
+            str(row.get("family") or "").strip().lower(),
+            str(row.get("side") or "SHORT").strip().upper(),
+        ]
+    )
+
+
+def v9_2_1_load_tv_validation_registry() -> Dict[str, Any]:
+    data = read_json_file(V921_TV_VALIDATION_FILE, {})
+    rows = data.get("rows") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        rows = []
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": data.get("created_at") if isinstance(data, dict) else None,
+        "updated_at": data.get("updated_at") if isinstance(data, dict) else None,
+        "count": len(rows),
+        "rows": rows,
+    }
+
+
+def v9_2_1_save_tv_validation_registry(rows: list[Dict[str, Any]]) -> Dict[str, Any]:
+    dedup: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        item["symbol"] = normalize_symbol(str(item.get("symbol") or ""))
+        item["timeframe"] = str(item.get("timeframe") or item.get("interval") or "").strip()
+        item["family"] = str(item.get("family") or "").strip().lower()
+        item["side"] = str(item.get("side") or "SHORT").strip().upper()
+        item["updated_at"] = now_iso()
+        key = v9_2_1_validation_key(item)
+        if item["symbol"] and item["timeframe"] and item["family"]:
+            dedup[key] = item
+
+    payload = {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "count": len(dedup),
+        "rows": list(dedup.values()),
+    }
+    write_json_file(V921_TV_VALIDATION_FILE, payload)
+    return payload
+
+
+def v9_2_1_seed_tv_validations(overwrite: bool = False) -> Dict[str, Any]:
+    existing = v9_2_1_load_tv_validation_registry().get("rows") or []
+    if existing and not overwrite:
+        merged = existing + V921_KNOWN_TV_VALIDATIONS
+    else:
+        merged = list(V921_KNOWN_TV_VALIDATIONS)
+    saved = v9_2_1_save_tv_validation_registry(merged)
+    saved["seeded"] = len(V921_KNOWN_TV_VALIDATIONS)
+    return saved
+
+
+def v9_2_1_merge_tv_validations(new_rows: list[Dict[str, Any]]) -> Dict[str, Any]:
+    existing = v9_2_1_load_tv_validation_registry().get("rows") or []
+    return v9_2_1_save_tv_validation_registry(existing + list(new_rows or []))
+
+
+def v9_2_1_median(values: list[float], default: float = 0.50) -> float:
+    cleaned = sorted([float(x) for x in values if x is not None and math.isfinite(float(x))])
+    if not cleaned:
+        return default
+    n = len(cleaned)
+    mid = n // 2
+    if n % 2:
+        return cleaned[mid]
+    return (cleaned[mid - 1] + cleaned[mid]) / 2.0
+
+
+def v9_2_1_build_calibration_models(registry_rows: list[Dict[str, Any]]) -> Dict[str, Any]:
+    grouped: Dict[str, list[float]] = {}
+    grouped_trade_ratio: Dict[str, list[float]] = {}
+
+    for row in registry_rows:
+        py_pf = row.get("python_profit_factor")
+        tv_pf = row.get("tv_profit_factor")
+        py_trades = v8_int(row.get("python_trades"), 0)
+        tv_trades = v8_int(row.get("tv_trades"), 0)
+
+        if py_pf is None or tv_pf is None:
+            continue
+
+        try:
+            py_pf_f = float(py_pf)
+            tv_pf_f = float(tv_pf)
+        except Exception:
+            continue
+
+        if py_pf_f <= 0 or py_pf_f >= 900:
+            continue
+
+        family = str(row.get("family") or "").lower()
+        timeframe = str(row.get("timeframe") or "")
+        keys = [f"{family}|{timeframe}", f"{family}|*"]
+
+        # Clamp ratios so one outlier cannot dominate the calibration model.
+        ratio = max(0.0, min(1.25, tv_pf_f / py_pf_f))
+        trade_ratio = max(0.10, min(5.0, tv_trades / max(py_trades, 1)))
+
+        for key in keys:
+            grouped.setdefault(key, []).append(ratio)
+            grouped_trade_ratio.setdefault(key, []).append(trade_ratio)
+
+    models = {}
+    for key in sorted(set(grouped) | set(grouped_trade_ratio)):
+        samples = grouped.get(key) or []
+        trade_samples = grouped_trade_ratio.get(key) or []
+        models[key] = {
+            "pf_factor": round(v9_2_1_median(samples, 0.50), 6),
+            "trade_factor": round(v9_2_1_median(trade_samples, 1.0), 6),
+            "sample_count": max(len(samples), len(trade_samples)),
+            "confidence": "HIGH" if len(samples) >= 4 else "MEDIUM" if len(samples) >= 2 else "LOW",
+        }
+    return models
+
+
+def v9_2_1_find_model(models: Dict[str, Any], family: str, timeframe: str) -> Dict[str, Any]:
+    return (
+        models.get(f"{family}|{timeframe}")
+        or models.get(f"{family}|*")
+        or {"pf_factor": 0.50, "trade_factor": 1.0, "sample_count": 0, "confidence": "DEFAULT"}
+    )
+
+
+def v9_2_1_calibrated_label(row: Dict[str, Any]) -> str:
+    tv_status = row.get("tv_validation_status")
+    tv_pf = row.get("tv_profit_factor")
+    tv_trades = v8_int(row.get("tv_trades"), 0)
+
+    if tv_status in {"TV_REJECT", "TV_REJECT_THIN_SAMPLE", "NO_TRADES"}:
+        return "TV_REJECTED"
+
+    if tv_pf is not None and tv_trades >= V921_VALIDATED_MIN_TV_TRADES:
+        if v8_float(tv_pf, 0.0) >= V921_VALIDATED_MIN_TV_PF:
+            return "TV_VALIDATED_PAPER_REVIEW"
+        return "TV_WATCHLIST"
+
+    estimated_pf = v8_float(row.get("calibrated_estimated_pf"), 0.0)
+    py_trades = v8_int(row.get("trade_count"), 0)
+
+    if estimated_pf >= V921_ESTIMATED_MIN_PF and py_trades >= V92_SHORT_MIN_TRADES:
+        return "TV_VALIDATION_REQUIRED"
+
+    return "CALIBRATED_WATCHLIST"
+
+
+def v9_2_1_calibrated_short_research(
+    max_symbols: int = V92_SHORT_MAX_SYMBOLS,
+    intervals: Optional[str] = None,
+    force: bool = False,
+) -> Dict[str, Any]:
+    # Ensure the initial registry exists without overwriting future imports.
+    registry = v9_2_1_load_tv_validation_registry()
+    if not registry.get("rows"):
+        registry = v9_2_1_seed_tv_validations(overwrite=False)
+
+    validations = registry.get("rows") or []
+    validation_map = {v9_2_1_validation_key(x): x for x in validations}
+    models = v9_2_1_build_calibration_models(validations)
+
+    raw = v9_2_crypto_short_research(max_symbols=max_symbols, intervals=intervals, force=force)
+    raw_rows = raw.get("rows") or []
+    enriched: list[Dict[str, Any]] = []
+
+    for raw_row in raw_rows:
+        row = dict(raw_row)
+        symbol = normalize_symbol(str(row.get("symbol") or ""))
+        timeframe = str(row.get("timeframe") or row.get("interval") or "")
+        family = str(row.get("family") or "").lower()
+        side = str(row.get("side") or "SHORT").upper()
+        key = "|".join([symbol, timeframe, family, side])
+        validation = validation_map.get(key)
+        model = v9_2_1_find_model(models, family, timeframe)
+
+        py_pf = row.get("profit_factor")
+        if py_pf is None:
+            estimated_pf = None
+        else:
+            py_pf_f = v8_float(py_pf, 0.0)
+            estimated_pf = None if py_pf_f >= 900 else round(py_pf_f * v8_float(model.get("pf_factor"), 0.50), 6)
+
+        row.update(
+            {
+                "profile": "PINE_VALIDATION_AWARE_V1",
+                "python_profit_factor": py_pf,
+                "python_trades": row.get("trade_count"),
+                "calibration_model": model,
+                "calibrated_estimated_pf": estimated_pf,
+                "calibrated_estimated_trades": round(v8_float(row.get("trade_count"), 0.0) * v8_float(model.get("trade_factor"), 1.0), 2),
+                "tv_validated": bool(validation),
+                "tv_validation_status": validation.get("validation_status") if validation else None,
+                "tv_profit_factor": validation.get("tv_profit_factor") if validation else None,
+                "tv_trades": validation.get("tv_trades") if validation else None,
+                "tv_win_rate": validation.get("tv_win_rate") if validation else None,
+                "tv_net_pnl": validation.get("tv_net_pnl") if validation else None,
+                "tv_note": validation.get("note") if validation else None,
+                "tv_source": validation.get("source") if validation else None,
+            }
+        )
+
+        row["calibrated_label"] = v9_2_1_calibrated_label(row)
+
+        label_bonus = {
+            "TV_VALIDATED_PAPER_REVIEW": 100.0,
+            "TV_VALIDATION_REQUIRED": 35.0,
+            "TV_WATCHLIST": 10.0,
+            "CALIBRATED_WATCHLIST": 0.0,
+            "TV_REJECTED": -100.0,
+        }.get(row["calibrated_label"], 0.0)
+
+        row["calibrated_rank"] = round(
+            label_bonus
+            + v8_float(row.get("rank_score"), 0.0)
+            + min(25.0, max(0.0, v8_float(estimated_pf, 0.0) - 1.0) * 25.0),
+            4,
+        )
+        enriched.append(row)
+
+    enriched.sort(
+        key=lambda x: (
+            x.get("calibrated_label") == "TV_VALIDATED_PAPER_REVIEW",
+            x.get("calibrated_label") == "TV_VALIDATION_REQUIRED",
+            x.get("calibrated_rank") or -999.0,
+            x.get("turnover24h") or 0.0,
+        ),
+        reverse=True,
+    )
+
+    summary: Dict[str, Any] = {"total": len(enriched), "by_label": {}, "validation_rows": len(validations)}
+    for row in enriched:
+        label = row.get("calibrated_label")
+        summary["by_label"][label] = summary["by_label"].get(label, 0) + 1
+
+    result = {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "market_regime": raw.get("market_regime"),
+        "summary": summary,
+        "calibration_models": models,
+        "tv_validation_registry_count": len(validations),
+        "rows": enriched,
+        "top": enriched[:V92_SHORT_TOP_N],
+        "safety": {
+            "tradingview_is_source_of_truth_for_paper_review": True,
+            "automatic_strategy_state_update": False,
+            "direct_order_execution": False,
+            "manual_approval_required": True,
+        },
+    }
+    write_json_file(V921_CALIBRATED_CACHE_FILE, result)
+    return result
+
+
+def v9_2_1_short_portfolio_proposal(
+    max_symbols: int = V92_SHORT_MAX_SYMBOLS,
+    intervals: Optional[str] = None,
+    force: bool = False,
+) -> Dict[str, Any]:
+    research = v9_2_1_calibrated_short_research(max_symbols=max_symbols, intervals=intervals, force=force)
+    rows = research.get("rows") or []
+    selected: list[Dict[str, Any]] = []
+    used_symbols: set[str] = set()
+
+    # Only TV-confirmed candidates are eligible for the PAPER proposal.
+    # Estimated rows are listed separately for the next manual TV-validation round.
+    for row in rows:
+        if row.get("calibrated_label") != "TV_VALIDATED_PAPER_REVIEW":
+            continue
+        symbol = normalize_symbol(str(row.get("symbol") or ""))
+        if V921_MAX_PER_SYMBOL <= 1 and symbol in used_symbols:
+            continue
+
+        strategy = f"short_{str(row.get('family') or 'unknown').lower()}_{symbol.lower()}_{str(row.get('timeframe') or '').lower()}_v1"
+        selected.append(
+            {
+                "action": "MANUAL_PAPER_ONBOARDING_REVIEW",
+                "strategy": strategy,
+                "symbol": symbol,
+                "side": "SHORT",
+                "family": row.get("family"),
+                "timeframe": row.get("timeframe"),
+                "target_mode": "PAPER",
+                "risk_pct": 0.05,
+                "tv_profit_factor": row.get("tv_profit_factor"),
+                "tv_trades": row.get("tv_trades"),
+                "tv_win_rate": row.get("tv_win_rate"),
+                "python_profit_factor": row.get("python_profit_factor"),
+                "calibrated_estimated_pf": row.get("calibrated_estimated_pf"),
+                "regime_alignment": row.get("regime_alignment"),
+                "requires_manual_approval": True,
+                "direct_execution": False,
+            }
+        )
+        used_symbols.add(symbol)
+        if len(selected) >= max(1, V921_MAX_PORTFOLIO_PROPOSALS):
+            break
+
+    next_tv_validation = []
+    for row in rows:
+        if row.get("calibrated_label") != "TV_VALIDATION_REQUIRED":
+            continue
+        symbol = normalize_symbol(str(row.get("symbol") or ""))
+        if symbol in used_symbols:
+            continue
+        next_tv_validation.append(
+            {
+                "symbol": symbol,
+                "side": "SHORT",
+                "family": row.get("family"),
+                "timeframe": row.get("timeframe"),
+                "python_profit_factor": row.get("python_profit_factor"),
+                "calibrated_estimated_pf": row.get("calibrated_estimated_pf"),
+                "python_trades": row.get("python_trades"),
+                "calibrated_rank": row.get("calibrated_rank"),
+                "action": "VALIDATE_IN_TRADINGVIEW",
+            }
+        )
+        if len(next_tv_validation) >= 10:
+            break
+
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "count": len(selected),
+        "paper_onboarding_review": selected,
+        "next_tv_validation_round": next_tv_validation,
+        "safety": "No automatic onboarding. Create PAPER alerts only after manual review.",
+    }
+
+
+@app.get("/v9_2_1_tv_validation_registry")
+def v9_2_1_tv_validation_registry_endpoint(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    registry = v9_2_1_load_tv_validation_registry()
+    if not registry.get("rows"):
+        registry = v9_2_1_seed_tv_validations(overwrite=False)
+    return registry
+
+
+@app.post("/v9_2_1_seed_tv_validations")
+def v9_2_1_seed_tv_validations_endpoint(body: Dict[str, Any]):
+    if body.get("secret") != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_2_1_seed_tv_validations(overwrite=bool(body.get("overwrite", False)))
+
+
+@app.post("/v9_2_1_tv_validation_import")
+def v9_2_1_tv_validation_import_endpoint(body: Dict[str, Any]):
+    if body.get("secret") != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    rows = body.get("rows") or []
+    if not isinstance(rows, list):
+        raise HTTPException(400, "rows must be a list")
+    return v9_2_1_merge_tv_validations(rows)
+
+
+@app.get("/v9_2_1_calibrated_short_research")
+def v9_2_1_calibrated_short_research_endpoint(
+    secret: str,
+    max_symbols: int = V92_SHORT_MAX_SYMBOLS,
+    intervals: str = V92_SHORT_INTERVALS,
+    force: bool = False,
+):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_2_1_calibrated_short_research(max_symbols=max_symbols, intervals=intervals, force=force)
+
+
+@app.get("/v9_2_1_short_portfolio_proposal")
+def v9_2_1_short_portfolio_proposal_endpoint(
+    secret: str,
+    max_symbols: int = V92_SHORT_MAX_SYMBOLS,
+    intervals: str = V92_SHORT_INTERVALS,
+    force: bool = False,
+):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_2_1_short_portfolio_proposal(max_symbols=max_symbols, intervals=intervals, force=force)
+
+
+@app.get("/v9_2_1_calibrated_short_dashboard", response_class=HTMLResponse)
+def v9_2_1_calibrated_short_dashboard(
+    secret: str,
+    max_symbols: int = V92_SHORT_MAX_SYMBOLS,
+    intervals: str = V92_SHORT_INTERVALS,
+    force: bool = False,
+):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    data = v9_2_1_calibrated_short_research(max_symbols=max_symbols, intervals=intervals, force=force)
+    summary = data.get("summary") or {}
+    regime = data.get("market_regime") or {}
+
+    table_rows = "".join(
+        [
+            f"<tr><td>{h(x.get('calibrated_label'))}</td><td>{h(x.get('symbol'))}</td><td>{h(x.get('timeframe'))}</td><td>{h(x.get('family'))}</td><td>{fmt_num(x.get('python_profit_factor'))}</td><td>{x.get('python_trades') or ''}</td><td>{fmt_num(x.get('calibrated_estimated_pf'))}</td><td>{'YES' if x.get('tv_validated') else 'NO'}</td><td>{fmt_num(x.get('tv_profit_factor'))}</td><td>{x.get('tv_trades') if x.get('tv_trades') is not None else ''}</td><td>{h(x.get('tv_validation_status'))}</td><td>{fmt_num(x.get('calibrated_rank'))}</td></tr>"
+            for x in (data.get("top") or [])
+        ]
+    )
+
+    return HTMLResponse(
+        f"""
+        <html>
+        <head>
+          <title>v9.2.1 TV-Validation-Aware SHORT Calibration</title>
+          <style>
+            body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+            .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+            table{{border-collapse:collapse;width:100%;background:white;font-size:13px}}
+            th{{background:#111827;color:white}}
+            td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}
+          </style>
+        </head>
+        <body>
+          <h1>v9.2.1 TV-Validation-Aware SHORT Calibration</h1>
+          <div class="card">
+            <b>Market regime:</b> {h(regime.get('regime'))} |
+            <b>TV registry rows:</b> {data.get('tv_validation_registry_count')} |
+            <b>Summary:</b> {h(summary)}<br>
+            <b>Decision rule:</b> TradingView remains the source of truth. Python rows are prioritization estimates until TV validation confirms them.
+          </div>
+          <table>
+            <tr>
+              <th>Label</th><th>Symbol</th><th>TF</th><th>Family</th><th>Python PF</th><th>Py trades</th>
+              <th>Calibrated est. PF</th><th>TV checked</th><th>TV PF</th><th>TV trades</th><th>TV status</th><th>Rank</th>
+            </tr>
+            {table_rows}
+          </table>
+          <p>
+            <a href="/v9_2_1_short_portfolio_proposal?secret={h(secret)}&max_symbols={max_symbols}&intervals={h(intervals)}">Deduplicated SHORT portfolio proposal JSON</a> ·
+            <a href="/v9_2_1_tv_validation_registry?secret={h(secret)}">TV validation registry JSON</a> ·
+            <a href="/v9_2_crypto_short_research_dashboard?secret={h(secret)}&max_symbols={max_symbols}&intervals={h(intervals)}">Raw v9.2 scanner</a>
           </p>
         </body>
         </html>
