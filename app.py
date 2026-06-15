@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.2.1")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.2.1</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.3.0</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.2.1"
+APP_FEATURE_LEVEL = "9.3.0"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8859,7 +8859,7 @@ def supabase_trade_log_health(secret: str):
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan", "tv_validation_registry", "validation_aware_short_calibration", "calibrated_short_research_dashboard", "deduplicated_short_portfolio_proposal"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan", "tv_validation_registry", "validation_aware_short_calibration", "calibrated_short_research_dashboard", "deduplicated_short_portfolio_proposal", "micro_pilot_watchdog", "bull_regime_long_expansion_scanner", "wld_micro_pilot_guardrails", "telegram_watchdog_alerts", "long_candidate_onboarding_plan"]}
 
 
 # ============================================================
@@ -13129,6 +13129,670 @@ def v9_2_1_calibrated_short_dashboard(
             <a href="/v9_2_1_short_portfolio_proposal?secret={h(secret)}&max_symbols={max_symbols}&intervals={h(intervals)}">Deduplicated SHORT portfolio proposal JSON</a> ·
             <a href="/v9_2_1_tv_validation_registry?secret={h(secret)}">TV validation registry JSON</a> ·
             <a href="/v9_2_crypto_short_research_dashboard?secret={h(secret)}&max_symbols={max_symbols}&intervals={h(intervals)}">Raw v9.2 scanner</a>
+          </p>
+        </body>
+        </html>
+        """
+    )
+
+
+# ============================================================
+# v9.3.0 MICRO PILOT WATCHDOG + BULL REGIME LONG EXPANSION
+# ============================================================
+# Safety model:
+# - The WLD MICRO pilot is supervised but not auto-disabled by default.
+# - The watchdog sends Telegram alerts and dashboard recommendations.
+# - LONG expansion is research-only. No automatic PAPER/MICRO onboarding.
+# - TradingView validation remains mandatory before adding a new PAPER alert.
+
+V930_WATCHDOG_ENABLED = os.getenv("V930_WATCHDOG_ENABLED", "true").lower() == "true"
+V930_WATCHDOG_NOTIFY_TELEGRAM = os.getenv("V930_WATCHDOG_NOTIFY_TELEGRAM", "true").lower() == "true"
+V930_WATCHDOG_AUTO_ACTIONS = os.getenv("V930_WATCHDOG_AUTO_ACTIONS", "false").lower() == "true"
+V930_WATCHDOG_LOOKBACK_DAYS = int(os.getenv("V930_WATCHDOG_LOOKBACK_DAYS", "30"))
+V930_MICRO_STRATEGY = os.getenv("V930_MICRO_STRATEGY", "trend_continuation_wld_v11")
+V930_MICRO_SYMBOL = normalize_symbol(os.getenv("V930_MICRO_SYMBOL", "WLDUSDT"))
+V930_MICRO_SIDE = os.getenv("V930_MICRO_SIDE", "LONG").upper()
+V930_MICRO_MIN_REVIEW_TRADES = int(os.getenv("V930_MICRO_MIN_REVIEW_TRADES", "5"))
+V930_MICRO_STOP_AFTER_CONSECUTIVE_SL = int(os.getenv("V930_MICRO_STOP_AFTER_CONSECUTIVE_SL", "2"))
+V930_MICRO_NEGATIVE_AVG_R_STOP = float(os.getenv("V930_MICRO_NEGATIVE_AVG_R_STOP", "0.0"))
+V930_MICRO_MAX_ACTIVE_COUNT = int(os.getenv("V930_MICRO_MAX_ACTIVE_COUNT", "1"))
+V930_WATCHDOG_STATE_FILE = APP_DIR / "v9_3_0_micro_watchdog_state.json"
+
+V930_LONG_RESEARCH_ENABLED = os.getenv("V930_LONG_RESEARCH_ENABLED", "true").lower() == "true"
+V930_LONG_INTERVALS = os.getenv("V930_LONG_INTERVALS", "60,240")
+V930_LONG_MAX_SYMBOLS = int(os.getenv("V930_LONG_MAX_SYMBOLS", "40"))
+V930_LONG_KLINE_LIMIT = int(os.getenv("V930_LONG_KLINE_LIMIT", "1000"))
+V930_LONG_TOP_N = int(os.getenv("V930_LONG_TOP_N", "60"))
+V930_LONG_MIN_PF = float(os.getenv("V930_LONG_MIN_PF", "1.20"))
+V930_LONG_MIN_TRADES = int(os.getenv("V930_LONG_MIN_TRADES", "10"))
+V930_LONG_STRONG_MIN_PF = float(os.getenv("V930_LONG_STRONG_MIN_PF", "1.50"))
+V930_LONG_STRONG_MIN_TRADES = int(os.getenv("V930_LONG_STRONG_MIN_TRADES", "20"))
+V930_LONG_RESEARCH_FILE = APP_DIR / "v9_3_0_bull_long_research.json"
+
+
+def v9_3_0_compute_consecutive_losses(outcomes: list[Dict[str, Any]]) -> int:
+    count = 0
+    # Outcomes usually arrive in event-time order from latest? Be defensive:
+    ordered = sorted(
+        outcomes,
+        key=lambda x: (
+            ((x.get("event") or {}).get("created_at") or ""),
+            ((x.get("event") or {}).get("timestamp") or ""),
+            ((x.get("event") or {}).get("time") or ""),
+        ),
+        reverse=True,
+    )
+    for outcome in ordered:
+        status = str(outcome.get("status") or "")
+        if status in {"OPEN", "OPEN_AFTER_TP1"}:
+            continue
+        r_multiple = outcome.get("r_multiple")
+        if status == "LOSS_SL" or (r_multiple is not None and v8_float(r_multiple, 0.0) < 0):
+            count += 1
+        else:
+            break
+    return count
+
+
+def v9_3_0_micro_pilot_outcomes(days: int = V930_WATCHDOG_LOOKBACK_DAYS, limit: int = PAPER_OUTCOME_MAX_EVENTS) -> Dict[str, Any]:
+    safe_days = max(1, min(v8_int(days, V930_WATCHDOG_LOOKBACK_DAYS), 90))
+    safe_limit = max(1, min(v8_int(limit, PAPER_OUTCOME_MAX_EVENTS), PAPER_OUTCOME_MAX_EVENTS))
+    events = fetch_paper_events_for_outcome(days=safe_days, limit=safe_limit)
+    outcomes = []
+
+    for event in events:
+        strategy = str(event.get("strategy") or event.get("strategy_id") or "")
+        symbol = normalize_symbol(str(event.get("symbol") or ""))
+        side = str(event.get("side") or "").upper()
+        mode = str(event.get("mode") or "").upper()
+
+        if strategy == V930_MICRO_STRATEGY and symbol == V930_MICRO_SYMBOL and side == V930_MICRO_SIDE:
+            outcome = evaluate_paper_trade(event)
+            outcome["event_mode"] = mode
+            outcomes.append(outcome)
+
+    closed = [x for x in outcomes if str(x.get("status") or "") not in {"OPEN", "OPEN_AFTER_TP1"}]
+    wins = [x for x in closed if v8_float(x.get("r_multiple"), 0.0) > 0]
+    losses = [x for x in closed if v8_float(x.get("r_multiple"), 0.0) < 0]
+    total_r = sum(v8_float(x.get("r_multiple"), 0.0) for x in closed)
+    avg_r = total_r / len(closed) if closed else None
+
+    return {
+        "ok": True,
+        "strategy": V930_MICRO_STRATEGY,
+        "symbol": V930_MICRO_SYMBOL,
+        "side": V930_MICRO_SIDE,
+        "days": safe_days,
+        "count": len(outcomes),
+        "closed_count": len(closed),
+        "open_count": len(outcomes) - len(closed),
+        "wins": len(wins),
+        "losses": len(losses),
+        "total_r": total_r,
+        "average_r_closed": avg_r,
+        "consecutive_losses": v9_3_0_compute_consecutive_losses(outcomes),
+        "by_status": {status: sum(1 for x in outcomes if x.get("status") == status) for status in sorted({x.get("status") for x in outcomes})},
+        "latest": outcomes[-10:],
+    }
+
+
+def v9_3_0_active_micro_live_items(state: Optional[Dict[str, Any]] = None) -> list[Dict[str, Any]]:
+    state = state or load_state()
+    rows = []
+    for strategy_name, strategy_cfg in (state.get("strategies") or {}).items():
+        if not strategy_cfg or strategy_cfg.get("enabled") is False:
+            continue
+        for symbol, symbol_cfg in (strategy_cfg.get("symbols") or {}).items():
+            for side, side_cfg in (symbol_cfg or {}).items():
+                mode = str((side_cfg or {}).get("mode", "OFF")).upper()
+                if mode in {"MICRO", "LIVE"}:
+                    rows.append(
+                        {
+                            "strategy": strategy_name,
+                            "symbol": normalize_symbol(str(symbol)),
+                            "side": str(side).upper(),
+                            "mode": mode,
+                            "risk_pct": v8_float((side_cfg or {}).get("risk_pct"), 0.0),
+                        }
+                    )
+    return rows
+
+
+def v9_3_0_micro_pilot_watchdog(days: int = V930_WATCHDOG_LOOKBACK_DAYS, notify: bool = False) -> Dict[str, Any]:
+    if not V930_WATCHDOG_ENABLED:
+        return {"ok": False, "reason": "V930_WATCHDOG_DISABLED"}
+
+    state = load_state()
+    active_micro = v9_3_0_active_micro_live_items(state)
+    micro_outcomes = v9_3_0_micro_pilot_outcomes(days=days)
+    gate = None
+    regime = None
+    reasons = []
+    actions = []
+
+    try:
+        gate = v9_market_regime_gate(secret=SHARED_SECRET, days=days, limit=PAPER_OUTCOME_MAX_EVENTS)
+    except Exception as exc:
+        gate = {"ok": False, "error": str(exc)}
+        reasons.append(f"MARKET_GATE_UNAVAILABLE:{exc}")
+
+    try:
+        regime = v9_2_directional_market_regime(force=False)
+    except Exception as exc:
+        regime = {"ok": False, "error": str(exc)}
+        reasons.append(f"DIRECTIONAL_REGIME_UNAVAILABLE:{exc}")
+
+    # Active MICRO count guard.
+    if len(active_micro) > V930_MICRO_MAX_ACTIVE_COUNT:
+        reasons.append(f"TOO_MANY_ACTIVE_MICRO_{len(active_micro)}")
+        actions.append("REDUCE_ACTIVE_MICRO_COUNT")
+
+    # Ensure the active MICRO item is the intended pilot only.
+    for item in active_micro:
+        if not (
+            item.get("strategy") == V930_MICRO_STRATEGY
+            and item.get("symbol") == V930_MICRO_SYMBOL
+            and item.get("side") == V930_MICRO_SIDE
+        ):
+            reasons.append(f"UNEXPECTED_MICRO_{item.get('strategy')}|{item.get('symbol')}|{item.get('side')}")
+            actions.append("DISABLE_UNEXPECTED_MICRO")
+
+    # Performance guardrails.
+    if micro_outcomes.get("consecutive_losses", 0) >= V930_MICRO_STOP_AFTER_CONSECUTIVE_SL:
+        reasons.append(f"MICRO_CONSECUTIVE_LOSSES_{micro_outcomes.get('consecutive_losses')}")
+        actions.append("DOWNGRADE_WLD_MICRO_TO_PAPER")
+
+    if micro_outcomes.get("closed_count", 0) >= V930_MICRO_MIN_REVIEW_TRADES:
+        avg_r = micro_outcomes.get("average_r_closed")
+        if avg_r is not None and avg_r < V930_MICRO_NEGATIVE_AVG_R_STOP:
+            reasons.append(f"MICRO_AVG_R_NEGATIVE_{round(avg_r, 4)}")
+            actions.append("DOWNGRADE_WLD_MICRO_TO_PAPER")
+
+    # Market guardrails.
+    gate_level = str((gate or {}).get("gate_level") or "UNKNOWN").upper()
+    if gate_level in {"ELEVATED", "HIGH", "BLOCK"}:
+        reasons.append(f"MARKET_GATE_{gate_level}")
+        actions.append("PAUSE_MICRO_REVIEW")
+
+    market_regime = str((regime or {}).get("regime") or "UNKNOWN").upper()
+    if market_regime in {"BEAR", "CHOPPY", "UNKNOWN"}:
+        reasons.append(f"DIRECTIONAL_REGIME_{market_regime}")
+        actions.append("DOWNGRADE_OR_PAUSE_LONG_MICRO")
+
+    if not reasons:
+        level = "OK"
+        recommendation = "KEEP_WLD_MICRO_PILOT"
+    elif any(action.startswith("DOWNGRADE") or action.startswith("DISABLE") for action in actions):
+        level = "CRITICAL"
+        recommendation = "DOWNGRADE_WLD_MICRO_TO_PAPER_OR_DISABLE_UNEXPECTED_MICRO"
+    else:
+        level = "WATCH"
+        recommendation = "MANUAL_REVIEW_REQUIRED"
+
+    result = {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "watchdog_enabled": V930_WATCHDOG_ENABLED,
+        "auto_actions_enabled": V930_WATCHDOG_AUTO_ACTIONS,
+        "level": level,
+        "recommendation": recommendation,
+        "reasons": reasons,
+        "actions": list(dict.fromkeys(actions)),
+        "active_micro_live_count": len(active_micro),
+        "active_micro_live_items": active_micro,
+        "micro_pilot": micro_outcomes,
+        "market_gate": {
+            "ok": (gate or {}).get("ok"),
+            "gate_level": (gate or {}).get("gate_level"),
+            "allow_new_micro": (gate or {}).get("allow_new_micro"),
+            "recommendation": (gate or {}).get("recommendation"),
+        },
+        "directional_regime": {
+            "ok": (regime or {}).get("ok"),
+            "regime": (regime or {}).get("regime"),
+            "preferred_direction": (regime or {}).get("preferred_direction"),
+            "bull_score": (regime or {}).get("bull_score"),
+            "bear_score": (regime or {}).get("bear_score"),
+        },
+        "guardrails": {
+            "max_active_micro": V930_MICRO_MAX_ACTIVE_COUNT,
+            "stop_after_consecutive_sl": V930_MICRO_STOP_AFTER_CONSECUTIVE_SL,
+            "min_review_trades": V930_MICRO_MIN_REVIEW_TRADES,
+            "negative_avg_r_stop": V930_MICRO_NEGATIVE_AVG_R_STOP,
+        },
+    }
+
+    previous = read_json_file(V930_WATCHDOG_STATE_FILE, {})
+    previous_level = str(previous.get("level") or "")
+    previous_reasons = previous.get("reasons") or []
+
+    should_notify = (
+        notify
+        and V930_WATCHDOG_NOTIFY_TELEGRAM
+        and (
+            result["level"] != "OK"
+            or previous_level != result["level"]
+            or previous_reasons != result["reasons"]
+        )
+    )
+
+    if should_notify:
+        try:
+            safe_notify_event(
+                f"🛡️ MICRO Pilot Watchdog: {result['level']}",
+                f"{result['recommendation']}\nReasons: {', '.join(result['reasons']) if result['reasons'] else 'none'}\nActive MICRO: {len(active_micro)}\nWLD closed: {micro_outcomes.get('closed_count')} AvgR: {micro_outcomes.get('average_r_closed')}",
+                important=result["level"] in {"WATCH", "CRITICAL"},
+            )
+            result["telegram_notified"] = True
+        except Exception as exc:
+            result["telegram_notified"] = False
+            result["telegram_error"] = str(exc)
+
+    write_json_file(V930_WATCHDOG_STATE_FILE, result)
+    return result
+
+
+def v9_3_0_long_research_label(row: Dict[str, Any]) -> str:
+    pf = row.get("profit_factor")
+    trades = v8_int(row.get("trade_count"), 0)
+    avg_r = row.get("average_r")
+
+    if pf is None:
+        return "NO_PF"
+
+    pf_value = v8_float(pf, 0.0)
+    avg_r_value = v8_float(avg_r, 0.0)
+
+    if trades < V930_LONG_MIN_TRADES:
+        return "THIN_SAMPLE"
+
+    if pf_value >= V930_LONG_STRONG_MIN_PF and trades >= V930_LONG_STRONG_MIN_TRADES and avg_r_value > 0:
+        return "STRONG_LONG_RESEARCH_CANDIDATE"
+
+    if pf_value >= V930_LONG_MIN_PF and trades >= V930_LONG_MIN_TRADES and avg_r_value > 0:
+        return "LONG_RESEARCH_CANDIDATE"
+
+    if pf_value >= 1.0 and avg_r_value >= 0:
+        return "LONG_WATCHLIST"
+
+    return "LONG_REJECT"
+
+
+def v9_3_0_long_quality_rank(row: Dict[str, Any]) -> float:
+    pf = row.get("profit_factor")
+    pf_score = min(60.0, max(0.0, (v8_float(pf, 0.0) - 1.0) * 80.0)) if pf is not None else 0.0
+    trades = v8_int(row.get("trade_count"), 0)
+    trade_score = min(25.0, trades / 2.0)
+    avg_score = max(-20.0, min(20.0, v8_float(row.get("average_r"), 0.0) * 20.0))
+    current_score = min(15.0, max(0.0, v8_float(row.get("current_score"), 0.0) / 8.0))
+    alignment_bonus = 10.0 if row.get("regime_alignment") == "ALIGNED_BULL" else 0.0
+    return round(pf_score + trade_score + avg_score + current_score + alignment_bonus, 4)
+
+
+def v9_3_0_long_strategy_name(family: str, symbol: str, timeframe: str) -> str:
+    return f"long_{str(family or 'unknown').lower()}_{normalize_symbol(symbol).lower()}_{str(timeframe)}_v1"
+
+
+def v9_3_0_crypto_long_research(max_symbols: int = V930_LONG_MAX_SYMBOLS, intervals: Optional[str] = None, force: bool = False) -> Dict[str, Any]:
+    if not V930_LONG_RESEARCH_ENABLED:
+        return {"ok": False, "reason": "V930_LONG_RESEARCH_DISABLED"}
+
+    interval_list = v9_parse_interval_list(intervals or V930_LONG_INTERVALS)
+    cached = read_json_file(V930_LONG_RESEARCH_FILE, {})
+    if cached and not force and cached.get("max_symbols") == max_symbols and cached.get("intervals") == interval_list:
+        age = v8_now_ts() - v8_int(cached.get("created_ts"), 0)
+        if age < max(900, UNIVERSE_CACHE_TTL_SEC):
+            return cached
+
+    regime = v9_2_directional_market_regime(force=force)
+    universe = build_bybit_universe(force=False, max_symbols=max_symbols)
+    rows = []
+
+    for interval in interval_list:
+        for item in universe.get("items") or []:
+            symbol = item.get("symbol")
+            try:
+                candles = fetch_bybit_klines(symbol, interval=interval, limit=V930_LONG_KLINE_LIMIT)
+            except Exception as exc:
+                log(f"[WARN] v9.3 long research kline failed {symbol} {interval}: {exc}")
+                continue
+
+            if len(candles) < 230:
+                continue
+
+            for family in V8_STRATEGY_FAMILIES:
+                try:
+                    bt = v8_run_mini_backtest(candles, family)
+                    current = v8_score_current_opportunity(candles, family)
+                except Exception as exc:
+                    log(f"[WARN] v9.3 long research failed {symbol} {interval} {family}: {exc}")
+                    continue
+
+                row = {
+                    "market": "crypto_bybit_linear",
+                    "symbol": symbol,
+                    "timeframe": interval,
+                    "interval": interval,
+                    "family": family,
+                    "side": "LONG",
+                    "profit_factor": bt.get("profit_factor"),
+                    "trade_count": bt.get("trade_count"),
+                    "open_count": bt.get("open_count"),
+                    "wins": bt.get("wins"),
+                    "losses": bt.get("losses"),
+                    "win_rate": bt.get("win_rate"),
+                    "total_r": bt.get("total_r"),
+                    "average_r": bt.get("average_r"),
+                    "by_status": bt.get("by_status"),
+                    "current_score": current.get("score"),
+                    "current_recommendation": current.get("recommendation"),
+                    "signal_now": current.get("signal_now"),
+                    "signal": current.get("signal"),
+                    "turnover24h": item.get("turnover24h"),
+                    "liquidity_score": item.get("liquidity_score"),
+                    "regime": regime.get("regime"),
+                    "regime_alignment": "ALIGNED_BULL" if regime.get("regime") == "BULL" else "NOT_BULL",
+                    "execution_supported": True,
+                    "research_only": True,
+                    "requires_tradingview_validation": True,
+                    "requires_manual_approval": True,
+                }
+                row["research_label"] = v9_3_0_long_research_label(row)
+                row["rank_score"] = v9_3_0_long_quality_rank(row)
+                row["suggested_strategy_name"] = v9_3_0_long_strategy_name(family, symbol, interval)
+                rows.append(row)
+
+    rows.sort(
+        key=lambda x: (
+            x.get("research_label") in {"STRONG_LONG_RESEARCH_CANDIDATE", "LONG_RESEARCH_CANDIDATE"},
+            x.get("regime_alignment") == "ALIGNED_BULL",
+            x.get("rank_score") or 0.0,
+            x.get("turnover24h") or 0.0,
+        ),
+        reverse=True,
+    )
+
+    summary = {"total": len(rows), "by_label": {}, "by_timeframe": {}, "regime": regime.get("regime")}
+    for row in rows:
+        label = row.get("research_label")
+        timeframe = str(row.get("timeframe"))
+        summary["by_label"][label] = summary["by_label"].get(label, 0) + 1
+        summary["by_timeframe"][timeframe] = summary["by_timeframe"].get(timeframe, 0) + 1
+
+    # Deduplicate review list by symbol to avoid over-concentrating into one alt.
+    used_symbols = set()
+    review_list = []
+    for row in rows:
+        if row.get("research_label") not in {"STRONG_LONG_RESEARCH_CANDIDATE", "LONG_RESEARCH_CANDIDATE"}:
+            continue
+        symbol = normalize_symbol(str(row.get("symbol") or ""))
+        if symbol in used_symbols:
+            continue
+        review_list.append(
+            {
+                "action": "VALIDATE_IN_TRADINGVIEW",
+                "strategy": row.get("suggested_strategy_name"),
+                "symbol": symbol,
+                "side": "LONG",
+                "family": row.get("family"),
+                "timeframe": row.get("timeframe"),
+                "target_mode_after_validation": "PAPER",
+                "risk_pct": 0.05,
+                "profit_factor": row.get("profit_factor"),
+                "trade_count": row.get("trade_count"),
+                "win_rate": row.get("win_rate"),
+                "average_r": row.get("average_r"),
+                "rank_score": row.get("rank_score"),
+                "regime_alignment": row.get("regime_alignment"),
+                "requires_tradingview_validation": True,
+                "direct_live_execution": False,
+            }
+        )
+        used_symbols.add(symbol)
+        if len(review_list) >= 10:
+            break
+
+    result = {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "created_ts": v8_now_ts(),
+        "market": "crypto_bybit_linear",
+        "mode": "BULL_LONG_RESEARCH_ONLY",
+        "max_symbols": max_symbols,
+        "intervals": interval_list,
+        "market_regime": regime,
+        "summary": summary,
+        "count": len(rows),
+        "top": rows[:V930_LONG_TOP_N],
+        "rows": rows,
+        "deduplicated_review_list": review_list,
+        "safety": {
+            "auto_order_execution": False,
+            "auto_strategy_state_update": False,
+            "tradingview_validation_required": True,
+            "paper_only_after_manual_approval": True,
+            "micro_not_allowed_from_research": True,
+        },
+    }
+
+    write_json_file(V930_LONG_RESEARCH_FILE, result)
+    return result
+
+
+@app.get("/v9_3_0_micro_pilot_watchdog")
+def v9_3_0_micro_pilot_watchdog_endpoint(secret: str, days: int = V930_WATCHDOG_LOOKBACK_DAYS, notify: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_3_0_micro_pilot_watchdog(days=days, notify=notify)
+
+
+@app.get("/v9_3_0_micro_pilot_watchdog_dashboard", response_class=HTMLResponse)
+def v9_3_0_micro_pilot_watchdog_dashboard(secret: str, days: int = V930_WATCHDOG_LOOKBACK_DAYS, notify: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = v9_3_0_micro_pilot_watchdog(days=days, notify=notify)
+    micro = data.get("micro_pilot") or {}
+
+    rows = "".join(
+        [
+            f"<tr><td>{h(x.get('strategy'))}</td><td>{h(x.get('symbol'))}</td><td>{h(x.get('side'))}</td><td>{h(x.get('mode'))}</td><td>{fmt_num(x.get('risk_pct'))}</td></tr>"
+            for x in data.get("active_micro_live_items", [])
+        ]
+    )
+
+    latest = "".join(
+        [
+            f"<tr><td>{h((x.get('event') or {}).get('strategy'))}</td><td>{h((x.get('event') or {}).get('symbol'))}</td><td>{h(x.get('status'))}</td><td>{fmt_num(x.get('r_multiple'))}</td></tr>"
+            for x in micro.get("latest", [])
+        ]
+    )
+
+    return HTMLResponse(
+        f"""
+        <html>
+        <head>
+          <title>v9.3.0 MICRO Pilot Watchdog</title>
+          <style>
+            body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+            .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+            table{{border-collapse:collapse;width:100%;background:white;font-size:13px;margin-top:10px}}
+            th{{background:#111827;color:white}}
+            td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}
+            .OK{{color:#047857;font-weight:bold}}
+            .WATCH{{color:#92400e;font-weight:bold}}
+            .CRITICAL{{color:#991b1b;font-weight:bold}}
+          </style>
+        </head>
+        <body>
+          <h1>v9.3.0 MICRO Pilot Watchdog</h1>
+          <div class="card">
+            <b>Level:</b> <span class="{h(data.get('level'))}">{h(data.get('level'))}</span><br>
+            <b>Recommendation:</b> {h(data.get('recommendation'))}<br>
+            <b>Reasons:</b> {h(data.get('reasons'))}<br>
+            <b>Actions:</b> {h(data.get('actions'))}<br>
+            <b>Market gate:</b> {h(data.get('market_gate'))}<br>
+            <b>Directional regime:</b> {h(data.get('directional_regime'))}
+          </div>
+          <div class="card">
+            <h2>WLD MICRO pilot outcomes</h2>
+            <b>Closed:</b> {micro.get('closed_count')} |
+            <b>Open:</b> {micro.get('open_count')} |
+            <b>Total R:</b> {fmt_num(micro.get('total_r'))} |
+            <b>Avg R:</b> {fmt_num(micro.get('average_r_closed'))} |
+            <b>Consecutive losses:</b> {micro.get('consecutive_losses')}
+            <table>
+              <tr><th>Strategy</th><th>Symbol</th><th>Status</th><th>R</th></tr>
+              {latest}
+            </table>
+          </div>
+          <div class="card">
+            <h2>Active MICRO/LIVE items</h2>
+            <table>
+              <tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Mode</th><th>Risk %</th></tr>
+              {rows}
+            </table>
+          </div>
+          <p>
+            <a href="/v9_3_0_bull_long_research_dashboard?secret={h(secret)}&max_symbols=40&intervals=60,240&force=true">Bull LONG research dashboard</a> ·
+            <a href="/v9_market_regime_gate?secret={h(secret)}&days=30&limit=1000">Market gate</a>
+          </p>
+        </body>
+        </html>
+        """
+    )
+
+
+@app.get("/v9_3_0_bull_long_research")
+def v9_3_0_bull_long_research_endpoint(secret: str, max_symbols: int = V930_LONG_MAX_SYMBOLS, intervals: str = V930_LONG_INTERVALS, force: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_3_0_crypto_long_research(max_symbols=max_symbols, intervals=intervals, force=force)
+
+
+@app.get("/v9_3_0_bull_long_onboarding_plan")
+def v9_3_0_bull_long_onboarding_plan_endpoint(secret: str, max_symbols: int = V930_LONG_MAX_SYMBOLS, intervals: str = V930_LONG_INTERVALS, force: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    data = v9_3_0_crypto_long_research(max_symbols=max_symbols, intervals=intervals, force=force)
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "count": len(data.get("deduplicated_review_list") or []),
+        "plans": data.get("deduplicated_review_list") or [],
+        "safety": "Research output only. Validate manually in TradingView before adding any LONG PAPER alert. Do not promote directly to MICRO.",
+    }
+
+
+@app.get("/v9_3_0_bull_long_research_dashboard", response_class=HTMLResponse)
+def v9_3_0_bull_long_research_dashboard(secret: str, max_symbols: int = V930_LONG_MAX_SYMBOLS, intervals: str = V930_LONG_INTERVALS, force: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    data = v9_3_0_crypto_long_research(max_symbols=max_symbols, intervals=intervals, force=force)
+    regime = data.get("market_regime") or {}
+    summary = data.get("summary") or {}
+
+    rows = "".join(
+        [
+            f"<tr><td>{h(x.get('research_label'))}</td><td>{h(x.get('symbol'))}</td><td>{h(x.get('timeframe'))}</td><td>{h(x.get('family'))}</td><td>{fmt_num(x.get('profit_factor'))}</td><td>{x.get('trade_count') or ''}</td><td>{fmt_num(x.get('win_rate'))}</td><td>{fmt_num(x.get('average_r'))}</td><td>{fmt_num(x.get('current_score'))}</td><td>{h(x.get('regime_alignment'))}</td><td>{fmt_num(x.get('rank_score'))}</td><td>{h(x.get('suggested_strategy_name'))}</td></tr>"
+            for x in (data.get("top") or [])
+        ]
+    )
+
+    plan_rows = "".join(
+        [
+            f"<tr><td>{h(x.get('strategy'))}</td><td>{h(x.get('symbol'))}</td><td>{h(x.get('timeframe'))}</td><td>{h(x.get('family'))}</td><td>{fmt_num(x.get('profit_factor'))}</td><td>{x.get('trade_count') or ''}</td><td>{fmt_num(x.get('average_r'))}</td><td>{h(x.get('action'))}</td></tr>"
+            for x in (data.get("deduplicated_review_list") or [])
+        ]
+    )
+
+    return HTMLResponse(
+        f"""
+        <html>
+        <head>
+          <title>v9.3.0 Bull Regime LONG Expansion</title>
+          <style>
+            body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+            .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+            table{{border-collapse:collapse;width:100%;background:white;font-size:13px;margin-bottom:16px}}
+            th{{background:#111827;color:white}}
+            td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}
+          </style>
+        </head>
+        <body>
+          <h1>v9.3.0 Bull Regime LONG Expansion Research</h1>
+          <div class="card">
+            <b>Mode:</b> LONG RESEARCH ONLY — no automatic PAPER/MICRO onboarding.<br>
+            <b>Directional regime:</b> {h(regime.get('regime'))} |
+            <b>Preferred direction:</b> {h(regime.get('preferred_direction'))} |
+            <b>Bull score:</b> {fmt_num(regime.get('bull_score'))} |
+            <b>Bear score:</b> {fmt_num(regime.get('bear_score'))}<br>
+            <b>Summary:</b> {h(summary)}
+          </div>
+          <h2>Deduplicated TradingView validation plan</h2>
+          <table>
+            <tr><th>Strategy</th><th>Symbol</th><th>TF</th><th>Family</th><th>PF</th><th>Trades</th><th>Avg R</th><th>Action</th></tr>
+            {plan_rows}
+          </table>
+          <h2>Top raw LONG research rows</h2>
+          <table>
+            <tr>
+              <th>Label</th><th>Symbol</th><th>TF</th><th>Family</th><th>PF</th><th>Trades</th><th>Win %</th>
+              <th>Avg R</th><th>Current score</th><th>Regime alignment</th><th>Rank</th><th>Suggested strategy</th>
+            </tr>
+            {rows}
+          </table>
+          <p>
+            <a href="/v9_3_0_micro_pilot_watchdog_dashboard?secret={h(secret)}">MICRO pilot watchdog</a> ·
+            <a href="/v9_3_0_bull_long_onboarding_plan?secret={h(secret)}&max_symbols={max_symbols}&intervals={h(intervals)}">Onboarding plan JSON</a>
+          </p>
+        </body>
+        </html>
+        """
+    )
+
+
+@app.get("/v9_3_0_control_panel", response_class=HTMLResponse)
+def v9_3_0_control_panel(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    watchdog = v9_3_0_micro_pilot_watchdog(days=V930_WATCHDOG_LOOKBACK_DAYS, notify=False)
+    regime = v9_2_directional_market_regime(force=False)
+
+    return HTMLResponse(
+        f"""
+        <html>
+        <head>
+          <title>v9.3.0 Control Panel</title>
+          <style>
+            body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+            .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+          </style>
+        </head>
+        <body>
+          <h1>v9.3.0 Control Panel</h1>
+          <div class="card">
+            <h2>Directional regime</h2>
+            <b>Regime:</b> {h(regime.get('regime'))}<br>
+            <b>Preferred direction:</b> {h(regime.get('preferred_direction'))}<br>
+            <b>Bull score:</b> {fmt_num(regime.get('bull_score'))}<br>
+            <b>Bear score:</b> {fmt_num(regime.get('bear_score'))}
+          </div>
+          <div class="card">
+            <h2>MICRO pilot watchdog</h2>
+            <b>Level:</b> {h(watchdog.get('level'))}<br>
+            <b>Recommendation:</b> {h(watchdog.get('recommendation'))}<br>
+            <b>Reasons:</b> {h(watchdog.get('reasons'))}<br>
+            <b>Active MICRO/LIVE:</b> {watchdog.get('active_micro_live_count')}
+          </div>
+          <p>
+            <a href="/v9_3_0_micro_pilot_watchdog_dashboard?secret={h(secret)}">MICRO pilot watchdog dashboard</a> ·
+            <a href="/v9_3_0_bull_long_research_dashboard?secret={h(secret)}&max_symbols=40&intervals=60,240&force=true">Bull LONG research dashboard</a> ·
+            <a href="/v9_market_regime_gate?secret={h(secret)}&days=30&limit=1000">Market gate</a>
           </p>
         </body>
         </html>
