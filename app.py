@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.3")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.4")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.3.3</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.3.4</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.3.3"
+APP_FEATURE_LEVEL = "9.3.4"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8859,7 +8859,7 @@ def supabase_trade_log_health(secret: str):
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan", "tv_validation_registry", "validation_aware_short_calibration", "calibrated_short_research_dashboard", "deduplicated_short_portfolio_proposal", "micro_pilot_watchdog", "bull_regime_long_expansion_scanner", "wld_micro_pilot_guardrails", "telegram_watchdog_alerts", "long_candidate_onboarding_plan", "watchdog_market_gate_call_fix", "bull_long_scanner_function_name_fix", "supabase_keepalive", "data_source_guard", "raw_trade_event_inspector", "supabase_pause_watchdog", "outcome_source_trust_badge", "persistent_strategy_state_guard", "safe_baseline_enforcement", "micro_whitelist_guard", "deploy_drift_detector"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan", "tv_validation_registry", "validation_aware_short_calibration", "calibrated_short_research_dashboard", "deduplicated_short_portfolio_proposal", "micro_pilot_watchdog", "bull_regime_long_expansion_scanner", "wld_micro_pilot_guardrails", "telegram_watchdog_alerts", "long_candidate_onboarding_plan", "watchdog_market_gate_call_fix", "bull_long_scanner_function_name_fix", "supabase_keepalive", "data_source_guard", "raw_trade_event_inspector", "supabase_pause_watchdog", "outcome_source_trust_badge", "persistent_strategy_state_guard", "safe_baseline_enforcement", "micro_whitelist_guard", "deploy_drift_detector", "safe_baseline_python_literal_fix"]}
 
 
 # ============================================================
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.3.3 PERSISTENT STRATEGY STATE GUARD
+# v9.3.4 PERSISTENT STRATEGY STATE GUARD
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -14258,195 +14258,7 @@ V933_BLOCK_LONG_MICRO_WHEN_GATE_NOT_NORMAL = os.getenv("V933_BLOCK_LONG_MICRO_WH
 V933_BLOCK_LONG_MICRO_WHEN_NOT_BULL = os.getenv("V933_BLOCK_LONG_MICRO_WHEN_NOT_BULL", "true").lower() == "true"
 V933_STRATEGY_GUARD_STATE_FILE = APP_DIR / "v9_3_3_strategy_state_guard_state.json"
 
-V933_SAFE_BASELINE_STATE = {
-    "global": {
-        "enabled": true,
-        "default_mode": "OFF",
-        "max_open_positions": 1,
-        "daily_loss_limit_usdt": 10.0,
-        "weekly_loss_limit_usdt": 30.0,
-        "open_unrealized_loss_limit_usdt": 5.0,
-        "symbol_unrealized_loss_limit_usdt": 5.0,
-        "allow_unknown_symbols": false
-    },
-    "strategies": {
-        "structure_swing_v134": {
-            "enabled": true,
-            "symbols": {
-                "SOLUSDT": {
-                    "LONG": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    },
-                    "SHORT": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    }
-                },
-                "MANAUSDT": {
-                    "LONG": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    },
-                    "SHORT": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    }
-                },
-                "APEUSDT": {
-                    "LONG": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    },
-                    "SHORT": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    }
-                }
-            }
-        },
-        "trend_pullback_v100": {
-            "enabled": true,
-            "symbols": {
-                "SOLUSDT": {
-                    "LONG": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    },
-                    "SHORT": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    }
-                },
-                "MANAUSDT": {
-                    "LONG": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    },
-                    "SHORT": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    }
-                },
-                "APEUSDT": {
-                    "LONG": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    },
-                    "SHORT": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    }
-                }
-            }
-        },
-        "intraday_trend_pullback_icp_v13": {
-            "enabled": true,
-            "symbols": {
-                "ICPUSDT": {
-                    "LONG": {
-                        "mode": "PAPER",
-                        "risk_pct": 0.05
-                    },
-                    "SHORT": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    }
-                }
-            }
-        },
-        "momentum_breakout_sol_v11": {
-            "enabled": true,
-            "symbols": {
-                "SOLUSDT": {
-                    "LONG": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    },
-                    "SHORT": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    }
-                }
-            }
-        },
-        "trend_continuation_movr_v11": {
-            "enabled": true,
-            "symbols": {
-                "MOVRUSDT": {
-                    "LONG": {
-                        "mode": "PAPER",
-                        "risk_pct": 0.05
-                    },
-                    "SHORT": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    }
-                }
-            }
-        },
-        "trend_continuation_avax_v11": {
-            "enabled": true,
-            "symbols": {
-                "AVAXUSDT": {
-                    "LONG": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    },
-                    "SHORT": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    }
-                }
-            }
-        },
-        "trend_continuation_nil_v11": {
-            "enabled": true,
-            "symbols": {
-                "NILUSDT": {
-                    "LONG": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    },
-                    "SHORT": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    }
-                }
-            }
-        },
-        "trend_continuation_wld_v11": {
-            "enabled": true,
-            "symbols": {
-                "WLDUSDT": {
-                    "LONG": {
-                        "mode": "PAPER",
-                        "risk_pct": 0.05
-                    },
-                    "SHORT": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    }
-                }
-            }
-        },
-        "short_trend_pullback_xrpusdt_60_v1": {
-            "enabled": true,
-            "symbols": {
-                "XRPUSDT": {
-                    "LONG": {
-                        "mode": "OFF",
-                        "risk_pct": 0.0
-                    },
-                    "SHORT": {
-                        "mode": "PAPER",
-                        "risk_pct": 0.05
-                    }
-                }
-            }
-        }
-    }
-}
+V933_SAFE_BASELINE_STATE = {'global': {'enabled': True, 'default_mode': 'OFF', 'max_open_positions': 1, 'daily_loss_limit_usdt': 10.0, 'weekly_loss_limit_usdt': 30.0, 'open_unrealized_loss_limit_usdt': 5.0, 'symbol_unrealized_loss_limit_usdt': 5.0, 'allow_unknown_symbols': False}, 'strategies': {'structure_swing_v134': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'MANAUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'APEUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_pullback_v100': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'MANAUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'APEUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'intraday_trend_pullback_icp_v13': {'enabled': True, 'symbols': {'ICPUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'momentum_breakout_sol_v11': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_movr_v11': {'enabled': True, 'symbols': {'MOVRUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_avax_v11': {'enabled': True, 'symbols': {'AVAXUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_nil_v11': {'enabled': True, 'symbols': {'NILUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_wld_v11': {'enabled': True, 'symbols': {'WLDUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'short_trend_pullback_xrpusdt_60_v1': {'enabled': True, 'symbols': {'XRPUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'PAPER', 'risk_pct': 0.05}}}}}}
 
 
 def v9_3_3_key(strategy: str, symbol: str, side: str) -> str:
@@ -14762,7 +14574,7 @@ def v9_3_3_strategy_state_guard_dashboard(secret: str, notify: bool = False):
         f"""
         <html>
         <head>
-          <title>v9.3.3 Strategy State Guard</title>
+          <title>v9.3.4 Strategy State Guard</title>
           <style>
             body{font-family:Arial;margin:20px;background:#f6f8fb}
             .card{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}
@@ -14775,7 +14587,7 @@ def v9_3_3_strategy_state_guard_dashboard(secret: str, notify: bool = False):
           </style>
         </head>
         <body>
-          <h1>v9.3.3 Strategy State Guard</h1>
+          <h1>v9.3.4 Strategy State Guard</h1>
           <div class="card">
             <b>Level:</b> <span class="{h(data.get('level'))}">{h(data.get('level'))}</span><br>
             <b>Decision safe:</b> {h(data.get('decision_safe'))}<br>
@@ -14828,14 +14640,14 @@ def v9_3_3_control_panel(secret: str):
         f"""
         <html>
         <head>
-          <title>v9.3.3 Control Panel</title>
+          <title>v9.3.4 Control Panel</title>
           <style>
             body{font-family:Arial;margin:20px;background:#f6f8fb}
             .card{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}
           </style>
         </head>
         <body>
-          <h1>v9.3.3 Control Panel</h1>
+          <h1>v9.3.4 Control Panel</h1>
           <div class="card">
             <h2>Data source guard</h2>
             <b>Level:</b> {h(source_guard.get('level'))}<br>
