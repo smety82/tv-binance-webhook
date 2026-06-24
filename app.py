@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.1")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.2")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.3.1</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.3.2</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.3.1"
+APP_FEATURE_LEVEL = "9.3.2"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8859,7 +8859,7 @@ def supabase_trade_log_health(secret: str):
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan", "tv_validation_registry", "validation_aware_short_calibration", "calibrated_short_research_dashboard", "deduplicated_short_portfolio_proposal", "micro_pilot_watchdog", "bull_regime_long_expansion_scanner", "wld_micro_pilot_guardrails", "telegram_watchdog_alerts", "long_candidate_onboarding_plan", "watchdog_market_gate_call_fix", "bull_long_scanner_function_name_fix"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan", "tv_validation_registry", "validation_aware_short_calibration", "calibrated_short_research_dashboard", "deduplicated_short_portfolio_proposal", "micro_pilot_watchdog", "bull_regime_long_expansion_scanner", "wld_micro_pilot_guardrails", "telegram_watchdog_alerts", "long_candidate_onboarding_plan", "watchdog_market_gate_call_fix", "bull_long_scanner_function_name_fix", "supabase_keepalive", "data_source_guard", "raw_trade_event_inspector", "supabase_pause_watchdog", "outcome_source_trust_badge"]}
 
 
 # ============================================================
@@ -13793,6 +13793,443 @@ def v9_3_0_control_panel(secret: str):
             <a href="/v9_3_0_micro_pilot_watchdog_dashboard?secret={h(secret)}">MICRO pilot watchdog dashboard</a> ·
             <a href="/v9_3_0_bull_long_research_dashboard?secret={h(secret)}&max_symbols=40&intervals=60,240&force=true">Bull LONG research dashboard</a> ·
             <a href="/v9_market_regime_gate?secret={h(secret)}&days=30&limit=1000">Market gate</a>
+          </p>
+        </body>
+        </html>
+        """
+    )
+
+
+# ============================================================
+# v9.3.2 SUPABASE KEEPALIVE + DATA SOURCE GUARD
+# ============================================================
+# Purpose:
+# - Free-tier Supabase projects can pause after inactivity.
+# - Outcome dashboards become misleading when the system falls back to local CSV.
+# - This layer exposes keepalive, raw event inspection, source trust checks,
+#   and Telegram warnings when Supabase is not the active source.
+
+V932_SUPABASE_GUARD_ENABLED = os.getenv("V932_SUPABASE_GUARD_ENABLED", "true").lower() == "true"
+V932_SUPABASE_KEEPALIVE_NOTIFY = os.getenv("V932_SUPABASE_KEEPALIVE_NOTIFY", "false").lower() == "true"
+V932_SUPABASE_STALE_HOURS = float(os.getenv("V932_SUPABASE_STALE_HOURS", "24"))
+V932_REQUIRE_SUPABASE_FOR_DECISIONS = os.getenv("V932_REQUIRE_SUPABASE_FOR_DECISIONS", "true").lower() == "true"
+V932_DATA_SOURCE_STATE_FILE = APP_DIR / "v9_3_2_data_source_guard_state.json"
+
+
+def v9_3_2_safe_supabase_url() -> str:
+    base_url = str(SUPABASE_URL or "")
+    if not base_url:
+        return ""
+    try:
+        from urllib.parse import urlsplit
+        parsed = urlsplit(base_url)
+        return f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else base_url
+    except Exception:
+        return base_url
+
+
+def v9_3_2_parse_iso_ts(value: Any) -> Optional[float]:
+    if not value:
+        return None
+    try:
+        import datetime as _dt
+        cleaned = str(value).replace("Z", "+00:00")
+        parsed = _dt.datetime.fromisoformat(cleaned)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=_dt.timezone.utc)
+        return parsed.timestamp()
+    except Exception:
+        return None
+
+
+def v9_3_2_supabase_direct_probe(limit: int = 1) -> Dict[str, Any]:
+    """
+    Direct REST query that does not fall back to local CSV.
+    Use this to decide whether Supabase itself is reachable.
+    """
+    safe_limit = max(1, min(int(limit), 50))
+    if not supabase_enabled():
+        return {
+            "ok": False,
+            "source": "supabase_disabled",
+            "reason": "SUPABASE_NOT_CONFIGURED",
+            "configured_base_url": v9_3_2_safe_supabase_url(),
+            "table": SUPABASE_TABLE,
+        }
+
+    params = {
+        "select": "*",
+        "order": "created_at.desc",
+        "limit": str(safe_limit),
+    }
+
+    started = time.time()
+    try:
+        resp = client.get(
+            supabase_table_url(),
+            headers=supabase_headers(prefer=""),
+            params=params,
+        )
+        elapsed_ms = round((time.time() - started) * 1000.0, 2)
+        if resp.status_code >= 400:
+            return {
+                "ok": False,
+                "source": "supabase",
+                "status_code": resp.status_code,
+                "elapsed_ms": elapsed_ms,
+                "reason": f"HTTP_{resp.status_code}",
+                "response_preview": resp.text[:500],
+                "configured_base_url": v9_3_2_safe_supabase_url(),
+                "table": SUPABASE_TABLE,
+            }
+
+        rows = resp.json()
+        if not isinstance(rows, list):
+            return {
+                "ok": False,
+                "source": "supabase",
+                "elapsed_ms": elapsed_ms,
+                "reason": "INVALID_JSON_RESPONSE_NOT_LIST",
+                "configured_base_url": v9_3_2_safe_supabase_url(),
+                "table": SUPABASE_TABLE,
+            }
+
+        _trade_log_cloud_ok("keepalive_probe")
+        return {
+            "ok": True,
+            "source": "supabase",
+            "elapsed_ms": elapsed_ms,
+            "row_count": len(rows),
+            "configured_base_url": v9_3_2_safe_supabase_url(),
+            "table": SUPABASE_TABLE,
+            "sample": rows[:safe_limit],
+        }
+    except Exception as exc:
+        _trade_log_cloud_fail("keepalive_probe", exc)
+        return {
+            "ok": False,
+            "source": "supabase",
+            "reason": "SUPABASE_DIRECT_PROBE_EXCEPTION",
+            "error": str(exc),
+            "configured_base_url": v9_3_2_safe_supabase_url(),
+            "table": SUPABASE_TABLE,
+        }
+
+
+def v9_3_2_supabase_keepalive(notify: bool = False) -> Dict[str, Any]:
+    direct = v9_3_2_supabase_direct_probe(limit=1)
+    state = dict(_supabase_trade_log_state)
+    previous = read_json_file(V932_DATA_SOURCE_STATE_FILE, {})
+
+    result = {
+        "ok": bool(direct.get("ok")),
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "purpose": "Keep Supabase free-tier project warm and verify trade log availability.",
+        "direct_probe": direct,
+        "trade_log_state": state,
+        "effective_source": state.get("last_source"),
+        "decision_data_trusted": bool(direct.get("ok")) and state.get("last_source") == "supabase",
+        "configured_base_url": v9_3_2_safe_supabase_url(),
+        "table": SUPABASE_TABLE,
+        "fallback": "local_csv",
+    }
+
+    should_notify = notify or V932_SUPABASE_KEEPALIVE_NOTIFY
+    status_changed = previous.get("ok") is not None and bool(previous.get("ok")) != bool(result["ok"])
+
+    if should_notify and (not result["ok"] or status_changed):
+        try:
+            safe_notify_event(
+                "🗄️ Supabase keepalive status",
+                f"ok={result['ok']} source={result.get('effective_source')} reason={direct.get('reason')} table={SUPABASE_TABLE}",
+                important=not result["ok"],
+            )
+            result["telegram_notified"] = True
+        except Exception as exc:
+            result["telegram_notified"] = False
+            result["telegram_error"] = str(exc)
+
+    write_json_file(V932_DATA_SOURCE_STATE_FILE, result)
+    return result
+
+
+def v9_3_2_data_source_guard(notify: bool = False) -> Dict[str, Any]:
+    keepalive = v9_3_2_supabase_keepalive(notify=False)
+    state = keepalive.get("trade_log_state") or {}
+    last_success_at = state.get("last_success_at")
+    last_success_ts = v9_3_2_parse_iso_ts(last_success_at)
+    hours_since_success = None
+    if last_success_ts is not None:
+        hours_since_success = round((time.time() - last_success_ts) / 3600.0, 2)
+
+    reasons = []
+    actions = []
+
+    if not supabase_enabled():
+        reasons.append("SUPABASE_NOT_CONFIGURED")
+        actions.append("CONFIGURE_SUPABASE_ENV")
+    elif not keepalive.get("ok"):
+        reasons.append("SUPABASE_UNREACHABLE_OR_PAUSED")
+        actions.append("UNPAUSE_SUPABASE_OR_CHECK_NETWORK")
+    elif keepalive.get("effective_source") != "supabase":
+        reasons.append(f"TRADE_LOG_SOURCE_{keepalive.get('effective_source')}")
+        actions.append("RESTORE_SUPABASE_SOURCE")
+    elif hours_since_success is not None and hours_since_success > V932_SUPABASE_STALE_HOURS:
+        reasons.append(f"SUPABASE_LAST_SUCCESS_STALE_{hours_since_success}H")
+        actions.append("RUN_KEEPALIVE_AND_CHECK_PROJECT_STATUS")
+
+    if reasons:
+        level = "CRITICAL" if any("UNREACHABLE" in x or "NOT_CONFIGURED" in x for x in reasons) else "WATCH"
+        decision_data_trusted = False if V932_REQUIRE_SUPABASE_FOR_DECISIONS else True
+        recommendation = "DO_NOT_MAKE_MICRO_PROMOTION_DECISIONS_FROM_FALLBACK_DATA"
+    else:
+        level = "OK"
+        decision_data_trusted = True
+        recommendation = "SUPABASE_HEALTHY_DECISION_DATA_TRUSTED"
+
+    result = {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "level": level,
+        "recommendation": recommendation,
+        "decision_data_trusted": decision_data_trusted,
+        "reasons": reasons,
+        "actions": actions,
+        "supabase": {
+            "enabled": supabase_enabled(),
+            "configured_base_url": v9_3_2_safe_supabase_url(),
+            "table": SUPABASE_TABLE,
+            "direct_probe_ok": keepalive.get("ok"),
+            "effective_source": keepalive.get("effective_source"),
+            "last_success_at": last_success_at,
+            "hours_since_success": hours_since_success,
+            "last_error": state.get("last_error"),
+            "last_error_at": state.get("last_error_at"),
+        },
+        "keepalive": keepalive,
+    }
+
+    previous = read_json_file(V932_DATA_SOURCE_STATE_FILE, {})
+    previous_level = previous.get("guard_level")
+    should_notify = notify and (level != "OK" or previous_level != level)
+
+    if should_notify:
+        try:
+            safe_notify_event(
+                f"🧭 Data Source Guard: {level}",
+                f"{recommendation}\nReasons: {', '.join(reasons) if reasons else 'none'}\nSource: {keepalive.get('effective_source')}\nLast success: {last_success_at}",
+                important=level in {"WATCH", "CRITICAL"},
+            )
+            result["telegram_notified"] = True
+        except Exception as exc:
+            result["telegram_notified"] = False
+            result["telegram_error"] = str(exc)
+
+    state_to_save = dict(keepalive)
+    state_to_save["guard_level"] = level
+    state_to_save["guard_reasons"] = reasons
+    write_json_file(V932_DATA_SOURCE_STATE_FILE, state_to_save)
+    return result
+
+
+def v9_3_2_raw_trade_events(days: int = 30, limit: int = 50, source: str = "auto") -> Dict[str, Any]:
+    safe_days = max(1, min(int(days), 90))
+    safe_limit = max(1, min(int(limit), 500))
+    source_mode = str(source or "auto").lower()
+
+    if source_mode == "supabase":
+        direct = v9_3_2_supabase_direct_probe(limit=safe_limit)
+        return {
+            "ok": bool(direct.get("ok")),
+            "version": APP_FEATURE_LEVEL,
+            "source": "supabase_direct",
+            "days": safe_days,
+            "limit": safe_limit,
+            "count": direct.get("row_count", 0),
+            "events": direct.get("sample") or [],
+            "probe": {k: v for k, v in direct.items() if k != "sample"},
+        }
+
+    if source_mode == "local":
+        rows = _local_trade_log_rows_for_reporting(limit=safe_limit, days=safe_days)
+        return {
+            "ok": True,
+            "version": APP_FEATURE_LEVEL,
+            "source": "local_csv",
+            "days": safe_days,
+            "limit": safe_limit,
+            "count": len(rows),
+            "events": rows,
+        }
+
+    rows = fetch_supabase_logs_since(days=safe_days, limit=safe_limit)
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "source": _supabase_trade_log_state.get("last_source"),
+        "days": safe_days,
+        "limit": safe_limit,
+        "count": len(rows),
+        "events": rows,
+        "trade_log_state": dict(_supabase_trade_log_state),
+    }
+
+
+@app.get("/supabase_keepalive")
+def supabase_keepalive_endpoint(secret: str, notify: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_3_2_supabase_keepalive(notify=notify)
+
+
+@app.get("/v9_3_2_supabase_keepalive")
+def v9_3_2_supabase_keepalive_endpoint(secret: str, notify: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_3_2_supabase_keepalive(notify=notify)
+
+
+@app.get("/v9_3_2_data_source_guard")
+def v9_3_2_data_source_guard_endpoint(secret: str, notify: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_3_2_data_source_guard(notify=notify)
+
+
+@app.get("/v9_3_2_raw_trade_events")
+def v9_3_2_raw_trade_events_endpoint(secret: str, days: int = 30, limit: int = 50, source: str = "auto"):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_3_2_raw_trade_events(days=days, limit=limit, source=source)
+
+
+@app.get("/v9_3_2_outcome_source_status")
+def v9_3_2_outcome_source_status_endpoint(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    guard = v9_3_2_data_source_guard(notify=False)
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "decision_data_trusted": guard.get("decision_data_trusted"),
+        "level": guard.get("level"),
+        "recommendation": guard.get("recommendation"),
+        "supabase": guard.get("supabase"),
+        "use_for_micro_decisions": bool(guard.get("decision_data_trusted")),
+    }
+
+
+@app.get("/v9_3_2_data_source_dashboard", response_class=HTMLResponse)
+def v9_3_2_data_source_dashboard(secret: str, notify: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    guard = v9_3_2_data_source_guard(notify=notify)
+    raw_auto = v9_3_2_raw_trade_events(days=30, limit=10, source="auto")
+
+    event_rows = "".join(
+        [
+            f"<tr><td>{h(x.get('created_at') or x.get('timestamp_utc') or x.get('timestamp'))}</td><td>{h(x.get('strategy'))}</td><td>{h(x.get('symbol'))}</td><td>{h(x.get('side'))}</td><td>{h(x.get('mode'))}</td><td>{h(x.get('decision'))}</td><td>{h(x.get('status'))}</td></tr>"
+            for x in (raw_auto.get("events") or [])
+        ]
+    )
+
+    supa = guard.get("supabase") or {}
+
+    return HTMLResponse(
+        f"""
+        <html>
+        <head>
+          <title>v9.3.2 Data Source Guard</title>
+          <style>
+            body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+            .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+            table{{border-collapse:collapse;width:100%;background:white;font-size:13px;margin-top:10px}}
+            th{{background:#111827;color:white}}
+            td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}
+            .OK{{color:#047857;font-weight:bold}}
+            .WATCH{{color:#92400e;font-weight:bold}}
+            .CRITICAL{{color:#991b1b;font-weight:bold}}
+          </style>
+        </head>
+        <body>
+          <h1>v9.3.2 Supabase Data Source Guard</h1>
+          <div class="card">
+            <b>Level:</b> <span class="{h(guard.get('level'))}">{h(guard.get('level'))}</span><br>
+            <b>Decision data trusted:</b> {h(guard.get('decision_data_trusted'))}<br>
+            <b>Recommendation:</b> {h(guard.get('recommendation'))}<br>
+            <b>Reasons:</b> {h(guard.get('reasons'))}<br>
+            <b>Actions:</b> {h(guard.get('actions'))}
+          </div>
+          <div class="card">
+            <h2>Supabase</h2>
+            <b>Enabled:</b> {h(supa.get('enabled'))}<br>
+            <b>Effective source:</b> {h(supa.get('effective_source'))}<br>
+            <b>Direct probe ok:</b> {h(supa.get('direct_probe_ok'))}<br>
+            <b>Last success:</b> {h(supa.get('last_success_at'))}<br>
+            <b>Hours since success:</b> {h(supa.get('hours_since_success'))}<br>
+            <b>Last error:</b> {h(supa.get('last_error'))}<br>
+            <b>Base URL:</b> {h(supa.get('configured_base_url'))}<br>
+            <b>Table:</b> {h(supa.get('table'))}
+          </div>
+          <div class="card">
+            <h2>Latest trade events ({h(raw_auto.get('source'))})</h2>
+            <table>
+              <tr><th>Time</th><th>Strategy</th><th>Symbol</th><th>Side</th><th>Mode</th><th>Decision</th><th>Status</th></tr>
+              {event_rows}
+            </table>
+          </div>
+          <p>
+            <a href="/supabase_keepalive?secret={h(secret)}&notify=false">Run keepalive JSON</a> ·
+            <a href="/v9_3_2_raw_trade_events?secret={h(secret)}&days=30&limit=20&source=auto">Raw events JSON</a> ·
+            <a href="/paper_outcome_summary?secret={h(secret)}&days=30&limit=1000">Outcome summary</a>
+          </p>
+        </body>
+        </html>
+        """
+    )
+
+
+@app.get("/v9_3_2_control_panel", response_class=HTMLResponse)
+def v9_3_2_control_panel(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    data_guard = v9_3_2_data_source_guard(notify=False)
+    regime = v9_2_directional_market_regime(force=False)
+    market_gate = v9_market_regime_gate(days=30, limit=PAPER_OUTCOME_MAX_EVENTS)
+
+    return HTMLResponse(
+        f"""
+        <html>
+        <head>
+          <title>v9.3.2 Control Panel</title>
+          <style>
+            body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+            .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+          </style>
+        </head>
+        <body>
+          <h1>v9.3.2 Control Panel</h1>
+          <div class="card">
+            <h2>Data source</h2>
+            <b>Level:</b> {h(data_guard.get('level'))}<br>
+            <b>Decision data trusted:</b> {h(data_guard.get('decision_data_trusted'))}<br>
+            <b>Recommendation:</b> {h(data_guard.get('recommendation'))}<br>
+            <b>Supabase:</b> {h(data_guard.get('supabase'))}
+          </div>
+          <div class="card">
+            <h2>Market</h2>
+            <b>Directional regime:</b> {h(regime.get('regime'))}<br>
+            <b>Preferred direction:</b> {h(regime.get('preferred_direction'))}<br>
+            <b>Market gate:</b> {h({'gate_level': market_gate.get('gate_level'), 'allow_new_micro': market_gate.get('allow_new_micro'), 'recommendation': market_gate.get('recommendation')})}
+          </div>
+          <p>
+            <a href="/v9_3_2_data_source_dashboard?secret={h(secret)}">Data source dashboard</a> ·
+            <a href="/v9_3_0_micro_pilot_watchdog_dashboard?secret={h(secret)}&days=30&notify=false">MICRO watchdog</a> ·
+            <a href="/v9_2_1_calibrated_short_dashboard?secret={h(secret)}&max_symbols=40&intervals=60,240&force=true">SHORT calibration</a>
           </p>
         </body>
         </html>
