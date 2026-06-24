@@ -1,0 +1,14 @@
+name: Supabase Keepalive
+
+on:
+  schedule:
+    - cron: "0 */12 * * *"
+  workflow_dispatch:
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase keepalive endpoint
+        run: |
+          curl -fsS "${{ secrets.TRADING_BOT_BASE_URL }}/supabase_keepalive?secret=${{ secrets.TRADING_BOT_SHARED_SECRET }}&notify=false"
