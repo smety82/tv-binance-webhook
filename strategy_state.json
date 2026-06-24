@@ -15,11 +15,11 @@
       "symbols": {
         "SOLUSDT": {
           "LONG": {
-            "mode": "MICRO",
+            "mode": "PAPER",
             "risk_pct": 0.1
           },
           "SHORT": {
-            "mode": "MICRO",
+            "mode": "PAPER",
             "risk_pct": 0.1
           }
         },
