@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.5")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.6")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.3.5</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.3.6</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.3.5"
+APP_FEATURE_LEVEL = "9.3.6"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8859,7 +8859,7 @@ def supabase_trade_log_health(secret: str):
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan", "tv_validation_registry", "validation_aware_short_calibration", "calibrated_short_research_dashboard", "deduplicated_short_portfolio_proposal", "micro_pilot_watchdog", "bull_regime_long_expansion_scanner", "wld_micro_pilot_guardrails", "telegram_watchdog_alerts", "long_candidate_onboarding_plan", "watchdog_market_gate_call_fix", "bull_long_scanner_function_name_fix", "supabase_keepalive", "data_source_guard", "raw_trade_event_inspector", "supabase_pause_watchdog", "outcome_source_trust_badge", "persistent_strategy_state_guard", "safe_baseline_enforcement", "micro_whitelist_guard", "deploy_drift_detector", "safe_baseline_python_literal_fix", "productive_micro_probe_lane", "direction_aligned_short_micro_probe", "xrp_short_micro_probe_baseline", "activity_pressure_layer"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan", "tv_validation_registry", "validation_aware_short_calibration", "calibrated_short_research_dashboard", "deduplicated_short_portfolio_proposal", "micro_pilot_watchdog", "bull_regime_long_expansion_scanner", "wld_micro_pilot_guardrails", "telegram_watchdog_alerts", "long_candidate_onboarding_plan", "watchdog_market_gate_call_fix", "bull_long_scanner_function_name_fix", "supabase_keepalive", "data_source_guard", "raw_trade_event_inspector", "supabase_pause_watchdog", "outcome_source_trust_badge", "persistent_strategy_state_guard", "safe_baseline_enforcement", "micro_whitelist_guard", "deploy_drift_detector", "safe_baseline_python_literal_fix", "productive_micro_probe_lane", "direction_aligned_short_micro_probe", "xrp_short_micro_probe_baseline", "activity_pressure_layer", "micro_probe_performance_monitor", "execution_funnel_monitor", "probe_decision_report", "monitoring_only_release"]}
 
 
 # ============================================================
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.3.5 PRODUCTIVE STRATEGY STATE GUARD
+# v9.3.6 PRODUCTIVE STRATEGY STATE GUARD
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -14574,7 +14574,7 @@ def v9_3_3_strategy_state_guard_dashboard(secret: str, notify: bool = False):
         f"""
         <html>
         <head>
-          <title>v9.3.5 Strategy State Guard</title>
+          <title>v9.3.6 Strategy State Guard</title>
           <style>
             body{font-family:Arial;margin:20px;background:#f6f8fb}
             .card{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}
@@ -14587,7 +14587,7 @@ def v9_3_3_strategy_state_guard_dashboard(secret: str, notify: bool = False):
           </style>
         </head>
         <body>
-          <h1>v9.3.5 Strategy State Guard</h1>
+          <h1>v9.3.6 Strategy State Guard</h1>
           <div class="card">
             <b>Level:</b> <span class="{h(data.get('level'))}">{h(data.get('level'))}</span><br>
             <b>Decision safe:</b> {h(data.get('decision_safe'))}<br>
@@ -14640,14 +14640,14 @@ def v9_3_3_control_panel(secret: str):
         f"""
         <html>
         <head>
-          <title>v9.3.5 Control Panel</title>
+          <title>v9.3.6 Control Panel</title>
           <style>
             body{font-family:Arial;margin:20px;background:#f6f8fb}
             .card{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}
           </style>
         </head>
         <body>
-          <h1>v9.3.5 Control Panel</h1>
+          <h1>v9.3.6 Control Panel</h1>
           <div class="card">
             <h2>Data source guard</h2>
             <b>Level:</b> {h(source_guard.get('level'))}<br>
@@ -15067,14 +15067,14 @@ def v9_3_5_control_panel(secret: str):
         f"""
         <html>
         <head>
-          <title>v9.3.5 Control Panel</title>
+          <title>v9.3.6 Control Panel</title>
           <style>
             body{{font-family:Arial;margin:20px;background:#f6f8fb}}
             .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
           </style>
         </head>
         <body>
-          <h1>v9.3.5 Control Panel</h1>
+          <h1>v9.3.6 Control Panel</h1>
           <div class="card">
             <h2>Productive Risk Engine</h2>
             <b>Recommendation:</b> {h(productive.get('recommendation'))}<br>
@@ -15093,6 +15093,470 @@ def v9_3_5_control_panel(secret: str):
             <a href="/v9_3_5_productive_risk_dashboard?secret={h(secret)}">Productive Risk Dashboard</a> ·
             <a href="/v9_3_3_strategy_state_guard_dashboard?secret={h(secret)}">Strategy State Guard</a> ·
             <a href="/v9_3_2_data_source_dashboard?secret={h(secret)}">Data Source Guard</a> ·
+            <a href="/strategy_state?secret={h(secret)}">Strategy State</a>
+          </p>
+        </body>
+        </html>
+        """
+    )
+
+
+# ============================================================
+# v9.3.6 MICRO_PROBE PERFORMANCE & EXECUTION MONITOR
+# ============================================================
+# Monitoring-only release:
+# - Does not change strategy_state.
+# - Does not change risk_pct.
+# - Does not enable/disable any strategy.
+# - Adds visibility for MICRO_PROBE signals, rejections, order_sent events,
+#   closed outcome hints and promotion/pause readiness.
+
+V936_MICRO_PROBE_MONITOR_ENABLED = os.getenv("V936_MICRO_PROBE_MONITOR_ENABLED", "true").lower() == "true"
+V936_PROBE_KEY = os.getenv("V936_PROBE_KEY", "short_trend_pullback_xrpusdt_60_v1|XRPUSDT|SHORT").strip()
+V936_REVIEW_AFTER_EVENTS = int(os.getenv("V936_REVIEW_AFTER_EVENTS", "5"))
+V936_PROMOTION_MIN_TOTAL_R = float(os.getenv("V936_PROMOTION_MIN_TOTAL_R", "2.0"))
+V936_PAUSE_CONSECUTIVE_LOSSES = int(os.getenv("V936_PAUSE_CONSECUTIVE_LOSSES", "2"))
+V936_NO_ORDER_SENT_WARNING_DAYS = float(os.getenv("V936_NO_ORDER_SENT_WARNING_DAYS", "7"))
+
+
+def v9_3_6_probe_key_parts(key: str = V936_PROBE_KEY) -> Dict[str, str]:
+    parts = [x.strip() for x in str(key or "").split("|")]
+    if len(parts) != 3:
+        return {"strategy": "", "symbol": "", "side": ""}
+    return {"strategy": parts[0], "symbol": normalize_symbol(parts[1]), "side": normalize_side(parts[2])}
+
+
+def v9_3_6_event_ts(row: Dict[str, Any]) -> Optional[float]:
+    for k in ["created_at", "timestamp_utc", "timestamp", "time"]:
+        if row.get(k):
+            ts = v9_3_2_parse_iso_ts(row.get(k))
+            if ts is not None:
+                return ts
+    return None
+
+
+def v9_3_6_event_time(row: Dict[str, Any]) -> str:
+    for k in ["created_at", "timestamp_utc", "timestamp", "time"]:
+        if row.get(k):
+            return str(row.get(k))
+    return ""
+
+
+def v9_3_6_filter_probe_events(rows: list[Dict[str, Any]], key: str = V936_PROBE_KEY) -> list[Dict[str, Any]]:
+    probe = v9_3_6_probe_key_parts(key)
+    out = []
+    for row in rows:
+        if str(row.get("strategy", "")) != probe["strategy"]:
+            continue
+        if normalize_symbol(str(row.get("symbol", ""))) != probe["symbol"]:
+            continue
+        if normalize_side(str(row.get("side", ""))) != probe["side"]:
+            continue
+        out.append(row)
+    out.sort(key=lambda x: v9_3_6_event_ts(x) or 0, reverse=True)
+    return out
+
+
+def v9_3_6_status_text(row: Dict[str, Any]) -> str:
+    return str(row.get("status") or row.get("decision") or row.get("outcome_status") or "").upper()
+
+
+def v9_3_6_decision_text(row: Dict[str, Any]) -> str:
+    return str(row.get("decision") or row.get("decision_reason") or row.get("status") or "").upper()
+
+
+def v9_3_6_row_mode(row: Dict[str, Any]) -> str:
+    return str(row.get("mode") or "").upper()
+
+
+def v9_3_6_extract_r(row: Dict[str, Any]) -> Optional[float]:
+    for k in ["r_multiple", "realized_r", "total_r", "outcome_r", "r", "estimated_r"]:
+        val = row.get(k)
+        parsed = to_float_or_none(val)
+        if parsed is not None:
+            return float(parsed)
+
+    status = v9_3_6_status_text(row)
+    decision = v9_3_6_decision_text(row)
+    combined = f"{status} {decision}"
+
+    if "WIN_TP2" in combined:
+        return 2.0
+    if "WIN_TP1" in combined:
+        return 1.0
+    if "PARTIAL_TP1_THEN_SL" in combined:
+        return 0.0
+    if "LOSS_SL" in combined:
+        return -1.0
+    return None
+
+
+def v9_3_6_classify_event(row: Dict[str, Any]) -> str:
+    status = v9_3_6_status_text(row)
+    decision = v9_3_6_decision_text(row)
+    combined = f"{status} {decision}"
+
+    if "ORDER_SENT" in combined or row.get("order_id"):
+        return "ORDER_SENT"
+    if "REJECT" in combined:
+        return "REJECTED"
+    if "ACCEPTED_MICRO" in combined:
+        return "ACCEPTED_MICRO"
+    if "WIN" in combined or "TP" in combined:
+        return "CLOSED_WIN"
+    if "LOSS" in combined or "SL" in combined:
+        return "CLOSED_LOSS"
+    if "WEBHOOK" in combined or "SIGNAL" in combined:
+        return "SIGNAL_OR_WEBHOOK"
+    return "LOGGED_OTHER"
+
+
+def v9_3_6_micro_probe_events(days: int = 30, limit: int = 500, key: str = V936_PROBE_KEY) -> Dict[str, Any]:
+    safe_days = max(1, min(int(days), 90))
+    safe_limit = max(1, min(int(limit), 2000))
+
+    rows = fetch_supabase_logs_since(days=safe_days, limit=safe_limit)
+    probe_events = v9_3_6_filter_probe_events(rows, key=key)
+
+    enriched = []
+    for row in probe_events:
+        item = dict(row)
+        item["_event_class"] = v9_3_6_classify_event(row)
+        item["_event_time"] = v9_3_6_event_time(row)
+        item["_r"] = v9_3_6_extract_r(row)
+        enriched.append(item)
+
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "source": _supabase_trade_log_state.get("last_source"),
+        "key": key,
+        "days": safe_days,
+        "limit": safe_limit,
+        "count": len(enriched),
+        "events": enriched,
+        "trade_log_state": dict(_supabase_trade_log_state),
+    }
+
+
+def v9_3_6_execution_funnel(days: int = 30, limit: int = 500, key: str = V936_PROBE_KEY) -> Dict[str, Any]:
+    data = v9_3_6_micro_probe_events(days=days, limit=limit, key=key)
+    events = data.get("events") or []
+
+    by_class: Dict[str, int] = {}
+    by_decision: Dict[str, int] = {}
+    by_status: Dict[str, int] = {}
+    by_mode: Dict[str, int] = {}
+
+    last_order_sent = None
+    last_any = None
+    order_sent_events = []
+    rejected_events = []
+
+    for row in events:
+        klass = row.get("_event_class", "UNKNOWN")
+        by_class[klass] = by_class.get(klass, 0) + 1
+
+        decision = str(row.get("decision") or "UNKNOWN")
+        status = str(row.get("status") or "UNKNOWN")
+        mode = str(row.get("mode") or "UNKNOWN")
+        by_decision[decision] = by_decision.get(decision, 0) + 1
+        by_status[status] = by_status.get(status, 0) + 1
+        by_mode[mode] = by_mode.get(mode, 0) + 1
+
+        ts = v9_3_6_event_ts(row)
+        if ts is not None:
+            last_any = max(last_any or ts, ts)
+
+        if klass == "ORDER_SENT":
+            order_sent_events.append(row)
+            if ts is not None:
+                last_order_sent = max(last_order_sent or ts, ts)
+        if klass == "REJECTED":
+            rejected_events.append(row)
+
+    days_since_order_sent = None
+    if last_order_sent is not None:
+        days_since_order_sent = round((time.time() - last_order_sent) / 86400.0, 2)
+
+    days_since_any = None
+    if last_any is not None:
+        days_since_any = round((time.time() - last_any) / 86400.0, 2)
+
+    if not events:
+        diagnosis = "NO_EVENTS_FOR_PROBE"
+    elif not order_sent_events and rejected_events:
+        diagnosis = "SIGNALS_OR_WEBHOOKS_REJECTED_BY_BACKEND"
+    elif not order_sent_events:
+        diagnosis = "NO_ORDER_SENT_YET"
+    else:
+        diagnosis = "ORDER_PIPELINE_ACTIVE"
+
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "key": key,
+        "days": data.get("days"),
+        "event_count": len(events),
+        "by_class": by_class,
+        "by_decision": by_decision,
+        "by_status": by_status,
+        "by_mode": by_mode,
+        "order_sent_count": len(order_sent_events),
+        "rejected_count": len(rejected_events),
+        "days_since_last_order_sent": days_since_order_sent,
+        "days_since_last_any_event": days_since_any,
+        "diagnosis": diagnosis,
+        "latest_events": events[:20],
+        "source": data.get("source"),
+    }
+
+
+def v9_3_6_probe_performance(days: int = 30, limit: int = 500, key: str = V936_PROBE_KEY) -> Dict[str, Any]:
+    data = v9_3_6_micro_probe_events(days=days, limit=limit, key=key)
+    events = data.get("events") or []
+
+    closed = []
+    wins = 0
+    losses = 0
+    total_r = 0.0
+    r_values = []
+
+    # Use descending events. For consecutive loss we need newest-first streak.
+    consecutive_losses = 0
+    still_counting_streak = True
+
+    for row in events:
+        klass = row.get("_event_class")
+        r_val = row.get("_r")
+        if r_val is None and klass not in {"CLOSED_WIN", "CLOSED_LOSS"}:
+            continue
+
+        if r_val is None:
+            r_val = 1.0 if klass == "CLOSED_WIN" else -1.0
+
+        closed.append(row)
+        r_values.append(float(r_val))
+        total_r += float(r_val)
+
+        if float(r_val) > 0:
+            wins += 1
+            still_counting_streak = False
+        elif float(r_val) < 0:
+            losses += 1
+            if still_counting_streak:
+                consecutive_losses += 1
+        else:
+            still_counting_streak = False
+
+    closed_count = len(closed)
+    avg_r = round(total_r / closed_count, 6) if closed_count else 0.0
+
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "key": key,
+        "days": data.get("days"),
+        "closed_count": closed_count,
+        "wins": wins,
+        "losses": losses,
+        "total_r": round(total_r, 6),
+        "average_r": avg_r,
+        "consecutive_losses": consecutive_losses,
+        "r_values_newest_first": r_values[:20],
+        "closed_events": closed[:20],
+        "source": data.get("source"),
+    }
+
+
+def v9_3_6_probe_decision_report(days: int = 30, limit: int = 500, key: str = V936_PROBE_KEY) -> Dict[str, Any]:
+    productive = v9_3_5_probe_candidate_status()
+    funnel = v9_3_6_execution_funnel(days=days, limit=limit, key=key)
+    perf = v9_3_6_probe_performance(days=days, limit=limit, key=key)
+    source_guard = v9_3_2_data_source_guard(notify=False)
+    state_guard = v9_3_3_strategy_state_guard(notify=False)
+
+    reasons = []
+    actions = []
+
+    if not source_guard.get("decision_data_trusted"):
+        recommendation = "PAUSE_MICRO_PROBE"
+        reasons.append("DATA_SOURCE_NOT_TRUSTED")
+        actions.append("FIX_SUPABASE_OR_DATA_SOURCE")
+    elif state_guard.get("level") != "OK":
+        recommendation = "PAUSE_MICRO_PROBE"
+        reasons.append(f"STRATEGY_STATE_GUARD_{state_guard.get('level')}")
+        actions.append("FIX_STRATEGY_STATE_GUARD")
+    elif perf.get("consecutive_losses", 0) >= V936_PAUSE_CONSECUTIVE_LOSSES:
+        recommendation = "PAUSE_MICRO_PROBE"
+        reasons.append(f"CONSECUTIVE_LOSSES_{perf.get('consecutive_losses')}")
+        actions.append("DOWNGRADE_PROBE_TO_PAPER_AND_REVIEW")
+    elif funnel.get("order_sent_count", 0) == 0 and funnel.get("event_count", 0) == 0:
+        recommendation = "NO_SIGNAL_DIAGNOSIS_NEEDED"
+        reasons.append("NO_PROBE_EVENTS_FOUND")
+        actions.append("VERIFY_TRADINGVIEW_ALERT_AND_MARKET_SIGNAL_FREQUENCY")
+    elif funnel.get("order_sent_count", 0) == 0 and funnel.get("rejected_count", 0) > 0:
+        recommendation = "EXECUTION_PIPELINE_ISSUE"
+        reasons.append("PROBE_EVENTS_REJECTED_NO_ORDER_SENT")
+        actions.append("INSPECT_REJECTION_REASONS")
+    elif funnel.get("order_sent_count", 0) == 0:
+        recommendation = "KEEP_MICRO_PROBE_MONITORING"
+        reasons.append("NO_ORDER_SENT_YET")
+        actions.append("WAIT_FOR_VALID_SIGNAL_OR_CHECK_ALERT_FREQUENCY")
+    elif perf.get("closed_count", 0) >= V936_REVIEW_AFTER_EVENTS and perf.get("total_r", 0.0) >= V936_PROMOTION_MIN_TOTAL_R:
+        recommendation = "PROMOTION_REVIEW_READY"
+        reasons.append(f"CLOSED_COUNT_{perf.get('closed_count')}_TOTAL_R_{perf.get('total_r')}")
+        actions.append("CONSIDER_RISK_0_02_TO_0_03_ONLY_IF_REGIME_STILL_ALIGNED")
+    elif funnel.get("order_sent_count", 0) > 0:
+        recommendation = "KEEP_MICRO_PROBE"
+        reasons.append("ORDER_PIPELINE_ACTIVE")
+        actions.append("COLLECT_MORE_LIVE_OUTCOMES")
+    else:
+        recommendation = "KEEP_MICRO_PROBE_MONITORING"
+        reasons.append("NO_BLOCKER_DETECTED")
+        actions.append("CONTINUE_MONITORING")
+
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "key": key,
+        "recommendation": recommendation,
+        "reasons": reasons,
+        "actions": actions,
+        "productive_status": productive,
+        "execution_funnel": funnel,
+        "performance": perf,
+        "source_guard": {
+            "level": source_guard.get("level"),
+            "decision_data_trusted": source_guard.get("decision_data_trusted"),
+            "effective_source": (source_guard.get("supabase") or {}).get("effective_source"),
+        },
+        "state_guard": {
+            "level": state_guard.get("level"),
+            "decision_safe": state_guard.get("decision_safe"),
+            "active_micro_live_count": state_guard.get("active_micro_live_count"),
+            "reasons": state_guard.get("reasons"),
+        },
+        "thresholds": {
+            "review_after_events": V936_REVIEW_AFTER_EVENTS,
+            "promotion_min_total_r": V936_PROMOTION_MIN_TOTAL_R,
+            "pause_consecutive_losses": V936_PAUSE_CONSECUTIVE_LOSSES,
+            "no_order_sent_warning_days": V936_NO_ORDER_SENT_WARNING_DAYS,
+        },
+        "monitoring_only": True,
+    }
+
+
+@app.get("/v9_3_6_micro_probe_events")
+def v9_3_6_micro_probe_events_endpoint(secret: str, days: int = 30, limit: int = 500):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_3_6_micro_probe_events(days=days, limit=limit)
+
+
+@app.get("/v9_3_6_execution_funnel")
+def v9_3_6_execution_funnel_endpoint(secret: str, days: int = 30, limit: int = 500):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_3_6_execution_funnel(days=days, limit=limit)
+
+
+@app.get("/v9_3_6_micro_probe_performance")
+def v9_3_6_micro_probe_performance_endpoint(secret: str, days: int = 30, limit: int = 500):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_3_6_probe_performance(days=days, limit=limit)
+
+
+@app.get("/v9_3_6_probe_decision_report")
+def v9_3_6_probe_decision_report_endpoint(secret: str, days: int = 30, limit: int = 500):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_3_6_probe_decision_report(days=days, limit=limit)
+
+
+@app.get("/v9_3_6_micro_probe_dashboard", response_class=HTMLResponse)
+def v9_3_6_micro_probe_dashboard(secret: str, days: int = 30, limit: int = 500):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    report = v9_3_6_probe_decision_report(days=days, limit=limit)
+    funnel = report.get("execution_funnel") or {}
+    perf = report.get("performance") or {}
+    latest = funnel.get("latest_events") or []
+
+    rows = "".join(
+        [
+            f"<tr><td>{h(x.get('_event_time'))}</td><td>{h(x.get('mode'))}</td><td>{h(x.get('_event_class'))}</td><td>{h(x.get('decision'))}</td><td>{h(x.get('status'))}</td><td>{h(x.get('decision_reason'))}</td><td>{h(x.get('order_id'))}</td><td>{h(x.get('_r'))}</td></tr>"
+            for x in latest[:30]
+        ]
+    )
+
+    return HTMLResponse(
+        f"""
+        <html>
+        <head>
+          <title>v9.3.6 MICRO_PROBE Monitor</title>
+          <style>
+            body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+            .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+            table{{border-collapse:collapse;width:100%;background:white;font-size:13px;margin-top:10px}}
+            th{{background:#111827;color:white}}
+            td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}
+            .good{{color:#047857;font-weight:bold}}
+            .bad{{color:#991b1b;font-weight:bold}}
+            .warn{{color:#92400e;font-weight:bold}}
+          </style>
+        </head>
+        <body>
+          <h1>v9.3.6 MICRO_PROBE Performance & Execution Monitor</h1>
+          <div class="card">
+            <b>Recommendation:</b> {h(report.get('recommendation'))}<br>
+            <b>Reasons:</b> {h(report.get('reasons'))}<br>
+            <b>Actions:</b> {h(report.get('actions'))}<br>
+            <b>Monitoring only:</b> {h(report.get('monitoring_only'))}
+          </div>
+          <div class="card">
+            <h2>Execution funnel</h2>
+            <b>Event count:</b> {h(funnel.get('event_count'))}<br>
+            <b>Order sent:</b> {h(funnel.get('order_sent_count'))}<br>
+            <b>Rejected:</b> {h(funnel.get('rejected_count'))}<br>
+            <b>Diagnosis:</b> {h(funnel.get('diagnosis'))}<br>
+            <b>By class:</b> {h(funnel.get('by_class'))}<br>
+            <b>By decision:</b> {h(funnel.get('by_decision'))}<br>
+            <b>By status:</b> {h(funnel.get('by_status'))}<br>
+            <b>Source:</b> {h(funnel.get('source'))}
+          </div>
+          <div class="card">
+            <h2>Performance</h2>
+            <b>Closed count:</b> {h(perf.get('closed_count'))}<br>
+            <b>Wins:</b> {h(perf.get('wins'))}<br>
+            <b>Losses:</b> {h(perf.get('losses'))}<br>
+            <b>Total R:</b> {h(perf.get('total_r'))}<br>
+            <b>Average R:</b> {h(perf.get('average_r'))}<br>
+            <b>Consecutive losses:</b> {h(perf.get('consecutive_losses'))}
+          </div>
+          <div class="card">
+            <h2>Guards</h2>
+            <b>Data source:</b> {h(report.get('source_guard'))}<br>
+            <b>Strategy state:</b> {h(report.get('state_guard'))}<br>
+            <b>Thresholds:</b> {h(report.get('thresholds'))}
+          </div>
+          <div class="card">
+            <h2>Latest probe events</h2>
+            <table>
+              <tr><th>Time</th><th>Mode</th><th>Class</th><th>Decision</th><th>Status</th><th>Reason</th><th>Order ID</th><th>R</th></tr>
+              {rows}
+            </table>
+          </div>
+          <p>
+            <a href="/v9_3_6_probe_decision_report?secret={h(secret)}&days={days}&limit={limit}">Decision report JSON</a> ·
+            <a href="/v9_3_6_execution_funnel?secret={h(secret)}&days={days}&limit={limit}">Execution funnel JSON</a> ·
+            <a href="/v9_3_5_productive_risk_dashboard?secret={h(secret)}">Productive Risk Dashboard</a> ·
             <a href="/strategy_state?secret={h(secret)}">Strategy State</a>
           </p>
         </body>
