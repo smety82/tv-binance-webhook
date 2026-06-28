@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.4")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.5")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.3.4</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.3.5</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.3.4"
+APP_FEATURE_LEVEL = "9.3.5"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8859,7 +8859,7 @@ def supabase_trade_log_health(secret: str):
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan", "tv_validation_registry", "validation_aware_short_calibration", "calibrated_short_research_dashboard", "deduplicated_short_portfolio_proposal", "micro_pilot_watchdog", "bull_regime_long_expansion_scanner", "wld_micro_pilot_guardrails", "telegram_watchdog_alerts", "long_candidate_onboarding_plan", "watchdog_market_gate_call_fix", "bull_long_scanner_function_name_fix", "supabase_keepalive", "data_source_guard", "raw_trade_event_inspector", "supabase_pause_watchdog", "outcome_source_trust_badge", "persistent_strategy_state_guard", "safe_baseline_enforcement", "micro_whitelist_guard", "deploy_drift_detector", "safe_baseline_python_literal_fix"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan", "tv_validation_registry", "validation_aware_short_calibration", "calibrated_short_research_dashboard", "deduplicated_short_portfolio_proposal", "micro_pilot_watchdog", "bull_regime_long_expansion_scanner", "wld_micro_pilot_guardrails", "telegram_watchdog_alerts", "long_candidate_onboarding_plan", "watchdog_market_gate_call_fix", "bull_long_scanner_function_name_fix", "supabase_keepalive", "data_source_guard", "raw_trade_event_inspector", "supabase_pause_watchdog", "outcome_source_trust_badge", "persistent_strategy_state_guard", "safe_baseline_enforcement", "micro_whitelist_guard", "deploy_drift_detector", "safe_baseline_python_literal_fix", "productive_micro_probe_lane", "direction_aligned_short_micro_probe", "xrp_short_micro_probe_baseline", "activity_pressure_layer"]}
 
 
 # ============================================================
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.3.4 PERSISTENT STRATEGY STATE GUARD
+# v9.3.5 PRODUCTIVE STRATEGY STATE GUARD
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -14253,12 +14253,12 @@ def v9_3_2_control_panel(secret: str):
 V933_STRATEGY_STATE_GUARD_ENABLED = os.getenv("V933_STRATEGY_STATE_GUARD_ENABLED", "true").lower() == "true"
 V933_AUTO_ENFORCE_SAFE_BASELINE_ON_STARTUP = os.getenv("V933_AUTO_ENFORCE_SAFE_BASELINE_ON_STARTUP", "false").lower() == "true"
 V933_NOTIFY_ON_STATE_DRIFT = os.getenv("V933_NOTIFY_ON_STATE_DRIFT", "true").lower() == "true"
-V933_MICRO_LIVE_WHITELIST = os.getenv("V933_MICRO_LIVE_WHITELIST", "").strip()
+V933_MICRO_LIVE_WHITELIST = os.getenv("V933_MICRO_LIVE_WHITELIST", "short_trend_pullback_xrpusdt_60_v1|XRPUSDT|SHORT").strip()
 V933_BLOCK_LONG_MICRO_WHEN_GATE_NOT_NORMAL = os.getenv("V933_BLOCK_LONG_MICRO_WHEN_GATE_NOT_NORMAL", "true").lower() == "true"
 V933_BLOCK_LONG_MICRO_WHEN_NOT_BULL = os.getenv("V933_BLOCK_LONG_MICRO_WHEN_NOT_BULL", "true").lower() == "true"
 V933_STRATEGY_GUARD_STATE_FILE = APP_DIR / "v9_3_3_strategy_state_guard_state.json"
 
-V933_SAFE_BASELINE_STATE = {'global': {'enabled': True, 'default_mode': 'OFF', 'max_open_positions': 1, 'daily_loss_limit_usdt': 10.0, 'weekly_loss_limit_usdt': 30.0, 'open_unrealized_loss_limit_usdt': 5.0, 'symbol_unrealized_loss_limit_usdt': 5.0, 'allow_unknown_symbols': False}, 'strategies': {'structure_swing_v134': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'MANAUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'APEUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_pullback_v100': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'MANAUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'APEUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'intraday_trend_pullback_icp_v13': {'enabled': True, 'symbols': {'ICPUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'momentum_breakout_sol_v11': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_movr_v11': {'enabled': True, 'symbols': {'MOVRUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_avax_v11': {'enabled': True, 'symbols': {'AVAXUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_nil_v11': {'enabled': True, 'symbols': {'NILUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_wld_v11': {'enabled': True, 'symbols': {'WLDUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'short_trend_pullback_xrpusdt_60_v1': {'enabled': True, 'symbols': {'XRPUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'PAPER', 'risk_pct': 0.05}}}}}}
+V933_SAFE_BASELINE_STATE = {'global': {'enabled': True, 'default_mode': 'OFF', 'max_open_positions': 1, 'daily_loss_limit_usdt': 10.0, 'weekly_loss_limit_usdt': 30.0, 'open_unrealized_loss_limit_usdt': 5.0, 'symbol_unrealized_loss_limit_usdt': 5.0, 'allow_unknown_symbols': False, 'max_daily_trades_global': 1}, 'strategies': {'structure_swing_v134': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'MANAUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'APEUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_pullback_v100': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'MANAUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'APEUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'intraday_trend_pullback_icp_v13': {'enabled': True, 'symbols': {'ICPUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'momentum_breakout_sol_v11': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_movr_v11': {'enabled': True, 'symbols': {'MOVRUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_avax_v11': {'enabled': True, 'symbols': {'AVAXUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_nil_v11': {'enabled': True, 'symbols': {'NILUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_wld_v11': {'enabled': True, 'symbols': {'WLDUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'short_trend_pullback_xrpusdt_60_v1': {'enabled': True, 'symbols': {'XRPUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'MICRO', 'risk_pct': 0.02, 'execution_lane': 'MICRO_PROBE', 'probe_status': 'ACTIVE', 'max_daily_trades': 1, 'max_daily_losses': 1, 'max_consecutive_losses': 2, 'promotion_review_after_live_trades': 5, 'auto_downgrade_after_consecutive_losses': 2}}}}}}
 
 
 def v9_3_3_key(strategy: str, symbol: str, side: str) -> str:
@@ -14574,7 +14574,7 @@ def v9_3_3_strategy_state_guard_dashboard(secret: str, notify: bool = False):
         f"""
         <html>
         <head>
-          <title>v9.3.4 Strategy State Guard</title>
+          <title>v9.3.5 Strategy State Guard</title>
           <style>
             body{font-family:Arial;margin:20px;background:#f6f8fb}
             .card{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}
@@ -14587,7 +14587,7 @@ def v9_3_3_strategy_state_guard_dashboard(secret: str, notify: bool = False):
           </style>
         </head>
         <body>
-          <h1>v9.3.4 Strategy State Guard</h1>
+          <h1>v9.3.5 Strategy State Guard</h1>
           <div class="card">
             <b>Level:</b> <span class="{h(data.get('level'))}">{h(data.get('level'))}</span><br>
             <b>Decision safe:</b> {h(data.get('decision_safe'))}<br>
@@ -14640,14 +14640,14 @@ def v9_3_3_control_panel(secret: str):
         f"""
         <html>
         <head>
-          <title>v9.3.4 Control Panel</title>
+          <title>v9.3.5 Control Panel</title>
           <style>
             body{font-family:Arial;margin:20px;background:#f6f8fb}
             .card{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}
           </style>
         </head>
         <body>
-          <h1>v9.3.4 Control Panel</h1>
+          <h1>v9.3.5 Control Panel</h1>
           <div class="card">
             <h2>Data source guard</h2>
             <b>Level:</b> {h(source_guard.get('level'))}<br>
@@ -14688,4 +14688,415 @@ def v9_3_3_startup_guard() -> None:
             v9_3_3_enforce_safe_baseline(reason="startup_auto_enforce_safe_baseline")
     except Exception as exc:
         log(f"[WARN] v9.3.3 startup strategy state guard failed: {exc}")
+
+
+# ============================================================
+# v9.3.5 PRODUCTIVE RISK ENGINE
+# ============================================================
+
+V935_PRODUCTIVE_RISK_ENABLED = os.getenv("V935_PRODUCTIVE_RISK_ENABLED", "true").lower() == "true"
+V935_DEFAULT_MICRO_PROBE_KEY = os.getenv(
+    "V935_DEFAULT_MICRO_PROBE_KEY",
+    "short_trend_pullback_xrpusdt_60_v1|XRPUSDT|SHORT",
+).strip()
+V935_DEFAULT_MICRO_PROBE_RISK_PCT = float(os.getenv("V935_DEFAULT_MICRO_PROBE_RISK_PCT", "0.02"))
+V935_MAX_ACTIVE_MICRO_PROBES = int(os.getenv("V935_MAX_ACTIVE_MICRO_PROBES", "1"))
+V935_ALLOW_SHORT_MICRO_PROBE_IN_BEAR = os.getenv("V935_ALLOW_SHORT_MICRO_PROBE_IN_BEAR", "true").lower() == "true"
+V935_ALLOW_SHORT_MICRO_PROBE_IN_CAUTIOUS = os.getenv("V935_ALLOW_SHORT_MICRO_PROBE_IN_CAUTIOUS", "true").lower() == "true"
+V935_MIN_DAYS_WITHOUT_LIVE_TRADE_FOR_PRESSURE = int(os.getenv("V935_MIN_DAYS_WITHOUT_LIVE_TRADE_FOR_PRESSURE", "7"))
+
+
+def v9_3_5_parse_probe_key(key: str) -> Dict[str, str]:
+    parts = [x.strip() for x in str(key or "").split("|")]
+    if len(parts) != 3:
+        return {"strategy": "", "symbol": "", "side": ""}
+    return {"strategy": parts[0], "symbol": normalize_symbol(parts[1]), "side": normalize_side(parts[2])}
+
+
+def v9_3_5_latest_live_order_days() -> Optional[float]:
+    try:
+        rows = read_trade_log_rows(limit=0)
+    except Exception:
+        rows = []
+
+    last_ts = None
+    for row in rows:
+        if row.get("status") == "order_sent" and str(row.get("mode", "")).upper() in {"MICRO", "LIVE"}:
+            ts = row.get("timestamp") or row.get("timestamp_utc") or row.get("created_at")
+            parsed = v9_3_2_parse_iso_ts(ts)
+            if parsed is not None:
+                last_ts = max(last_ts or parsed, parsed)
+
+    if last_ts is None:
+        return None
+    return round((time.time() - last_ts) / 86400.0, 2)
+
+
+def v9_3_5_count_micro_probe_items(state: Optional[Dict[str, Any]] = None) -> int:
+    state = state or load_state()
+    count = 0
+    for item in v9_3_3_active_micro_live_items(state):
+        cfg = item.get("config") or {}
+        if str(cfg.get("execution_lane", "")).upper() == "MICRO_PROBE":
+            count += 1
+    return count
+
+
+def v9_3_5_probe_candidate_status() -> Dict[str, Any]:
+    candidate = v9_3_5_parse_probe_key(V935_DEFAULT_MICRO_PROBE_KEY)
+    state = load_state()
+    cfg = get_side_config_copy(state, candidate["strategy"], candidate["symbol"], candidate["side"])
+
+    source_guard = v9_3_2_data_source_guard(notify=False)
+    state_guard = v9_3_3_strategy_state_guard(notify=False)
+    market_gate = v9_market_regime_gate(days=30, limit=PAPER_OUTCOME_MAX_EVENTS)
+    regime = v9_2_directional_market_regime(force=False)
+
+    gate_level = str(market_gate.get("gate_level") or "UNKNOWN").upper()
+    regime_name = str(regime.get("regime") or "UNKNOWN").upper()
+    preferred = str(regime.get("preferred_direction") or "UNKNOWN").upper()
+    side = candidate["side"]
+
+    active_micro_live_count = len(v9_3_3_active_micro_live_items(state))
+    active_probe_count = v9_3_5_count_micro_probe_items(state)
+    days_since_live = v9_3_5_latest_live_order_days()
+
+    reasons = []
+    blockers = []
+
+    if not V935_PRODUCTIVE_RISK_ENABLED:
+        blockers.append("V935_PRODUCTIVE_RISK_DISABLED")
+
+    if not source_guard.get("decision_data_trusted"):
+        blockers.append("DATA_SOURCE_NOT_TRUSTED")
+
+    if state_guard.get("level") not in {"OK"}:
+        blockers.append(f"STRATEGY_STATE_GUARD_{state_guard.get('level')}")
+
+    if active_micro_live_count > V935_MAX_ACTIVE_MICRO_PROBES:
+        blockers.append(f"TOO_MANY_ACTIVE_MICRO_LIVE_{active_micro_live_count}_MAX_{V935_MAX_ACTIVE_MICRO_PROBES}")
+
+    if active_probe_count > V935_MAX_ACTIVE_MICRO_PROBES:
+        blockers.append(f"TOO_MANY_ACTIVE_MICRO_PROBES_{active_probe_count}_MAX_{V935_MAX_ACTIVE_MICRO_PROBES}")
+
+    if side == "SHORT":
+        if regime_name == "BEAR" and V935_ALLOW_SHORT_MICRO_PROBE_IN_BEAR:
+            reasons.append("SHORT_PROBE_ALIGNED_WITH_BEAR_REGIME")
+        elif gate_level == "CAUTIOUS" and V935_ALLOW_SHORT_MICRO_PROBE_IN_CAUTIOUS and preferred in {"SHORT", "UNKNOWN"}:
+            reasons.append("SHORT_PROBE_ALLOWED_IN_CAUTIOUS_REGIME")
+        else:
+            blockers.append(f"SHORT_PROBE_NOT_ALIGNED_REGIME_{regime_name}_PREFERRED_{preferred}")
+    elif side == "LONG":
+        if regime_name not in {"BULL", "TRANSITION"}:
+            blockers.append(f"LONG_PROBE_BLOCKED_BY_REGIME_{regime_name}")
+        if gate_level not in {"NORMAL", "LOW"}:
+            blockers.append(f"LONG_PROBE_BLOCKED_BY_GATE_{gate_level}")
+
+    if days_since_live is None:
+        reasons.append("NO_PREVIOUS_MICRO_LIVE_ORDER_FOUND_ACTIVITY_PRESSURE_ACTIVE")
+    elif days_since_live >= V935_MIN_DAYS_WITHOUT_LIVE_TRADE_FOR_PRESSURE:
+        reasons.append(f"NO_LIVE_TRADE_FOR_{days_since_live}_DAYS_ACTIVITY_PRESSURE_ACTIVE")
+    else:
+        reasons.append(f"LAST_LIVE_TRADE_{days_since_live}_DAYS_AGO")
+
+    mode_now = str(cfg.get("mode", "OFF")).upper()
+    risk_now = v8_float(cfg.get("risk_pct"), 0.0)
+    lane_now = str(cfg.get("execution_lane", "")).upper()
+
+    candidate_status = {
+        "strategy": candidate["strategy"],
+        "symbol": candidate["symbol"],
+        "side": candidate["side"],
+        "current_mode": mode_now,
+        "current_risk_pct": risk_now,
+        "current_execution_lane": lane_now,
+        "target_mode": "MICRO",
+        "target_risk_pct": V935_DEFAULT_MICRO_PROBE_RISK_PCT,
+        "target_execution_lane": "MICRO_PROBE",
+        "max_daily_trades": cfg.get("max_daily_trades"),
+        "max_daily_losses": cfg.get("max_daily_losses"),
+        "max_consecutive_losses": cfg.get("max_consecutive_losses"),
+    }
+
+    already_active = (
+        mode_now == "MICRO"
+        and abs(risk_now - V935_DEFAULT_MICRO_PROBE_RISK_PCT) < 1e-9
+        and lane_now == "MICRO_PROBE"
+    )
+
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "productive_risk_enabled": V935_PRODUCTIVE_RISK_ENABLED,
+        "recommendation": "MICRO_PROBE_ACTIVE_MONITOR_CLOSELY" if already_active and not blockers else (
+            "ENABLE_XRP_SHORT_MICRO_PROBE" if not blockers else "DO_NOT_ENABLE_MICRO_PROBE"
+        ),
+        "allow_enable_micro_probe": len(blockers) == 0,
+        "already_active": already_active,
+        "candidate": candidate_status,
+        "reasons": reasons,
+        "blockers": blockers,
+        "activity_pressure": {
+            "days_since_last_micro_live_order": days_since_live,
+            "threshold_days": V935_MIN_DAYS_WITHOUT_LIVE_TRADE_FOR_PRESSURE,
+            "active": days_since_live is None or days_since_live >= V935_MIN_DAYS_WITHOUT_LIVE_TRADE_FOR_PRESSURE,
+        },
+        "source_guard": {
+            "level": source_guard.get("level"),
+            "decision_data_trusted": source_guard.get("decision_data_trusted"),
+            "effective_source": (source_guard.get("supabase") or {}).get("effective_source"),
+        },
+        "state_guard": {
+            "level": state_guard.get("level"),
+            "decision_safe": state_guard.get("decision_safe"),
+            "active_micro_live_count": state_guard.get("active_micro_live_count"),
+            "reasons": state_guard.get("reasons"),
+        },
+        "market_gate": {
+            "gate_level": market_gate.get("gate_level"),
+            "allow_new_micro": market_gate.get("allow_new_micro"),
+            "allow_new_paper": market_gate.get("allow_new_paper"),
+            "recommendation": market_gate.get("recommendation"),
+            "ai_risk": market_gate.get("ai_risk"),
+        },
+        "directional_regime": {
+            "regime": regime.get("regime"),
+            "preferred_direction": regime.get("preferred_direction"),
+            "bull_score": regime.get("bull_score"),
+            "bear_score": regime.get("bear_score"),
+        },
+        "rules": {
+            "max_active_micro_probes": V935_MAX_ACTIVE_MICRO_PROBES,
+            "default_probe_key": V935_DEFAULT_MICRO_PROBE_KEY,
+            "default_probe_risk_pct": V935_DEFAULT_MICRO_PROBE_RISK_PCT,
+            "allow_short_micro_probe_in_bear": V935_ALLOW_SHORT_MICRO_PROBE_IN_BEAR,
+            "allow_short_micro_probe_in_cautious": V935_ALLOW_SHORT_MICRO_PROBE_IN_CAUTIOUS,
+        },
+    }
+
+
+def v9_3_5_enable_default_micro_probe(reason: str = "v9_3_5_enable_default_micro_probe") -> Dict[str, Any]:
+    require_strategy_admin()
+    status = v9_3_5_probe_candidate_status()
+    if not status.get("allow_enable_micro_probe") and not status.get("already_active"):
+        raise HTTPException(400, f"MICRO_PROBE_NOT_ALLOWED: {status.get('blockers')}")
+
+    candidate = v9_3_5_parse_probe_key(V935_DEFAULT_MICRO_PROBE_KEY)
+    update = set_strategy_side_config(
+        strategy=candidate["strategy"],
+        symbol=candidate["symbol"],
+        side=candidate["side"],
+        mode="MICRO",
+        risk_pct=V935_DEFAULT_MICRO_PROBE_RISK_PCT,
+        extra_updates={
+            "execution_lane": "MICRO_PROBE",
+            "probe_status": "ACTIVE",
+            "max_daily_trades": 1,
+            "max_daily_losses": 1,
+            "max_consecutive_losses": 2,
+            "promotion_review_after_live_trades": 5,
+            "auto_downgrade_after_consecutive_losses": 2,
+            "enabled_by": "v9_3_5_productive_risk_engine",
+            "enabled_at": now_iso(),
+        },
+        reason=reason,
+    )
+
+    try:
+        safe_notify_event(
+            "🟢 MICRO_PROBE enabled",
+            f"{candidate['strategy']} {candidate['symbol']} {candidate['side']} risk={V935_DEFAULT_MICRO_PROBE_RISK_PCT}%\nLane=MICRO_PROBE",
+            important=True,
+        )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "update": update,
+        "status_after": v9_3_5_probe_candidate_status(),
+    }
+
+
+def v9_3_5_disable_default_micro_probe(reason: str = "v9_3_5_disable_default_micro_probe") -> Dict[str, Any]:
+    require_strategy_admin()
+    candidate = v9_3_5_parse_probe_key(V935_DEFAULT_MICRO_PROBE_KEY)
+    update = set_strategy_side_config(
+        strategy=candidate["strategy"],
+        symbol=candidate["symbol"],
+        side=candidate["side"],
+        mode="PAPER",
+        risk_pct=V935_DEFAULT_MICRO_PROBE_RISK_PCT,
+        extra_updates={
+            "execution_lane": "MICRO_PROBE_PAUSED",
+            "probe_status": "PAUSED",
+            "paused_by": "v9_3_5_productive_risk_engine",
+            "paused_at": now_iso(),
+        },
+        reason=reason,
+    )
+
+    try:
+        safe_notify_event(
+            "🟡 MICRO_PROBE paused",
+            f"{candidate['strategy']} {candidate['symbol']} {candidate['side']} -> PAPER\nReason: {reason}",
+            important=True,
+        )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "update": update,
+        "status_after": v9_3_5_probe_candidate_status(),
+    }
+
+
+@app.get("/v9_3_5_productive_risk_status")
+def v9_3_5_productive_risk_status_endpoint(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_3_5_probe_candidate_status()
+
+
+@app.post("/v9_3_5_enable_micro_probe")
+async def v9_3_5_enable_micro_probe_endpoint(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    confirm = str(body.get("confirm") or "").upper()
+    if confirm != "ENABLE_MICRO_PROBE":
+        raise HTTPException(400, "Set confirm='ENABLE_MICRO_PROBE' to enable the productive MICRO_PROBE.")
+    return v9_3_5_enable_default_micro_probe(reason=body.get("reason") or "manual_v9_3_5_enable_micro_probe")
+
+
+@app.post("/v9_3_5_disable_micro_probe")
+async def v9_3_5_disable_micro_probe_endpoint(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    confirm = str(body.get("confirm") or "").upper()
+    if confirm != "DISABLE_MICRO_PROBE":
+        raise HTTPException(400, "Set confirm='DISABLE_MICRO_PROBE' to pause the productive MICRO_PROBE.")
+    return v9_3_5_disable_default_micro_probe(reason=body.get("reason") or "manual_v9_3_5_disable_micro_probe")
+
+
+@app.get("/v9_3_5_productive_risk_dashboard", response_class=HTMLResponse)
+def v9_3_5_productive_risk_dashboard(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    data = v9_3_5_probe_candidate_status()
+    candidate = data.get("candidate") or {}
+
+    return HTMLResponse(
+        f"""
+        <html>
+        <head>
+          <title>v9.3.5 Productive Risk Engine</title>
+          <style>
+            body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+            .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+            .OK{{color:#047857;font-weight:bold}}
+            .BLOCK{{color:#991b1b;font-weight:bold}}
+            table{{border-collapse:collapse;width:100%;background:white;font-size:13px;margin-top:10px}}
+            th{{background:#111827;color:white}}
+            td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}
+          </style>
+        </head>
+        <body>
+          <h1>v9.3.5 Productive Risk Engine</h1>
+          <div class="card">
+            <b>Recommendation:</b> {h(data.get('recommendation'))}<br>
+            <b>Allow enable MICRO_PROBE:</b> {h(data.get('allow_enable_micro_probe'))}<br>
+            <b>Already active:</b> {h(data.get('already_active'))}<br>
+            <b>Reasons:</b> {h(data.get('reasons'))}<br>
+            <b>Blockers:</b> <span class="{'OK' if not data.get('blockers') else 'BLOCK'}">{h(data.get('blockers'))}</span>
+          </div>
+          <div class="card">
+            <h2>Default candidate</h2>
+            <table>
+              <tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Current mode</th><th>Current risk</th><th>Target mode</th><th>Target risk</th><th>Lane</th></tr>
+              <tr>
+                <td>{h(candidate.get('strategy'))}</td>
+                <td>{h(candidate.get('symbol'))}</td>
+                <td>{h(candidate.get('side'))}</td>
+                <td>{h(candidate.get('current_mode'))}</td>
+                <td>{h(candidate.get('current_risk_pct'))}</td>
+                <td>{h(candidate.get('target_mode'))}</td>
+                <td>{h(candidate.get('target_risk_pct'))}</td>
+                <td>{h(candidate.get('target_execution_lane'))}</td>
+              </tr>
+            </table>
+          </div>
+          <div class="card">
+            <h2>Guards</h2>
+            <b>Data source:</b> {h(data.get('source_guard'))}<br>
+            <b>Strategy state:</b> {h(data.get('state_guard'))}<br>
+            <b>Market gate:</b> {h(data.get('market_gate'))}<br>
+            <b>Directional regime:</b> {h(data.get('directional_regime'))}<br>
+            <b>Activity pressure:</b> {h(data.get('activity_pressure'))}
+          </div>
+          <p>
+            <a href="/v9_3_5_productive_risk_status?secret={h(secret)}">Status JSON</a> ·
+            <a href="/v9_3_3_strategy_state_guard_dashboard?secret={h(secret)}">Strategy State Guard</a> ·
+            <a href="/v9_3_2_data_source_dashboard?secret={h(secret)}">Data Source Guard</a>
+          </p>
+          <p><b>Enable:</b> POST /v9_3_5_enable_micro_probe with JSON: {{"secret":"...","confirm":"ENABLE_MICRO_PROBE"}}</p>
+          <p><b>Pause:</b> POST /v9_3_5_disable_micro_probe with JSON: {{"secret":"...","confirm":"DISABLE_MICRO_PROBE"}}</p>
+        </body>
+        </html>
+        """
+    )
+
+
+@app.get("/v9_3_5_control_panel", response_class=HTMLResponse)
+def v9_3_5_control_panel(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    productive = v9_3_5_probe_candidate_status()
+    source_guard = v9_3_2_data_source_guard(notify=False)
+    state_guard = v9_3_3_strategy_state_guard(notify=False)
+    market_gate = v9_market_regime_gate(days=30, limit=PAPER_OUTCOME_MAX_EVENTS)
+
+    return HTMLResponse(
+        f"""
+        <html>
+        <head>
+          <title>v9.3.5 Control Panel</title>
+          <style>
+            body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+            .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+          </style>
+        </head>
+        <body>
+          <h1>v9.3.5 Control Panel</h1>
+          <div class="card">
+            <h2>Productive Risk Engine</h2>
+            <b>Recommendation:</b> {h(productive.get('recommendation'))}<br>
+            <b>Allow enable MICRO_PROBE:</b> {h(productive.get('allow_enable_micro_probe'))}<br>
+            <b>Already active:</b> {h(productive.get('already_active'))}<br>
+            <b>Blockers:</b> {h(productive.get('blockers'))}
+          </div>
+          <div class="card">
+            <h2>Safety</h2>
+            <b>Data source trusted:</b> {h(source_guard.get('decision_data_trusted'))}<br>
+            <b>State guard level:</b> {h(state_guard.get('level'))}<br>
+            <b>Active MICRO/LIVE:</b> {h(state_guard.get('active_micro_live_count'))}<br>
+            <b>Market gate:</b> {h({'gate_level': market_gate.get('gate_level'), 'allow_new_micro': market_gate.get('allow_new_micro'), 'ai_risk': (market_gate.get('ai_risk') or {}).get('level')})}
+          </div>
+          <p>
+            <a href="/v9_3_5_productive_risk_dashboard?secret={h(secret)}">Productive Risk Dashboard</a> ·
+            <a href="/v9_3_3_strategy_state_guard_dashboard?secret={h(secret)}">Strategy State Guard</a> ·
+            <a href="/v9_3_2_data_source_dashboard?secret={h(secret)}">Data Source Guard</a> ·
+            <a href="/strategy_state?secret={h(secret)}">Strategy State</a>
+          </p>
+        </body>
+        </html>
+        """
+    )
 
