@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.6")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.7")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.3.6</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.3.7</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.3.6"
+APP_FEATURE_LEVEL = "9.3.7"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8859,7 +8859,7 @@ def supabase_trade_log_health(secret: str):
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan", "tv_validation_registry", "validation_aware_short_calibration", "calibrated_short_research_dashboard", "deduplicated_short_portfolio_proposal", "micro_pilot_watchdog", "bull_regime_long_expansion_scanner", "wld_micro_pilot_guardrails", "telegram_watchdog_alerts", "long_candidate_onboarding_plan", "watchdog_market_gate_call_fix", "bull_long_scanner_function_name_fix", "supabase_keepalive", "data_source_guard", "raw_trade_event_inspector", "supabase_pause_watchdog", "outcome_source_trust_badge", "persistent_strategy_state_guard", "safe_baseline_enforcement", "micro_whitelist_guard", "deploy_drift_detector", "safe_baseline_python_literal_fix", "productive_micro_probe_lane", "direction_aligned_short_micro_probe", "xrp_short_micro_probe_baseline", "activity_pressure_layer", "micro_probe_performance_monitor", "execution_funnel_monitor", "probe_decision_report", "monitoring_only_release"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan", "tv_validation_registry", "validation_aware_short_calibration", "calibrated_short_research_dashboard", "deduplicated_short_portfolio_proposal", "micro_pilot_watchdog", "bull_regime_long_expansion_scanner", "wld_micro_pilot_guardrails", "telegram_watchdog_alerts", "long_candidate_onboarding_plan", "watchdog_market_gate_call_fix", "bull_long_scanner_function_name_fix", "supabase_keepalive", "data_source_guard", "raw_trade_event_inspector", "supabase_pause_watchdog", "outcome_source_trust_badge", "persistent_strategy_state_guard", "safe_baseline_enforcement", "micro_whitelist_guard", "deploy_drift_detector", "safe_baseline_python_literal_fix", "productive_micro_probe_lane", "direction_aligned_short_micro_probe", "xrp_short_micro_probe_baseline", "activity_pressure_layer", "micro_probe_performance_monitor", "execution_funnel_monitor", "probe_decision_report", "monitoring_only_release", "settings_readiness_dashboard", "telegram_duplicate_suppression", "tradingview_alert_checklist", "probe_setup_audit"]}
 
 
 # ============================================================
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.3.6 PRODUCTIVE STRATEGY STATE GUARD
+# v9.3.7 SETTINGS READINESS GUARD
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -14475,7 +14475,7 @@ def v9_3_3_strategy_state_guard(notify: bool = False) -> Dict[str, Any]:
     previous = read_json_file(V933_STRATEGY_GUARD_STATE_FILE, {})
     previous_level = previous.get("level")
     previous_reasons = previous.get("reasons") or []
-    should_notify = notify and V933_NOTIFY_ON_STATE_DRIFT and (level != "OK" or previous_level != level or previous_reasons != result["reasons"])
+    should_notify = notify and V933_NOTIFY_ON_STATE_DRIFT and (level != "OK" or previous_level != level or previous_reasons != result["reasons"]) and v9_3_7_should_send_strategy_guard_alert(result)
 
     if should_notify:
         try:
@@ -14574,7 +14574,7 @@ def v9_3_3_strategy_state_guard_dashboard(secret: str, notify: bool = False):
         f"""
         <html>
         <head>
-          <title>v9.3.6 Strategy State Guard</title>
+          <title>v9.3.7 Strategy State Guard</title>
           <style>
             body{font-family:Arial;margin:20px;background:#f6f8fb}
             .card{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}
@@ -14587,7 +14587,7 @@ def v9_3_3_strategy_state_guard_dashboard(secret: str, notify: bool = False):
           </style>
         </head>
         <body>
-          <h1>v9.3.6 Strategy State Guard</h1>
+          <h1>v9.3.7 Strategy State Guard</h1>
           <div class="card">
             <b>Level:</b> <span class="{h(data.get('level'))}">{h(data.get('level'))}</span><br>
             <b>Decision safe:</b> {h(data.get('decision_safe'))}<br>
@@ -14640,14 +14640,14 @@ def v9_3_3_control_panel(secret: str):
         f"""
         <html>
         <head>
-          <title>v9.3.6 Control Panel</title>
+          <title>v9.3.7 Control Panel</title>
           <style>
             body{font-family:Arial;margin:20px;background:#f6f8fb}
             .card{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}
           </style>
         </head>
         <body>
-          <h1>v9.3.6 Control Panel</h1>
+          <h1>v9.3.7 Control Panel</h1>
           <div class="card">
             <h2>Data source guard</h2>
             <b>Level:</b> {h(source_guard.get('level'))}<br>
@@ -15067,14 +15067,14 @@ def v9_3_5_control_panel(secret: str):
         f"""
         <html>
         <head>
-          <title>v9.3.6 Control Panel</title>
+          <title>v9.3.7 Control Panel</title>
           <style>
             body{{font-family:Arial;margin:20px;background:#f6f8fb}}
             .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
           </style>
         </head>
         <body>
-          <h1>v9.3.6 Control Panel</h1>
+          <h1>v9.3.7 Control Panel</h1>
           <div class="card">
             <h2>Productive Risk Engine</h2>
             <b>Recommendation:</b> {h(productive.get('recommendation'))}<br>
@@ -15563,4 +15563,425 @@ def v9_3_6_micro_probe_dashboard(secret: str, days: int = 30, limit: int = 500):
         </html>
         """
     )
+
+
+# ============================================================
+# v9.3.7 SETTINGS READINESS DASHBOARD + TELEGRAM DE-DUP
+# ============================================================
+# Purpose:
+# - Validate whether the active MICRO_PROBE setup is really configured correctly.
+# - Reduce repeated Telegram noise from identical guard alerts.
+# - Monitoring/checklist only; no strategy_state or trading risk change.
+
+V937_TELEGRAM_GUARD_DEDUP_ENABLED = os.getenv("V937_TELEGRAM_GUARD_DEDUP_ENABLED", "true").lower() == "true"
+V937_TELEGRAM_GUARD_DEDUP_MINUTES = float(os.getenv("V937_TELEGRAM_GUARD_DEDUP_MINUTES", "360"))
+V937_SETTINGS_AUDIT_STATE_FILE = APP_DIR / "v9_3_7_settings_audit_state.json"
+V937_ALERT_CHECKLIST_FILE = APP_DIR / "v9_3_7_tradingview_alert_checklist.json"
+
+
+def v9_3_7_signature(value: Any) -> str:
+    try:
+        return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        return str(value)
+
+
+def v9_3_7_should_send_strategy_guard_alert(result: Dict[str, Any]) -> bool:
+    if not V937_TELEGRAM_GUARD_DEDUP_ENABLED:
+        return True
+
+    state = read_json_file(V937_SETTINGS_AUDIT_STATE_FILE, {})
+    now_ts = time.time()
+    signature = v9_3_7_signature({
+        "level": result.get("level"),
+        "reasons": result.get("reasons"),
+        "active_micro_live_count": result.get("active_micro_live_count"),
+    })
+    last_signature = state.get("last_strategy_guard_alert_signature")
+    last_ts = to_float_or_none(state.get("last_strategy_guard_alert_ts")) or 0.0
+    min_seconds = max(60.0, V937_TELEGRAM_GUARD_DEDUP_MINUTES * 60.0)
+
+    if signature == last_signature and (now_ts - last_ts) < min_seconds:
+        return False
+
+    state["last_strategy_guard_alert_signature"] = signature
+    state["last_strategy_guard_alert_ts"] = now_ts
+    state["last_strategy_guard_alert_at"] = now_iso()
+    write_json_file(V937_SETTINGS_AUDIT_STATE_FILE, state)
+    return True
+
+
+def v9_3_7_get_tradingview_checklist() -> Dict[str, Any]:
+    default = {
+        "checked": False,
+        "checked_at": None,
+        "items": {
+            "chart_symbol_xrpusdt_p": False,
+            "timeframe_1h": False,
+            "script_universal_trend_pullback_v1": False,
+            "strategy_instance_short_trend_pullback_xrpusdt_60_v1": False,
+            "expected_symbol_xrpusdt": False,
+            "short_enabled": False,
+            "long_disabled": False,
+            "alert_function_calls_only": False,
+            "webhook_url_tv": False,
+            "message_empty_or_valid": False,
+        },
+        "notes": "Manual checklist. The backend cannot directly inspect TradingView alert settings.",
+    }
+    saved = read_json_file(V937_ALERT_CHECKLIST_FILE, {})
+    if not isinstance(saved, dict) or not saved:
+        return default
+    merged = dict(default)
+    merged.update({k: v for k, v in saved.items() if k != "items"})
+    items = dict(default["items"])
+    items.update(saved.get("items") or {})
+    merged["items"] = items
+    return merged
+
+
+def v9_3_7_update_tradingview_checklist(items: Dict[str, Any], notes: Optional[str] = None) -> Dict[str, Any]:
+    current = v9_3_7_get_tradingview_checklist()
+    cur_items = current.get("items") or {}
+    for key, value in (items or {}).items():
+        if key in cur_items:
+            cur_items[key] = bool(value)
+    current["items"] = cur_items
+    current["checked"] = all(bool(x) for x in cur_items.values())
+    current["checked_at"] = now_iso()
+    if notes is not None:
+        current["notes"] = str(notes)
+    write_json_file(V937_ALERT_CHECKLIST_FILE, current)
+    return current
+
+
+def v9_3_7_env_snapshot() -> Dict[str, Any]:
+    return {
+        "APP_FEATURE_LEVEL": APP_FEATURE_LEVEL,
+        "V935_PRODUCTIVE_RISK_ENABLED": V935_PRODUCTIVE_RISK_ENABLED,
+        "V935_DEFAULT_MICRO_PROBE_KEY": V935_DEFAULT_MICRO_PROBE_KEY,
+        "V935_DEFAULT_MICRO_PROBE_RISK_PCT": V935_DEFAULT_MICRO_PROBE_RISK_PCT,
+        "V935_MAX_ACTIVE_MICRO_PROBES": V935_MAX_ACTIVE_MICRO_PROBES,
+        "V933_MICRO_LIVE_WHITELIST": V933_MICRO_LIVE_WHITELIST,
+        "V933_NOTIFY_ON_STATE_DRIFT": V933_NOTIFY_ON_STATE_DRIFT,
+        "V933_AUTO_ENFORCE_SAFE_BASELINE_ON_STARTUP": V933_AUTO_ENFORCE_SAFE_BASELINE_ON_STARTUP,
+        "V932_SUPABASE_GUARD_ENABLED": V932_SUPABASE_GUARD_ENABLED,
+        "V937_TELEGRAM_GUARD_DEDUP_ENABLED": V937_TELEGRAM_GUARD_DEDUP_ENABLED,
+        "V937_TELEGRAM_GUARD_DEDUP_MINUTES": V937_TELEGRAM_GUARD_DEDUP_MINUTES,
+    }
+
+
+def v9_3_7_probe_setup_audit(notify: bool = False) -> Dict[str, Any]:
+    source_guard = v9_3_2_data_source_guard(notify=False)
+    state_guard = v9_3_3_strategy_state_guard(notify=False)
+    productive = v9_3_5_probe_candidate_status()
+    monitor = v9_3_6_probe_decision_report(days=30, limit=500)
+    strategy_state = load_state()
+    probe = v9_3_6_probe_key_parts(V936_PROBE_KEY)
+    cfg = get_side_config_copy(strategy_state, probe["strategy"], probe["symbol"], probe["side"])
+    tv = v9_3_7_get_tradingview_checklist()
+
+    checks = []
+
+    def add_check(key: str, ok: bool, severity: str, detail: str, action: str = "") -> None:
+        checks.append({
+            "key": key,
+            "ok": bool(ok),
+            "severity": severity,
+            "detail": detail,
+            "action": action,
+        })
+
+    add_check(
+        "version",
+        APP_FEATURE_LEVEL == "9.3.7",
+        "CRITICAL",
+        f"Running version {APP_FEATURE_LEVEL}",
+        "Deploy app_v9_3_7.py" if APP_FEATURE_LEVEL != "9.3.7" else "",
+    )
+    add_check(
+        "data_source_guard",
+        bool(source_guard.get("decision_data_trusted")),
+        "CRITICAL",
+        f"Data source level={source_guard.get('level')} trusted={source_guard.get('decision_data_trusted')}",
+        "Fix Supabase / keepalive before decisions",
+    )
+    add_check(
+        "strategy_state_guard",
+        state_guard.get("level") == "OK",
+        "CRITICAL",
+        f"Strategy state level={state_guard.get('level')} reasons={state_guard.get('reasons')}",
+        "Run safe baseline enforce if CRITICAL",
+    )
+    add_check(
+        "productive_probe_active_or_ready",
+        productive.get("already_active") or productive.get("allow_enable_micro_probe"),
+        "CRITICAL",
+        f"productive recommendation={productive.get('recommendation')} blockers={productive.get('blockers')}",
+        "Fix blockers or enable MICRO_PROBE",
+    )
+    add_check(
+        "probe_strategy_key",
+        v9_3_3_key(probe["strategy"], probe["symbol"], probe["side"]) == V936_PROBE_KEY,
+        "CRITICAL",
+        f"Probe key={V936_PROBE_KEY}",
+        "Check V936_PROBE_KEY / V935_DEFAULT_MICRO_PROBE_KEY",
+    )
+    add_check(
+        "probe_mode",
+        str(cfg.get("mode", "")).upper() == "MICRO",
+        "CRITICAL",
+        f"Current probe mode={cfg.get('mode')}",
+        "Enable v9.3.5 MICRO_PROBE",
+    )
+    add_check(
+        "probe_risk",
+        abs(v8_float(cfg.get("risk_pct"), 0.0) - V935_DEFAULT_MICRO_PROBE_RISK_PCT) < 1e-9,
+        "CRITICAL",
+        f"Current risk={cfg.get('risk_pct')} target={V935_DEFAULT_MICRO_PROBE_RISK_PCT}",
+        "Set risk_pct to 0.02 for probe",
+    )
+    add_check(
+        "probe_execution_lane",
+        str(cfg.get("execution_lane", "")).upper() == "MICRO_PROBE",
+        "CRITICAL",
+        f"execution_lane={cfg.get('execution_lane')}",
+        "Set execution_lane=MICRO_PROBE",
+    )
+    add_check(
+        "micro_whitelist",
+        V936_PROBE_KEY in v9_3_3_allowed_micro_keys(),
+        "CRITICAL",
+        f"Whitelist={sorted(list(v9_3_3_allowed_micro_keys()))}",
+        "Set V933_MICRO_LIVE_WHITELIST to XRP short probe key",
+    )
+    add_check(
+        "max_one_micro",
+        state_guard.get("active_micro_live_count") == 1,
+        "WATCH",
+        f"active_micro_live_count={state_guard.get('active_micro_live_count')}",
+        "Expected exactly one active MICRO_PROBE",
+    )
+    add_check(
+        "tradingview_manual_checklist",
+        bool(tv.get("checked")),
+        "WATCH",
+        f"TradingView checklist checked={tv.get('checked')} checked_at={tv.get('checked_at')}",
+        "Complete the manual TradingView checklist",
+    )
+    add_check(
+        "telegram_dedup",
+        V937_TELEGRAM_GUARD_DEDUP_ENABLED,
+        "WATCH",
+        f"dedup_enabled={V937_TELEGRAM_GUARD_DEDUP_ENABLED} minutes={V937_TELEGRAM_GUARD_DEDUP_MINUTES}",
+        "Keep dedup enabled to avoid repeated identical CRITICAL alerts",
+    )
+
+    critical_failed = [x for x in checks if not x["ok"] and x["severity"] == "CRITICAL"]
+    watch_failed = [x for x in checks if not x["ok"] and x["severity"] == "WATCH"]
+
+    if critical_failed:
+        level = "CRITICAL"
+        recommendation = "FIX_CRITICAL_SETUP_BEFORE_TRUSTING_MICRO_PROBE"
+    elif watch_failed:
+        level = "WATCH"
+        recommendation = "SETUP_USABLE_BUT_COMPLETE_CHECKLIST"
+    else:
+        level = "OK"
+        recommendation = "SETUP_READY_MONITOR_MICRO_PROBE"
+
+    result = {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "level": level,
+        "recommendation": recommendation,
+        "checks": checks,
+        "critical_failed": critical_failed,
+        "watch_failed": watch_failed,
+        "probe_config": {
+            "strategy": probe["strategy"],
+            "symbol": probe["symbol"],
+            "side": probe["side"],
+            "side_config": cfg,
+        },
+        "tradingview_checklist": tv,
+        "env": v9_3_7_env_snapshot(),
+        "guards": {
+            "data_source": {
+                "level": source_guard.get("level"),
+                "decision_data_trusted": source_guard.get("decision_data_trusted"),
+                "supabase": source_guard.get("supabase"),
+            },
+            "strategy_state": {
+                "level": state_guard.get("level"),
+                "decision_safe": state_guard.get("decision_safe"),
+                "active_micro_live_count": state_guard.get("active_micro_live_count"),
+                "reasons": state_guard.get("reasons"),
+            },
+            "productive": {
+                "recommendation": productive.get("recommendation"),
+                "allow_enable_micro_probe": productive.get("allow_enable_micro_probe"),
+                "already_active": productive.get("already_active"),
+                "blockers": productive.get("blockers"),
+            },
+            "micro_probe_monitor": {
+                "recommendation": monitor.get("recommendation"),
+                "reasons": monitor.get("reasons"),
+                "execution_funnel": monitor.get("execution_funnel"),
+                "performance": monitor.get("performance"),
+            },
+        },
+        "manual_note": "TradingView alert configuration cannot be verified from backend. Use the checklist.",
+    }
+
+    if notify and level in {"CRITICAL", "WATCH"}:
+        state = read_json_file(V937_SETTINGS_AUDIT_STATE_FILE, {})
+        signature = v9_3_7_signature({"level": level, "critical": [x["key"] for x in critical_failed], "watch": [x["key"] for x in watch_failed]})
+        last_signature = state.get("last_settings_audit_signature")
+        if signature != last_signature:
+            try:
+                safe_notify_event(
+                    f"🧭 v9.3.7 Setup Audit: {level}",
+                    f"{recommendation}\nFailed critical: {', '.join([x['key'] for x in critical_failed]) or 'none'}\nWatch: {', '.join([x['key'] for x in watch_failed]) or 'none'}",
+                    important=level == "CRITICAL",
+                )
+                result["telegram_notified"] = True
+                state["last_settings_audit_signature"] = signature
+                state["last_settings_audit_at"] = now_iso()
+                write_json_file(V937_SETTINGS_AUDIT_STATE_FILE, state)
+            except Exception as exc:
+                result["telegram_notified"] = False
+                result["telegram_error"] = str(exc)
+
+    write_json_file(V937_SETTINGS_AUDIT_STATE_FILE, {**read_json_file(V937_SETTINGS_AUDIT_STATE_FILE, {}), "last_audit": result})
+    return result
+
+
+@app.get("/v9_3_7_probe_setup_audit")
+def v9_3_7_probe_setup_audit_endpoint(secret: str, notify: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_3_7_probe_setup_audit(notify=notify)
+
+
+@app.get("/v9_3_7_readiness_dashboard", response_class=HTMLResponse)
+def v9_3_7_readiness_dashboard(secret: str, notify: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    audit = v9_3_7_probe_setup_audit(notify=notify)
+    rows = "".join(
+        [
+            f"<tr><td>{h(x.get('key'))}</td><td>{'✅' if x.get('ok') else '❌'}</td><td>{h(x.get('severity'))}</td><td>{h(x.get('detail'))}</td><td>{h(x.get('action'))}</td></tr>"
+            for x in audit.get("checks", [])
+        ]
+    )
+
+    tv = audit.get("tradingview_checklist") or {}
+    tv_rows = "".join(
+        [
+            f"<tr><td>{h(k)}</td><td>{'✅' if v else '❌'}</td></tr>"
+            for k, v in (tv.get("items") or {}).items()
+        ]
+    )
+
+    guards = audit.get("guards") or {}
+
+    return HTMLResponse(
+        f"""
+        <html>
+        <head>
+          <title>v9.3.7 Readiness Dashboard</title>
+          <style>
+            body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+            .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+            table{{border-collapse:collapse;width:100%;background:white;font-size:13px;margin-top:10px}}
+            th{{background:#111827;color:white}}
+            td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}
+            .OK{{color:#047857;font-weight:bold}}
+            .WATCH{{color:#92400e;font-weight:bold}}
+            .CRITICAL{{color:#991b1b;font-weight:bold}}
+          </style>
+        </head>
+        <body>
+          <h1>v9.3.7 MICRO_PROBE Readiness Dashboard</h1>
+          <div class="card">
+            <b>Level:</b> <span class="{h(audit.get('level'))}">{h(audit.get('level'))}</span><br>
+            <b>Recommendation:</b> {h(audit.get('recommendation'))}<br>
+            <b>Critical failed:</b> {h([x.get('key') for x in audit.get('critical_failed', [])])}<br>
+            <b>Watch failed:</b> {h([x.get('key') for x in audit.get('watch_failed', [])])}
+          </div>
+          <div class="card">
+            <h2>Setup checks</h2>
+            <table>
+              <tr><th>Check</th><th>OK</th><th>Severity</th><th>Detail</th><th>Action</th></tr>
+              {rows}
+            </table>
+          </div>
+          <div class="card">
+            <h2>Guards</h2>
+            <b>Data source:</b> {h((guards.get('data_source') or {}))}<br>
+            <b>Strategy state:</b> {h((guards.get('strategy_state') or {}))}<br>
+            <b>Productive risk:</b> {h((guards.get('productive') or {}))}<br>
+            <b>MICRO_PROBE monitor:</b> {h((guards.get('micro_probe_monitor') or {}))}
+          </div>
+          <div class="card">
+            <h2>TradingView manual checklist</h2>
+            <p>The backend cannot directly read TradingView alert settings. Mark these manually after checking TradingView.</p>
+            <b>Checked:</b> {h(tv.get('checked'))}<br>
+            <b>Checked at:</b> {h(tv.get('checked_at'))}<br>
+            <b>Notes:</b> {h(tv.get('notes'))}
+            <table>
+              <tr><th>Item</th><th>Done</th></tr>
+              {tv_rows}
+            </table>
+          </div>
+          <div class="card">
+            <h2>Environment snapshot</h2>
+            <pre>{h(json.dumps(audit.get('env'), indent=2, ensure_ascii=False, default=str))}</pre>
+          </div>
+          <p>
+            <a href="/v9_3_7_probe_setup_audit?secret={h(secret)}&notify=false">Audit JSON</a> ·
+            <a href="/v9_3_6_micro_probe_dashboard?secret={h(secret)}&days=30&limit=500">MICRO_PROBE monitor</a> ·
+            <a href="/v9_3_5_productive_risk_dashboard?secret={h(secret)}">Productive Risk</a> ·
+            <a href="/v9_3_3_strategy_state_guard_dashboard?secret={h(secret)}">Strategy State Guard</a>
+          </p>
+        </body>
+        </html>
+        """
+    )
+
+
+@app.post("/v9_3_7_tradingview_checklist")
+async def v9_3_7_tradingview_checklist_endpoint(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    items = body.get("items") if isinstance(body.get("items"), dict) else {}
+    notes = body.get("notes")
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "checklist": v9_3_7_update_tradingview_checklist(items, notes=notes)}
+
+
+@app.get("/v9_3_7_tradingview_checklist")
+def v9_3_7_tradingview_checklist_get(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "checklist": v9_3_7_get_tradingview_checklist()}
+
+
+@app.get("/v9_3_7_telegram_noise_status")
+def v9_3_7_telegram_noise_status(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    state = read_json_file(V937_SETTINGS_AUDIT_STATE_FILE, {})
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "dedup_enabled": V937_TELEGRAM_GUARD_DEDUP_ENABLED,
+        "dedup_minutes": V937_TELEGRAM_GUARD_DEDUP_MINUTES,
+        "last_strategy_guard_alert_at": state.get("last_strategy_guard_alert_at"),
+        "last_strategy_guard_alert_signature": state.get("last_strategy_guard_alert_signature"),
+        "last_settings_audit_at": state.get("last_settings_audit_at"),
+        "recommendation": "If spam continues, set V933_NOTIFY_ON_STATE_DRIFT=false temporarily, or increase V937_TELEGRAM_GUARD_DEDUP_MINUTES.",
+    }
 
