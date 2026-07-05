@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.7")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.8")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.3.7</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.3.8</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.3.7"
+APP_FEATURE_LEVEL = "9.3.8"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -8859,7 +8859,7 @@ def supabase_trade_log_health(secret: str):
 def version(secret: Optional[str] = None):
     if secret is not None and secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
-    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan", "tv_validation_registry", "validation_aware_short_calibration", "calibrated_short_research_dashboard", "deduplicated_short_portfolio_proposal", "micro_pilot_watchdog", "bull_regime_long_expansion_scanner", "wld_micro_pilot_guardrails", "telegram_watchdog_alerts", "long_candidate_onboarding_plan", "watchdog_market_gate_call_fix", "bull_long_scanner_function_name_fix", "supabase_keepalive", "data_source_guard", "raw_trade_event_inspector", "supabase_pause_watchdog", "outcome_source_trust_badge", "persistent_strategy_state_guard", "safe_baseline_enforcement", "micro_whitelist_guard", "deploy_drift_detector", "safe_baseline_python_literal_fix", "productive_micro_probe_lane", "direction_aligned_short_micro_probe", "xrp_short_micro_probe_baseline", "activity_pressure_layer", "micro_probe_performance_monitor", "execution_funnel_monitor", "probe_decision_report", "monitoring_only_release", "settings_readiness_dashboard", "telegram_duplicate_suppression", "tradingview_alert_checklist", "probe_setup_audit"]}
+    return {"ok": True, "version": APP_FEATURE_LEVEL, "base": "5.3.0", "features": ["order_hardening", "safe_auto_close", "telegram_command_security", "strategy_state_rollback", "audit_log", "simulation_replay", "portfolio_correlation_guard", "market_regime_filter", "production_monitoring", "config_validation", "control_panel", "paper_trade_outcome_tracker", "paper_outcome_decision_layer", "candidate_monitor", "paper_backtest_alignment", "backtest_manual_import", "backtest_registry", "cron_paper_outcome_report", "telegram_candidate_monitor_report", "paper_strategy_guard", "paper_auto_reject_warning", "strategy_promotion_manager", "ai_strategy_analyst", "ai_risk_supervisor", "backtest_table_import", "telegram_approval_workflow", "portfolio_exposure_ai_summary", "v7_control_center", "bybit_universe_scanner", "multi_symbol_strategy_scanner", "python_mini_backtest_engine", "auto_paper_candidate_onboarding_plan", "ai_market_opportunity_analyst", "discovery_candidate_plan", "near_miss_analysis", "discovery_validation_registry", "discovery_quality_calibration", "discovery_ranking_quality_fix", "v9_multi_market_research_framework", "crypto_higher_timeframe_research", "external_market_backtest_registry", "market_regime_gate", "combined_research_dashboard", "external_market_yahoo_fallback", "external_market_data_diagnostics", "persistent_supabase_registry", "universal_strategy_instance_layer", "promotion_history_registry", "early_warning_rules", "registry_bootstrap", "market_regime_gate_helper_fix", "bear_regime_short_research", "directional_market_regime_classifier", "directional_execution_gate", "long_short_performance_dashboard", "short_candidate_onboarding_plan", "tv_validation_registry", "validation_aware_short_calibration", "calibrated_short_research_dashboard", "deduplicated_short_portfolio_proposal", "micro_pilot_watchdog", "bull_regime_long_expansion_scanner", "wld_micro_pilot_guardrails", "telegram_watchdog_alerts", "long_candidate_onboarding_plan", "watchdog_market_gate_call_fix", "bull_long_scanner_function_name_fix", "supabase_keepalive", "data_source_guard", "raw_trade_event_inspector", "supabase_pause_watchdog", "outcome_source_trust_badge", "persistent_strategy_state_guard", "safe_baseline_enforcement", "micro_whitelist_guard", "deploy_drift_detector", "safe_baseline_python_literal_fix", "productive_micro_probe_lane", "direction_aligned_short_micro_probe", "xrp_short_micro_probe_baseline", "activity_pressure_layer", "micro_probe_performance_monitor", "execution_funnel_monitor", "probe_decision_report", "monitoring_only_release", "settings_readiness_dashboard", "telegram_duplicate_suppression", "tradingview_alert_checklist", "probe_setup_audit", "fast_batch_strategy_side_update", "fast_productive_baseline_apply", "batch_update_no_timeout"]}
 
 
 # ============================================================
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.3.7 SETTINGS READINESS GUARD
+# v9.3.8 FAST BATCH STATE UPDATE
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -15984,4 +15984,176 @@ def v9_3_7_telegram_noise_status(secret: str):
         "last_settings_audit_at": state.get("last_settings_audit_at"),
         "recommendation": "If spam continues, set V933_NOTIFY_ON_STATE_DRIFT=false temporarily, or increase V937_TELEGRAM_GUARD_DEDUP_MINUTES.",
     }
+
+
+# ============================================================
+# v9.3.8 FAST BATCH STRATEGY SIDE UPDATE
+# ============================================================
+# Admin-only helper. It avoids the timeout-prone full safe-baseline enforce.
+# It applies lightweight side updates sequentially and does not run heavy guard
+# chains before/after the batch.
+
+V938_BATCH_MAX_UPDATES = int(os.getenv("V938_BATCH_MAX_UPDATES", "100"))
+V938_PRODUCTIVE_BASELINE_UPDATES = [{'strategy': 'structure_swing_v134', 'symbol': 'SOLUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'structure_swing_v134', 'symbol': 'SOLUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'structure_swing_v134', 'symbol': 'MANAUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'structure_swing_v134', 'symbol': 'MANAUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'structure_swing_v134', 'symbol': 'APEUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'structure_swing_v134', 'symbol': 'APEUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'trend_pullback_v100', 'symbol': 'SOLUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'trend_pullback_v100', 'symbol': 'SOLUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'trend_pullback_v100', 'symbol': 'MANAUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'trend_pullback_v100', 'symbol': 'MANAUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'trend_pullback_v100', 'symbol': 'APEUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'trend_pullback_v100', 'symbol': 'APEUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'momentum_breakout_sol_v11', 'symbol': 'SOLUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'momentum_breakout_sol_v11', 'symbol': 'SOLUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'trend_continuation_avax_v11', 'symbol': 'AVAXUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'trend_continuation_avax_v11', 'symbol': 'AVAXUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'trend_continuation_nil_v11', 'symbol': 'NILUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'trend_continuation_nil_v11', 'symbol': 'NILUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'trend_continuation_wld_v11', 'symbol': 'WLDUSDT', 'side': 'LONG', 'mode': 'PAPER', 'risk_pct': 0.05, 'extra': {'execution_lane': 'PAPER', 'probe_status': 'PAPER'}, 'reason': 'v9_3_8_fast_baseline_keep_paper'}, {'strategy': 'trend_continuation_wld_v11', 'symbol': 'WLDUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'trend_continuation_movr_v11', 'symbol': 'MOVRUSDT', 'side': 'LONG', 'mode': 'PAPER', 'risk_pct': 0.05, 'extra': {'execution_lane': 'PAPER', 'probe_status': 'PAPER'}, 'reason': 'v9_3_8_fast_baseline_keep_paper'}, {'strategy': 'trend_continuation_movr_v11', 'symbol': 'MOVRUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'intraday_trend_pullback_icp_v13', 'symbol': 'ICPUSDT', 'side': 'LONG', 'mode': 'PAPER', 'risk_pct': 0.05, 'extra': {'execution_lane': 'PAPER', 'probe_status': 'PAPER'}, 'reason': 'v9_3_8_fast_baseline_keep_paper'}, {'strategy': 'intraday_trend_pullback_icp_v13', 'symbol': 'ICPUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_cleanup'}, {'strategy': 'short_trend_pullback_xrpusdt_60_v1', 'symbol': 'XRPUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_3_8_fast_baseline_xrp_setup'}, {'strategy': 'short_trend_pullback_xrpusdt_60_v1', 'symbol': 'XRPUSDT', 'side': 'SHORT', 'mode': 'MICRO', 'risk_pct': 0.02, 'extra': {'execution_lane': 'MICRO_PROBE', 'probe_status': 'ACTIVE', 'max_daily_trades': 1, 'max_daily_losses': 1, 'max_consecutive_losses': 2, 'promotion_review_after_live_trades': 5, 'auto_downgrade_after_consecutive_losses': 2, 'enabled_by': 'v9_3_7_fast_baseline_payload'}, 'reason': 'v9_3_8_enable_xrp_short_micro_probe'}]
+
+
+def v9_3_8_sanitize_update_item(item: Dict[str, Any], default_reason: str = "v9_3_8_batch_update") -> Dict[str, Any]:
+    if not isinstance(item, dict):
+        raise HTTPException(400, "Every update item must be a JSON object.")
+
+    missing = [k for k in ["strategy", "symbol", "side"] if not item.get(k)]
+    if missing:
+        raise HTTPException(400, f"Missing required fields in update item: {missing}")
+
+    mode_value = item.get("mode")
+    return {
+        "strategy": item.get("strategy"),
+        "symbol": normalize_symbol(item.get("symbol")),
+        "side": normalize_side(item.get("side")),
+        "mode": str(mode_value).upper().strip() if mode_value is not None else None,
+        "risk_pct": to_float_or_none(item.get("risk_pct")) if "risk_pct" in item else None,
+        "extra": item.get("extra") if isinstance(item.get("extra"), dict) else None,
+        "reason": item.get("reason") or default_reason,
+    }
+
+
+def v9_3_8_apply_side_updates(updates: list[Dict[str, Any]], dry_run: bool = False, default_reason: str = "v9_3_8_batch_update") -> Dict[str, Any]:
+    require_strategy_admin()
+
+    if not isinstance(updates, list):
+        raise HTTPException(400, "updates must be a list of JSON objects.")
+
+    if len(updates) > V938_BATCH_MAX_UPDATES:
+        raise HTTPException(400, f"Too many updates: {len(updates)} > {V938_BATCH_MAX_UPDATES}")
+
+    prepared = [v9_3_8_sanitize_update_item(item, default_reason=default_reason) for item in updates]
+
+    if dry_run:
+        return {
+            "ok": True,
+            "version": APP_FEATURE_LEVEL,
+            "created_at": now_iso(),
+            "dry_run": True,
+            "count": len(prepared),
+            "prepared_updates": prepared,
+            "note": "No strategy_state changes were written.",
+        }
+
+    results = []
+    errors = []
+    for index, item in enumerate(prepared):
+        try:
+            result = set_strategy_side_config(
+                strategy=item["strategy"],
+                symbol=item["symbol"],
+                side=item["side"],
+                mode=item.get("mode"),
+                risk_pct=item.get("risk_pct"),
+                extra_updates=item.get("extra"),
+                reason=item.get("reason") or default_reason,
+            )
+            results.append({"index": index, "ok": True, "result": result})
+        except Exception as exc:
+            errors.append({"index": index, "ok": False, "error": str(exc), "item": item})
+
+    return {
+        "ok": len(errors) == 0,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "dry_run": False,
+        "requested_count": len(prepared),
+        "applied_count": len(results),
+        "error_count": len(errors),
+        "errors": errors,
+        "results": results,
+        "next_checks": [
+            "/strategy_state?secret=...",
+            "/v9_3_7_readiness_dashboard?secret=...",
+            "/v9_3_6_micro_probe_dashboard?secret=...&days=30&limit=500",
+        ],
+    }
+
+
+@app.post("/v9_3_8_batch_strategy_side_update")
+async def v9_3_8_batch_strategy_side_update_endpoint(request: Request):
+    body = await request.json()
+
+    if isinstance(body, list):
+        raise HTTPException(400, "Body must be an object with secret and updates. Use {'secret':'...', 'updates':[...]}, not a raw list.")
+
+    verify_secret(request, body)
+    return v9_3_8_apply_side_updates(
+        updates=body.get("updates"),
+        dry_run=bool(body.get("dry_run", False)),
+        default_reason=body.get("reason") or "v9_3_8_batch_strategy_side_update",
+    )
+
+
+@app.post("/v9_3_8_apply_productive_baseline")
+async def v9_3_8_apply_productive_baseline_endpoint(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+
+    confirm = str(body.get("confirm") or "").upper()
+    if confirm != "APPLY_PRODUCTIVE_BASELINE":
+        raise HTTPException(400, "Set confirm='APPLY_PRODUCTIVE_BASELINE' to apply the built-in v9.3.8 productive baseline.")
+
+    return v9_3_8_apply_side_updates(
+        updates=V938_PRODUCTIVE_BASELINE_UPDATES,
+        dry_run=bool(body.get("dry_run", False)),
+        default_reason=body.get("reason") or "v9_3_8_apply_productive_baseline",
+    )
+
+
+@app.get("/v9_3_8_productive_baseline_preview")
+def v9_3_8_productive_baseline_preview_endpoint(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "count": len(V938_PRODUCTIVE_BASELINE_UPDATES),
+        "updates": V938_PRODUCTIVE_BASELINE_UPDATES,
+        "apply_endpoint": "/v9_3_8_apply_productive_baseline",
+    }
+
+
+@app.get("/v9_3_8_batch_update_dashboard", response_class=HTMLResponse)
+def v9_3_8_batch_update_dashboard(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    preview = {"count": len(V938_PRODUCTIVE_BASELINE_UPDATES), "updates": V938_PRODUCTIVE_BASELINE_UPDATES}
+
+    return HTMLResponse(
+        f"""
+        <html>
+        <head>
+          <title>v9.3.8 Fast Batch Update</title>
+          <style>
+            body{font-family:Arial;margin:20px;background:#f6f8fb}
+            .card{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}
+          </style>
+        </head>
+        <body>
+          <h1>v9.3.8 Fast Batch Strategy Side Update</h1>
+          <div class="card">
+            <b>Built-in productive baseline updates:</b> {preview['count']}<br>
+            <b>Apply endpoint:</b> POST /v9_3_8_apply_productive_baseline<br>
+            <b>Body:</b> {"secret":"...","confirm":"APPLY_PRODUCTIVE_BASELINE","dry_run":false}
+          </div>
+          <div class="card">
+            <h2>Recommended checks after apply</h2>
+            <p><a href="/v9_3_7_readiness_dashboard?secret={h(secret)}">Readiness Dashboard</a></p>
+            <p><a href="/v9_3_6_micro_probe_dashboard?secret={h(secret)}&days=30&limit=500">MICRO_PROBE Monitor</a></p>
+            <p><a href="/strategy_state?secret={h(secret)}">Strategy State</a></p>
+          </div>
+          <div class="card">
+            <h2>Preview</h2>
+            <pre>{h(json.dumps(preview, indent=2, ensure_ascii=False, default=str))}</pre>
+          </div>
+        </body>
+        </html>
+        """
+    )
 
