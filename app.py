@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.8")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.9")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.3.8</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.3.9</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.3.8"
+APP_FEATURE_LEVEL = "9.3.9"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.3.8 FAST BATCH STATE UPDATE
+# v9.3.9 FAST STARTUP HOTFIX
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -14680,14 +14680,22 @@ def v9_3_3_control_panel(secret: str):
 
 @app.on_event("startup")
 def v9_3_3_startup_guard() -> None:
-    if not V933_STRATEGY_STATE_GUARD_ENABLED:
-        return
+    # v9.3.9 hotfix:
+    # Do not run heavy market/regime/state guards during Render startup.
+    # Render requires the app to bind a port quickly; full guards remain available
+    # through their HTTP endpoints after startup.
     try:
-        result = v9_3_3_strategy_state_guard(notify=V933_NOTIFY_ON_STATE_DRIFT)
-        if V933_AUTO_ENFORCE_SAFE_BASELINE_ON_STARTUP and result.get("level") in {"WATCH", "CRITICAL"}:
-            v9_3_3_enforce_safe_baseline(reason="startup_auto_enforce_safe_baseline")
+        write_json_file(
+            APP_DIR / "v9_3_9_startup_marker.json",
+            {
+                "ok": True,
+                "version": APP_FEATURE_LEVEL,
+                "created_at": now_iso(),
+                "message": "Startup guard skipped intentionally to avoid Render port-scan timeout.",
+            },
+        )
     except Exception as exc:
-        log(f"[WARN] v9.3.3 startup strategy state guard failed: {exc}")
+        log(f"[WARN] v9.3.9 startup marker failed: {exc}")
 
 
 # ============================================================
@@ -16156,4 +16164,26 @@ def v9_3_8_batch_update_dashboard(secret: str):
         </html>
         """
     )
+
+
+# ============================================================
+# v9.3.9 FAST STARTUP HEALTH
+# ============================================================
+
+@app.get("/v9_3_9_startup_health")
+def v9_3_9_startup_health(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    marker = read_json_file(APP_DIR / "v9_3_9_startup_marker.json", {})
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "startup_guard": "skipped_heavy_checks",
+        "marker": marker,
+        "next_checks": [
+            "/v9_3_8_batch_update_dashboard?secret=...",
+            "/v9_3_7_readiness_dashboard?secret=...",
+            "/v9_3_6_micro_probe_dashboard?secret=...&days=30&limit=500",
+        ],
+    }
 
