@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.0")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.1")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.4.0</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.4.1</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.4.0"
+APP_FEATURE_LEVEL = "9.4.1"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.4.0 REGIME-AWARE PROBE CONTROLLER
+# v9.4.1 PAUSED BASELINE CONTROLLER
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -14258,7 +14258,7 @@ V933_BLOCK_LONG_MICRO_WHEN_GATE_NOT_NORMAL = os.getenv("V933_BLOCK_LONG_MICRO_WH
 V933_BLOCK_LONG_MICRO_WHEN_NOT_BULL = os.getenv("V933_BLOCK_LONG_MICRO_WHEN_NOT_BULL", "true").lower() == "true"
 V933_STRATEGY_GUARD_STATE_FILE = APP_DIR / "v9_3_3_strategy_state_guard_state.json"
 
-V933_SAFE_BASELINE_STATE = {'global': {'enabled': True, 'default_mode': 'OFF', 'max_open_positions': 1, 'daily_loss_limit_usdt': 10.0, 'weekly_loss_limit_usdt': 30.0, 'open_unrealized_loss_limit_usdt': 5.0, 'symbol_unrealized_loss_limit_usdt': 5.0, 'allow_unknown_symbols': False, 'max_daily_trades_global': 1}, 'strategies': {'structure_swing_v134': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'MANAUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'APEUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_pullback_v100': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'MANAUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}, 'APEUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'intraday_trend_pullback_icp_v13': {'enabled': True, 'symbols': {'ICPUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'momentum_breakout_sol_v11': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_movr_v11': {'enabled': True, 'symbols': {'MOVRUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_avax_v11': {'enabled': True, 'symbols': {'AVAXUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_nil_v11': {'enabled': True, 'symbols': {'NILUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'trend_continuation_wld_v11': {'enabled': True, 'symbols': {'WLDUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0}}}}, 'short_trend_pullback_xrpusdt_60_v1': {'enabled': True, 'symbols': {'XRPUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0}, 'SHORT': {'mode': 'MICRO', 'risk_pct': 0.02, 'execution_lane': 'MICRO_PROBE', 'probe_status': 'ACTIVE', 'max_daily_trades': 1, 'max_daily_losses': 1, 'max_consecutive_losses': 2, 'promotion_review_after_live_trades': 5, 'auto_downgrade_after_consecutive_losses': 2}}}}}}
+V933_SAFE_BASELINE_STATE = {'global': {'enabled': True, 'default_mode': 'OFF', 'max_open_positions': 1, 'daily_loss_limit_usdt': 10.0, 'weekly_loss_limit_usdt': 30.0, 'open_unrealized_loss_limit_usdt': 5.0, 'symbol_unrealized_loss_limit_usdt': 5.0, 'allow_unknown_symbols': False, 'max_daily_trades_global': 1}, 'strategies': {'structure_swing_v134': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}, 'MANAUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}, 'APEUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'trend_pullback_v100': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}, 'MANAUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}, 'APEUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'intraday_trend_pullback_icp_v13': {'enabled': True, 'symbols': {'ICPUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05, 'execution_lane': 'PAPER', 'probe_status': 'PAPER'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'momentum_breakout_sol_v11': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'trend_continuation_movr_v11': {'enabled': True, 'symbols': {'MOVRUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05, 'execution_lane': 'PAPER', 'probe_status': 'PAPER'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'trend_continuation_avax_v11': {'enabled': True, 'symbols': {'AVAXUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'trend_continuation_nil_v11': {'enabled': True, 'symbols': {'NILUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'trend_continuation_wld_v11': {'enabled': True, 'symbols': {'WLDUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05, 'execution_lane': 'PAPER', 'probe_status': 'PAPER'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'short_trend_pullback_xrpusdt_60_v1': {'enabled': True, 'symbols': {'XRPUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'PAPER', 'risk_pct': 0.02, 'execution_lane': 'MICRO_PROBE_PAUSED', 'probe_status': 'PAUSED_BY_MARKET_GATE_HIGH', 'max_daily_trades': 1, 'max_daily_losses': 1, 'max_consecutive_losses': 2, 'promotion_review_after_live_trades': 5, 'auto_downgrade_after_consecutive_losses': 2}}}}}}
 
 
 def v9_3_3_key(strategy: str, symbol: str, side: str) -> str:
@@ -16590,4 +16590,116 @@ def v9_4_0_readiness_dashboard(secret: str, notify: bool = False):
     if secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
     return v9_3_7_readiness_dashboard(secret=secret, notify=notify)
+
+
+# ============================================================
+# v9.4.1 PAUSED BASELINE CONTROLLER
+# ============================================================
+# Purpose:
+# - Current market gate is HIGH and regime is BULL/TRANSITION.
+# - Therefore XRP SHORT MICRO_PROBE should stay PAPER / PAUSED.
+# - The old state guard expected active MICRO_PROBE and kept reporting CRITICAL.
+# - This version changes the safe baseline to the paused baseline and adds a
+#   fast apply endpoint for it.
+
+V941_PAUSED_BASELINE_UPDATES = [{'strategy': 'structure_swing_v134', 'symbol': 'SOLUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'structure_swing_v134', 'symbol': 'SOLUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'structure_swing_v134', 'symbol': 'MANAUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'structure_swing_v134', 'symbol': 'MANAUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'structure_swing_v134', 'symbol': 'APEUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'structure_swing_v134', 'symbol': 'APEUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'trend_pullback_v100', 'symbol': 'SOLUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'trend_pullback_v100', 'symbol': 'SOLUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'trend_pullback_v100', 'symbol': 'MANAUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'trend_pullback_v100', 'symbol': 'MANAUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'trend_pullback_v100', 'symbol': 'APEUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'trend_pullback_v100', 'symbol': 'APEUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'intraday_trend_pullback_icp_v13', 'symbol': 'ICPUSDT', 'side': 'LONG', 'mode': 'PAPER', 'risk_pct': 0.05, 'extra': {'execution_lane': 'PAPER', 'probe_status': 'PAPER'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'intraday_trend_pullback_icp_v13', 'symbol': 'ICPUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'momentum_breakout_sol_v11', 'symbol': 'SOLUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'momentum_breakout_sol_v11', 'symbol': 'SOLUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'trend_continuation_movr_v11', 'symbol': 'MOVRUSDT', 'side': 'LONG', 'mode': 'PAPER', 'risk_pct': 0.05, 'extra': {'execution_lane': 'PAPER', 'probe_status': 'PAPER'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'trend_continuation_movr_v11', 'symbol': 'MOVRUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'trend_continuation_avax_v11', 'symbol': 'AVAXUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'trend_continuation_avax_v11', 'symbol': 'AVAXUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'trend_continuation_nil_v11', 'symbol': 'NILUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'trend_continuation_nil_v11', 'symbol': 'NILUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'trend_continuation_wld_v11', 'symbol': 'WLDUSDT', 'side': 'LONG', 'mode': 'PAPER', 'risk_pct': 0.05, 'extra': {'execution_lane': 'PAPER', 'probe_status': 'PAPER'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'trend_continuation_wld_v11', 'symbol': 'WLDUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'short_trend_pullback_xrpusdt_60_v1', 'symbol': 'XRPUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_1_apply_paused_baseline'}, {'strategy': 'short_trend_pullback_xrpusdt_60_v1', 'symbol': 'XRPUSDT', 'side': 'SHORT', 'mode': 'PAPER', 'risk_pct': 0.02, 'extra': {'execution_lane': 'MICRO_PROBE_PAUSED', 'probe_status': 'PAUSED_BY_MARKET_GATE_HIGH', 'max_daily_trades': 1, 'max_daily_losses': 1, 'max_consecutive_losses': 2, 'promotion_review_after_live_trades': 5, 'auto_downgrade_after_consecutive_losses': 2}, 'reason': 'v9_4_1_apply_paused_baseline'}]
+
+
+@app.get("/v9_4_1_paused_baseline_preview")
+def v9_4_1_paused_baseline_preview(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "count": len(V941_PAUSED_BASELINE_UPDATES),
+        "updates": V941_PAUSED_BASELINE_UPDATES,
+        "target": {
+            "active_micro_live_count": 0,
+            "xrp_short": "PAPER / MICRO_PROBE_PAUSED",
+            "paper_longs": ["WLDUSDT", "MOVRUSDT", "ICPUSDT"],
+            "old_noisy_setups": "OFF"
+        }
+    }
+
+
+@app.post("/v9_4_1_apply_paused_baseline")
+async def v9_4_1_apply_paused_baseline(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    confirm = str(body.get("confirm") or "").upper()
+    if confirm != "APPLY_PAUSED_BASELINE":
+        raise HTTPException(400, "Set confirm='APPLY_PAUSED_BASELINE' to apply the v9.4.1 paused baseline.")
+
+    return v9_3_8_apply_side_updates(
+        updates=V941_PAUSED_BASELINE_UPDATES,
+        dry_run=bool(body.get("dry_run", False)),
+        default_reason=body.get("reason") or "v9_4_1_apply_paused_baseline",
+    )
+
+
+@app.get("/v9_4_1_readiness_dashboard", response_class=HTMLResponse)
+def v9_4_1_readiness_dashboard(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    source_guard = v9_3_2_data_source_guard(notify=False)
+    state_guard = v9_3_3_strategy_state_guard(notify=False)
+    market_gate = v9_market_regime_gate(days=30, limit=PAPER_OUTCOME_MAX_EVENTS)
+    regime = v9_2_directional_market_regime(force=True)
+    probe = v9_4_0_get_probe_config(V940_SHORT_PROBE_KEY)
+
+    checks = []
+    def add(name, ok, detail):
+        checks.append({"name": name, "ok": bool(ok), "detail": detail})
+
+    add("version", APP_FEATURE_LEVEL == "9.4.1", f"Running {APP_FEATURE_LEVEL}")
+    add("data_source", source_guard.get("decision_data_trusted"), f"{source_guard.get('level')} / trusted={source_guard.get('decision_data_trusted')}")
+    add("strategy_state_guard", state_guard.get("level") == "OK", f"level={state_guard.get('level')} reasons={state_guard.get('reasons')}")
+    add("xrp_short_paused", probe.get("mode") == "PAPER" and probe.get("execution_lane") == "MICRO_PROBE_PAUSED", f"mode={probe.get('mode')} lane={probe.get('execution_lane')}")
+    add("no_active_micro", state_guard.get("active_micro_live_count") == 0, f"active_micro_live_count={state_guard.get('active_micro_live_count')}")
+    add("market_gate_high_respected", market_gate.get("gate_level") in {"HIGH", "CAUTIOUS"} and market_gate.get("allow_new_micro") is False, f"gate={market_gate.get('gate_level')} allow_new_micro={market_gate.get('allow_new_micro')}")
+
+    failed = [x for x in checks if not x["ok"]]
+    level = "OK" if not failed else "CRITICAL"
+
+    rows = "".join([f"<tr><td>{h(x['name'])}</td><td>{'✅' if x['ok'] else '❌'}</td><td>{h(x['detail'])}</td></tr>" for x in checks])
+
+    return HTMLResponse(f"""
+    <html>
+    <head>
+      <title>v9.4.1 Paused Baseline Readiness</title>
+      <style>
+        body{font-family:Arial;margin:20px;background:#f6f8fb}
+        .card{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}
+        table{border-collapse:collapse;width:100%;background:white;font-size:13px;margin-top:10px}
+        th{background:#111827;color:white}
+        td,th{padding:7px;border-bottom:1px solid #ddd;text-align:left}
+      </style>
+    </head>
+    <body>
+      <h1>v9.4.1 Paused Baseline Readiness</h1>
+      <div class="card">
+        <b>Level:</b> {level}<br>
+        <b>Recommendation:</b> {'MONITOR_ONLY_NO_MICRO' if level == 'OK' else 'APPLY_PAUSED_BASELINE_OR_FIX_GUARDS'}<br>
+        <b>Regime:</b> {h(regime.get('regime'))} / {h(regime.get('preferred_direction'))}<br>
+        <b>Market gate:</b> {h(market_gate.get('gate_level'))} / allow_new_micro={h(market_gate.get('allow_new_micro'))}
+      </div>
+      <div class="card">
+        <h2>Checks</h2>
+        <table><tr><th>Check</th><th>OK</th><th>Detail</th></tr>{rows}</table>
+      </div>
+      <div class="card">
+        <h2>Probe</h2>
+        <pre>{h(json.dumps(probe, indent=2, ensure_ascii=False, default=str))}</pre>
+      </div>
+      <p>
+        <a href="/v9_4_1_paused_baseline_preview?secret={h(secret)}">Paused baseline preview</a> ·
+        <a href="/v9_4_0_regime_probe_dashboard?secret={h(secret)}">Regime controller</a> ·
+        <a href="/v9_market_regime_gate?secret={h(secret)}&days=30&limit=1000">Market gate</a>
+      </p>
+      <p><b>Apply paused baseline:</b> POST /v9_4_1_apply_paused_baseline with {"secret":"...","confirm":"APPLY_PAUSED_BASELINE"}</p>
+    </body>
+    </html>
+    """)
 
