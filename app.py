@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.3.9")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.0")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.3.9</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.4.0</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.3.9"
+APP_FEATURE_LEVEL = "9.4.0"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.3.9 FAST STARTUP HOTFIX
+# v9.4.0 REGIME-AWARE PROBE CONTROLLER
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -15702,10 +15702,10 @@ def v9_3_7_probe_setup_audit(notify: bool = False) -> Dict[str, Any]:
 
     add_check(
         "version",
-        APP_FEATURE_LEVEL == "9.3.7",
+        str(APP_FEATURE_LEVEL).startswith(("9.3.", "9.4.")),
         "CRITICAL",
         f"Running version {APP_FEATURE_LEVEL}",
-        "Deploy app_v9_3_7.py" if APP_FEATURE_LEVEL != "9.3.7" else "",
+        "",
     )
     add_check(
         "data_source_guard",
@@ -16186,4 +16186,408 @@ def v9_3_9_startup_health(secret: str):
             "/v9_3_6_micro_probe_dashboard?secret=...&days=30&limit=500",
         ],
     }
+
+
+# ============================================================
+# v9.4.0 REGIME-AWARE PROBE CONTROLLER
+# ============================================================
+
+V940_REGIME_PROBE_CONTROLLER_ENABLED = os.getenv("V940_REGIME_PROBE_CONTROLLER_ENABLED", "true").lower() == "true"
+V940_SHORT_PROBE_KEY = os.getenv("V940_SHORT_PROBE_KEY", "short_trend_pullback_xrpusdt_60_v1|XRPUSDT|SHORT").strip()
+V940_BULL_LONG_MIN_BULL_SCORE = float(os.getenv("V940_BULL_LONG_MIN_BULL_SCORE", "60"))
+V940_BEAR_SHORT_MIN_BEAR_SCORE = float(os.getenv("V940_BEAR_SHORT_MIN_BEAR_SCORE", "60"))
+V940_ALLOW_TRANSITION_HOLD = os.getenv("V940_ALLOW_TRANSITION_HOLD", "true").lower() == "true"
+V940_NOTIFY_ON_REGIME_MISALIGNMENT = os.getenv("V940_NOTIFY_ON_REGIME_MISALIGNMENT", "true").lower() == "true"
+V940_STATE_FILE = APP_DIR / "v9_4_0_regime_probe_controller_state.json"
+
+
+def v9_4_0_probe_parts(key: str = V940_SHORT_PROBE_KEY) -> Dict[str, str]:
+    parts = [x.strip() for x in str(key or "").split("|")]
+    if len(parts) != 3:
+        return {"strategy": "", "symbol": "", "side": ""}
+    return {"strategy": parts[0], "symbol": normalize_symbol(parts[1]), "side": normalize_side(parts[2])}
+
+
+def v9_4_0_get_probe_config(key: str = V940_SHORT_PROBE_KEY) -> Dict[str, Any]:
+    p = v9_4_0_probe_parts(key)
+    state = load_state()
+    cfg = get_side_config_copy(state, p["strategy"], p["symbol"], p["side"])
+    return {
+        "key": key,
+        "strategy": p["strategy"],
+        "symbol": p["symbol"],
+        "side": p["side"],
+        "mode": str(cfg.get("mode", "OFF")).upper(),
+        "risk_pct": v8_float(cfg.get("risk_pct"), 0.0),
+        "execution_lane": str(cfg.get("execution_lane", "")).upper(),
+        "probe_status": str(cfg.get("probe_status", "")).upper(),
+        "side_config": cfg,
+    }
+
+
+def v9_4_0_direction_alignment(side: str, regime: Dict[str, Any]) -> Dict[str, Any]:
+    side = normalize_side(side)
+    regime_name = str(regime.get("regime") or "UNKNOWN").upper()
+    preferred = str(regime.get("preferred_direction") or "UNKNOWN").upper()
+    bull_score = v8_float(regime.get("bull_score"), 0.0)
+    bear_score = v8_float(regime.get("bear_score"), 0.0)
+
+    if side == "SHORT":
+        aligned = (regime_name == "BEAR" or preferred == "SHORT") and bear_score >= V940_BEAR_SHORT_MIN_BEAR_SCORE
+        transition_hold = V940_ALLOW_TRANSITION_HOLD and regime_name == "TRANSITION"
+        misaligned = (regime_name == "BULL" or preferred == "LONG") and bull_score >= V940_BULL_LONG_MIN_BULL_SCORE
+    elif side == "LONG":
+        aligned = (regime_name == "BULL" or preferred == "LONG") and bull_score >= V940_BULL_LONG_MIN_BULL_SCORE
+        transition_hold = V940_ALLOW_TRANSITION_HOLD and regime_name == "TRANSITION"
+        misaligned = (regime_name == "BEAR" or preferred == "SHORT") and bear_score >= V940_BEAR_SHORT_MIN_BEAR_SCORE
+    else:
+        aligned = False
+        transition_hold = False
+        misaligned = True
+
+    return {
+        "side": side,
+        "regime": regime_name,
+        "preferred_direction": preferred,
+        "bull_score": bull_score,
+        "bear_score": bear_score,
+        "aligned": bool(aligned),
+        "transition_hold": bool(transition_hold),
+        "misaligned": bool(misaligned),
+    }
+
+
+def v9_4_0_long_probe_candidates(max_items: int = 10) -> Dict[str, Any]:
+    candidates = []
+    known = [
+        {
+            "strategy": "trend_continuation_wld_v11",
+            "symbol": "WLDUSDT",
+            "side": "LONG",
+            "current_role": "best_existing_long_paper",
+            "reason": "Historically strongest 30d PAPER component; BULL review only.",
+        },
+        {
+            "strategy": "trend_continuation_movr_v11",
+            "symbol": "MOVRUSDT",
+            "side": "LONG",
+            "current_role": "thin_positive_paper",
+            "reason": "Positive but low sample; monitor only.",
+        },
+        {
+            "strategy": "intraday_trend_pullback_icp_v13",
+            "symbol": "ICPUSDT",
+            "side": "LONG",
+            "current_role": "paper_monitor",
+            "reason": "Existing PAPER strategy in productive baseline.",
+        },
+    ]
+
+    state = load_state()
+    for item in known:
+        cfg = get_side_config_copy(state, item["strategy"], item["symbol"], item["side"])
+        row = dict(item)
+        row["current_mode"] = str(cfg.get("mode", "OFF")).upper()
+        row["risk_pct"] = v8_float(cfg.get("risk_pct"), 0.0)
+        row["execution_lane"] = cfg.get("execution_lane")
+        row["probe_recommendation"] = "MANUAL_REVIEW_ONLY"
+        candidates.append(row)
+
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "note": "Candidates are review-only. No automatic LONG MICRO enablement.",
+        "count": min(len(candidates), max_items),
+        "candidates": candidates[:max_items],
+    }
+
+
+def v9_4_0_regime_probe_controller(notify: bool = False) -> Dict[str, Any]:
+    source_guard = v9_3_2_data_source_guard(notify=False)
+    state_guard = v9_3_3_strategy_state_guard(notify=False)
+    productive = v9_3_5_probe_candidate_status()
+    monitor = v9_3_6_probe_decision_report(days=30, limit=500)
+    regime = v9_2_directional_market_regime(force=True)
+    market_gate = v9_market_regime_gate(days=30, limit=PAPER_OUTCOME_MAX_EVENTS)
+
+    probe = v9_4_0_get_probe_config(V940_SHORT_PROBE_KEY)
+    alignment = v9_4_0_direction_alignment(probe.get("side"), regime)
+    active = probe.get("mode") in {"MICRO", "LIVE"} and probe.get("execution_lane") == "MICRO_PROBE"
+
+    reasons = []
+    actions = []
+
+    if not V940_REGIME_PROBE_CONTROLLER_ENABLED:
+        reasons.append("REGIME_PROBE_CONTROLLER_DISABLED")
+        actions.append("NO_ACTION")
+
+    if not source_guard.get("decision_data_trusted"):
+        recommendation = "PAUSE_PROBE_DATA_SOURCE_NOT_TRUSTED"
+        reasons.append("DATA_SOURCE_NOT_TRUSTED")
+        actions.append("FIX_DATA_SOURCE")
+    elif state_guard.get("level") != "OK":
+        recommendation = "PAUSE_PROBE_STATE_GUARD_NOT_OK"
+        reasons.append(f"STRATEGY_STATE_GUARD_{state_guard.get('level')}")
+        actions.append("FIX_STRATEGY_STATE")
+    elif not active:
+        recommendation = "NO_ACTIVE_MICRO_PROBE"
+        reasons.append(f"PROBE_NOT_ACTIVE_MODE_{probe.get('mode')}_LANE_{probe.get('execution_lane')}")
+        actions.append("ENABLE_OR_KEEP_PAPER_AFTER_MANUAL_REVIEW")
+    elif alignment.get("misaligned"):
+        recommendation = "PAUSE_SHORT_PROBE_REGIME_MISALIGNED" if probe.get("side") == "SHORT" else "PAUSE_LONG_PROBE_REGIME_MISALIGNED"
+        reasons.append(f"PROBE_{probe.get('side')}_MISALIGNED_WITH_{alignment.get('regime')}_PREFERRED_{alignment.get('preferred_direction')}")
+        actions.append("PAUSE_MICRO_PROBE_TO_PAPER")
+        if probe.get("side") == "SHORT" and alignment.get("regime") == "BULL":
+            actions.append("REVIEW_LONG_PROBE_CANDIDATES")
+    elif alignment.get("aligned"):
+        recommendation = "KEEP_MICRO_PROBE_REGIME_ALIGNED"
+        reasons.append(f"PROBE_{probe.get('side')}_ALIGNED_WITH_{alignment.get('regime')}_PREFERRED_{alignment.get('preferred_direction')}")
+        actions.append("CONTINUE_MONITORING")
+    elif alignment.get("transition_hold"):
+        recommendation = "HOLD_MICRO_PROBE_TRANSITION_REGIME"
+        reasons.append("TRANSITION_REGIME_HOLD_ALLOWED")
+        actions.append("MONITOR_CLOSELY_NO_SCALE")
+    else:
+        recommendation = "KEEP_MICRO_PROBE_BUT_NO_SCALE"
+        reasons.append("NO_HARD_MISALIGNMENT_BUT_ALIGNMENT_WEAK")
+        actions.append("MONITOR_CLOSELY_NO_PROMOTION")
+
+    long_candidates = v9_4_0_long_probe_candidates(max_items=10)
+
+    result = {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "recommendation": recommendation,
+        "reasons": list(dict.fromkeys(reasons)),
+        "actions": list(dict.fromkeys(actions)),
+        "probe": probe,
+        "active_probe": active,
+        "alignment": alignment,
+        "regime": {
+            "regime": regime.get("regime"),
+            "preferred_direction": regime.get("preferred_direction"),
+            "bull_score": regime.get("bull_score"),
+            "bear_score": regime.get("bear_score"),
+            "market_data_complete": regime.get("market_data_complete"),
+        },
+        "market_gate": {
+            "gate_level": market_gate.get("gate_level"),
+            "allow_new_micro": market_gate.get("allow_new_micro"),
+            "allow_new_paper": market_gate.get("allow_new_paper"),
+            "recommendation": market_gate.get("recommendation"),
+            "ai_risk": market_gate.get("ai_risk"),
+        },
+        "guards": {
+            "data_source": {
+                "level": source_guard.get("level"),
+                "decision_data_trusted": source_guard.get("decision_data_trusted"),
+                "effective_source": (source_guard.get("supabase") or {}).get("effective_source"),
+            },
+            "strategy_state": {
+                "level": state_guard.get("level"),
+                "decision_safe": state_guard.get("decision_safe"),
+                "active_micro_live_count": state_guard.get("active_micro_live_count"),
+                "reasons": state_guard.get("reasons"),
+            },
+            "productive": {
+                "recommendation": productive.get("recommendation"),
+                "allow_enable_micro_probe": productive.get("allow_enable_micro_probe"),
+                "already_active": productive.get("already_active"),
+                "blockers": productive.get("blockers"),
+            },
+            "micro_probe_monitor": {
+                "recommendation": monitor.get("recommendation"),
+                "reasons": monitor.get("reasons"),
+                "performance": monitor.get("performance"),
+                "execution_funnel": monitor.get("execution_funnel"),
+            },
+        },
+        "long_probe_candidates": long_candidates,
+        "controller_settings": {
+            "short_probe_key": V940_SHORT_PROBE_KEY,
+            "bull_long_min_bull_score": V940_BULL_LONG_MIN_BULL_SCORE,
+            "bear_short_min_bear_score": V940_BEAR_SHORT_MIN_BEAR_SCORE,
+            "allow_transition_hold": V940_ALLOW_TRANSITION_HOLD,
+        },
+    }
+
+    if notify and V940_NOTIFY_ON_REGIME_MISALIGNMENT and "MISALIGNED" in recommendation:
+        state = read_json_file(V940_STATE_FILE, {})
+        signature = v9_3_7_signature({
+            "recommendation": recommendation,
+            "regime": alignment.get("regime"),
+            "preferred": alignment.get("preferred_direction"),
+            "probe": probe.get("key"),
+        })
+        if state.get("last_misalignment_signature") != signature:
+            try:
+                safe_notify_event(
+                    f"🔁 Regime-Aware Probe Controller: {recommendation}",
+                    f"Probe: {probe.get('key')}\nRegime: {alignment.get('regime')} / {alignment.get('preferred_direction')}\nAction: {', '.join(result['actions'])}",
+                    important=True,
+                )
+                result["telegram_notified"] = True
+                state["last_misalignment_signature"] = signature
+                state["last_misalignment_at"] = now_iso()
+                write_json_file(V940_STATE_FILE, state)
+            except Exception as exc:
+                result["telegram_notified"] = False
+                result["telegram_error"] = str(exc)
+
+    write_json_file(V940_STATE_FILE, {**read_json_file(V940_STATE_FILE, {}), "last_controller": result})
+    return result
+
+
+def v9_4_0_pause_short_probe(reason: str = "v9_4_0_pause_short_probe") -> Dict[str, Any]:
+    require_strategy_admin()
+    p = v9_4_0_probe_parts(V940_SHORT_PROBE_KEY)
+    result = set_strategy_side_config(
+        strategy=p["strategy"],
+        symbol=p["symbol"],
+        side=p["side"],
+        mode="PAPER",
+        risk_pct=V935_DEFAULT_MICRO_PROBE_RISK_PCT,
+        extra_updates={
+            "execution_lane": "MICRO_PROBE_PAUSED",
+            "probe_status": "PAUSED_BY_REGIME_CONTROLLER",
+            "paused_by": "v9_4_0_regime_aware_probe_controller",
+            "paused_at": now_iso(),
+        },
+        reason=reason,
+    )
+    try:
+        safe_notify_event(
+            "🟡 SHORT MICRO_PROBE paused by regime controller",
+            f"{p['strategy']} {p['symbol']} {p['side']} -> PAPER\nReason: {reason}",
+            important=True,
+        )
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "pause_result": result,
+        "controller_after": v9_4_0_regime_probe_controller(notify=False),
+    }
+
+
+@app.get("/v9_4_0_regime_probe_controller")
+def v9_4_0_regime_probe_controller_endpoint(secret: str, notify: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_4_0_regime_probe_controller(notify=notify)
+
+
+@app.get("/v9_4_0_long_probe_candidates")
+def v9_4_0_long_probe_candidates_endpoint(secret: str, max_items: int = 10):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_4_0_long_probe_candidates(max_items=max_items)
+
+
+@app.post("/v9_4_0_pause_short_probe")
+async def v9_4_0_pause_short_probe_endpoint(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    confirm = str(body.get("confirm") or "").upper()
+    if confirm != "PAUSE_SHORT_PROBE":
+        raise HTTPException(400, "Set confirm='PAUSE_SHORT_PROBE' to pause the active SHORT MICRO_PROBE.")
+    return v9_4_0_pause_short_probe(reason=body.get("reason") or "manual_v9_4_0_pause_short_probe")
+
+
+@app.get("/v9_4_0_regime_probe_dashboard", response_class=HTMLResponse)
+def v9_4_0_regime_probe_dashboard(secret: str, notify: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    data = v9_4_0_regime_probe_controller(notify=notify)
+    probe = data.get("probe") or {}
+    align = data.get("alignment") or {}
+    regime = data.get("regime") or {}
+    gate = data.get("market_gate") or {}
+    guards = data.get("guards") or {}
+    candidates = ((data.get("long_probe_candidates") or {}).get("candidates") or [])
+
+    cand_rows = "".join(
+        [
+            f"<tr><td>{h(x.get('strategy'))}</td><td>{h(x.get('symbol'))}</td><td>{h(x.get('side'))}</td><td>{h(x.get('current_mode'))}</td><td>{h(x.get('risk_pct'))}</td><td>{h(x.get('current_role'))}</td><td>{h(x.get('reason'))}</td></tr>"
+            for x in candidates
+        ]
+    )
+
+    return HTMLResponse(
+        f"""
+        <html>
+        <head>
+          <title>v9.4.0 Regime-Aware Probe Controller</title>
+          <style>
+            body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+            .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+            table{{border-collapse:collapse;width:100%;background:white;font-size:13px;margin-top:10px}}
+            th{{background:#111827;color:white}}
+            td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}
+          </style>
+        </head>
+        <body>
+          <h1>v9.4.0 Regime-Aware Probe Controller</h1>
+          <div class="card">
+            <b>Recommendation:</b> {h(data.get('recommendation'))}<br>
+            <b>Reasons:</b> {h(data.get('reasons'))}<br>
+            <b>Actions:</b> {h(data.get('actions'))}<br>
+            <b>Active probe:</b> {h(data.get('active_probe'))}
+          </div>
+          <div class="card">
+            <h2>Active probe</h2>
+            <b>Key:</b> {h(probe.get('key'))}<br>
+            <b>Mode:</b> {h(probe.get('mode'))}<br>
+            <b>Risk:</b> {h(probe.get('risk_pct'))}<br>
+            <b>Lane:</b> {h(probe.get('execution_lane'))}<br>
+            <b>Status:</b> {h(probe.get('probe_status'))}
+          </div>
+          <div class="card">
+            <h2>Regime alignment</h2>
+            <b>Regime:</b> {h(regime.get('regime'))}<br>
+            <b>Preferred direction:</b> {h(regime.get('preferred_direction'))}<br>
+            <b>Bull score:</b> {h(regime.get('bull_score'))}<br>
+            <b>Bear score:</b> {h(regime.get('bear_score'))}<br>
+            <b>Aligned:</b> {h(align.get('aligned'))}<br>
+            <b>Misaligned:</b> {h(align.get('misaligned'))}<br>
+            <b>Transition hold:</b> {h(align.get('transition_hold'))}
+          </div>
+          <div class="card">
+            <h2>Guards</h2>
+            <b>Market gate:</b> {h(gate)}<br>
+            <b>Data source:</b> {h((guards.get('data_source') or {}))}<br>
+            <b>Strategy state:</b> {h((guards.get('strategy_state') or {}))}<br>
+            <b>MICRO monitor:</b> {h((guards.get('micro_probe_monitor') or {}))}
+          </div>
+          <div class="card">
+            <h2>LONG probe candidates for BULL review</h2>
+            <p>Manual review only. This dashboard does not enable LONG MICRO automatically.</p>
+            <table>
+              <tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Mode</th><th>Risk</th><th>Role</th><th>Reason</th></tr>
+              {cand_rows}
+            </table>
+          </div>
+          <p>
+            <a href="/v9_4_0_regime_probe_controller?secret={h(secret)}&notify=false">Controller JSON</a> ·
+            <a href="/v9_4_0_long_probe_candidates?secret={h(secret)}">LONG candidates JSON</a> ·
+            <a href="/v9_3_7_readiness_dashboard?secret={h(secret)}">Readiness</a> ·
+            <a href="/v9_3_6_micro_probe_dashboard?secret={h(secret)}&days=30&limit=500">MICRO monitor</a>
+          </p>
+          <p><b>Pause SHORT probe:</b> POST /v9_4_0_pause_short_probe with JSON {{"secret":"...","confirm":"PAUSE_SHORT_PROBE"}}</p>
+        </body>
+        </html>
+        """
+    )
+
+
+@app.get("/v9_4_0_readiness_dashboard", response_class=HTMLResponse)
+def v9_4_0_readiness_dashboard(secret: str, notify: bool = False):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_3_7_readiness_dashboard(secret=secret, notify=notify)
 
