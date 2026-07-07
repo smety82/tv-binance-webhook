@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.6")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.7")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.4.6</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.4.7</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.4.6"
+APP_FEATURE_LEVEL = "9.4.7"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.4.6 PAPER PORTFOLIO CLEANUP
+# v9.4.7 ACTIVE-ONLY MARKET GATE
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -17517,5 +17517,342 @@ def v9_4_6_expected_state(secret: str):
                 "manual review"
             ]
         }
+    }
+
+
+# ============================================================
+# v9.4.7 ACTIVE-ONLY MARKET GATE
+# ============================================================
+# Purpose:
+# - Keep the legacy market gate visible.
+# - Add a separate active-only gate that does NOT let OFF/historical losses
+#   permanently block the current cleaned paper portfolio.
+# - Decision support only. No automatic MICRO/LIVE activation.
+
+V947_ACTIVE_ONLY_GATE_ENABLED = os.getenv("V947_ACTIVE_ONLY_GATE_ENABLED", "true").lower() == "true"
+V947_DAYS_SHORT = int(os.getenv("V947_DAYS_SHORT", "10"))
+V947_DAYS_LONG = int(os.getenv("V947_DAYS_LONG", "30"))
+V947_LIMIT = int(os.getenv("V947_LIMIT", "1000"))
+
+V947_MIN_CLOSED_FOR_ACTIVE_GATE = int(os.getenv("V947_MIN_CLOSED_FOR_ACTIVE_GATE", "3"))
+V947_MIN_CLOSED_FOR_MICRO_REVIEW = int(os.getenv("V947_MIN_CLOSED_FOR_MICRO_REVIEW", "5"))
+V947_ACTIVE_AVG_R_NORMAL = float(os.getenv("V947_ACTIVE_AVG_R_NORMAL", "0.15"))
+V947_ACTIVE_TOTAL_R_NORMAL = float(os.getenv("V947_ACTIVE_TOTAL_R_NORMAL", "1.0"))
+V947_ACTIVE_AVG_R_ELEVATED = float(os.getenv("V947_ACTIVE_AVG_R_ELEVATED", "-0.20"))
+V947_ACTIVE_AVG_R_HIGH = float(os.getenv("V947_ACTIVE_AVG_R_HIGH", "-0.50"))
+
+
+def v9_4_7_count_active_modes() -> Dict[str, Any]:
+    state = load_state()
+    counts = {
+        "active_paper_count": 0,
+        "active_micro_live_count": 0,
+        "long_alt_count": 0,
+        "active_keys": [],
+    }
+    for item in v9_3_3_iter_strategy_sides(state):
+        side = str(item.get("side") or "").upper().strip()
+        mode = str(item.get("mode") or "OFF").upper().strip()
+        symbol = normalize_symbol(item.get("symbol"))
+        if side not in {"LONG", "SHORT"}:
+            continue
+        if mode == "PAPER":
+            counts["active_paper_count"] += 1
+            counts["active_keys"].append(v9_3_3_key(item.get("strategy"), symbol, side))
+        if mode in {"MICRO", "LIVE"}:
+            counts["active_micro_live_count"] += 1
+            counts["active_keys"].append(v9_3_3_key(item.get("strategy"), symbol, side))
+        if mode in {"PAPER", "MICRO", "LIVE"} and side == "LONG" and symbol not in {"BTCUSDT", "ETHUSDT"}:
+            counts["long_alt_count"] += 1
+    return counts
+
+
+def v9_4_7_score_active_gate(active_perf: Dict[str, Any], regime: Dict[str, Any], legacy_gate: Dict[str, Any]) -> Dict[str, Any]:
+    active_10 = (active_perf.get("active_summary") or {}).get("10d") or {}
+    active_30 = (active_perf.get("active_summary") or {}).get("30d") or {}
+    by_decision = active_perf.get("by_decision") or {}
+
+    c10 = int(active_10.get("closed_count") or 0)
+    c30 = int(active_30.get("closed_count") or 0)
+    r10 = float(active_10.get("total_r") or 0.0)
+    r30 = float(active_30.get("total_r") or 0.0)
+    avg10 = active_10.get("average_r_closed")
+    avg30 = active_30.get("average_r_closed")
+
+    regime_name = str(regime.get("regime") or "UNKNOWN").upper()
+    preferred = str(regime.get("preferred_direction") or "UNKNOWN").upper()
+    bull_score = v8_float(regime.get("bull_score"), 0.0)
+    bear_score = v8_float(regime.get("bear_score"), 0.0)
+
+    reasons = []
+    actions = []
+
+    if not V947_ACTIVE_ONLY_GATE_ENABLED:
+        return {
+            "active_gate_level": "DISABLED",
+            "allow_new_micro": False,
+            "allow_new_paper": True,
+            "recommendation": "ACTIVE_ONLY_GATE_DISABLED",
+            "reasons": ["V947_ACTIVE_ONLY_GATE_ENABLED_FALSE"],
+            "actions": ["NO_ACTION"],
+        }
+
+    if c10 == 0 and c30 == 0:
+        active_gate_level = "OBSERVATION"
+        allow_new_micro = False
+        allow_new_paper = True
+        recommendation = "OBSERVATION_MODE_COLLECT_ACTIVE_OUTCOMES"
+        reasons.append("NO_ACTIVE_CLOSED_OUTCOMES_AFTER_CLEANUP")
+        actions.extend(["KEEP_MINIMAL_PAPER_MONITORING", "DO_NOT_MICRO_UNTIL_ACTIVE_OUTCOMES_EXIST"])
+    elif c10 >= V947_MIN_CLOSED_FOR_ACTIVE_GATE and avg10 is not None and avg10 <= V947_ACTIVE_AVG_R_HIGH:
+        active_gate_level = "HIGH"
+        allow_new_micro = False
+        allow_new_paper = True
+        recommendation = "BLOCK_PROMOTION_ACTIVE_RECENT_PERFORMANCE_HIGH_RISK"
+        reasons.append(f"ACTIVE_10D_AVG_R_HIGH_RISK_{avg10}")
+        actions.append("REDUCE_OR_DISABLE_WEAK_ACTIVE_PAPER")
+    elif c30 >= V947_MIN_CLOSED_FOR_ACTIVE_GATE and avg30 is not None and avg30 <= V947_ACTIVE_AVG_R_HIGH:
+        active_gate_level = "HIGH"
+        allow_new_micro = False
+        allow_new_paper = True
+        recommendation = "BLOCK_PROMOTION_ACTIVE_30D_PERFORMANCE_HIGH_RISK"
+        reasons.append(f"ACTIVE_30D_AVG_R_HIGH_RISK_{avg30}")
+        actions.append("REDUCE_OR_DISABLE_WEAK_ACTIVE_PAPER")
+    elif c10 >= V947_MIN_CLOSED_FOR_ACTIVE_GATE and avg10 is not None and avg10 <= V947_ACTIVE_AVG_R_ELEVATED:
+        active_gate_level = "ELEVATED"
+        allow_new_micro = False
+        allow_new_paper = True
+        recommendation = "NO_MICRO_ACTIVE_RECENT_PERFORMANCE_NEGATIVE"
+        reasons.append(f"ACTIVE_10D_AVG_R_NEGATIVE_{avg10}")
+        actions.append("KEEP_PAPER_ONLY")
+    elif c30 >= V947_MIN_CLOSED_FOR_ACTIVE_GATE and avg30 is not None and avg30 <= V947_ACTIVE_AVG_R_ELEVATED:
+        active_gate_level = "ELEVATED"
+        allow_new_micro = False
+        allow_new_paper = True
+        recommendation = "NO_MICRO_ACTIVE_30D_PERFORMANCE_NEGATIVE"
+        reasons.append(f"ACTIVE_30D_AVG_R_NEGATIVE_{avg30}")
+        actions.append("KEEP_PAPER_ONLY")
+    elif c10 >= V947_MIN_CLOSED_FOR_MICRO_REVIEW and avg10 is not None and avg10 >= V947_ACTIVE_AVG_R_NORMAL and r10 >= V947_ACTIVE_TOTAL_R_NORMAL:
+        active_gate_level = "NORMAL"
+        allow_new_micro = False  # manual-only; never auto-enable here
+        allow_new_paper = True
+        recommendation = "MICRO_REVIEW_POSSIBLE_MANUAL_ONLY"
+        reasons.append(f"ACTIVE_10D_POSITIVE_C{c10}_R{round(r10,3)}_AVG{avg10}")
+        actions.extend(["CHECK_REGIME_ALIGNMENT", "CHECK_STRATEGY_SPECIFIC_REPORT", "MANUAL_APPROVAL_REQUIRED"])
+    elif c30 >= V947_MIN_CLOSED_FOR_MICRO_REVIEW and avg30 is not None and avg30 >= V947_ACTIVE_AVG_R_NORMAL and r30 >= V947_ACTIVE_TOTAL_R_NORMAL:
+        active_gate_level = "CAUTIOUS"
+        allow_new_micro = False
+        allow_new_paper = True
+        recommendation = "PAPER_IMPROVING_BUT_NEED_RECENT_CONFIRMATION"
+        reasons.append(f"ACTIVE_30D_POSITIVE_BUT_10D_NOT_CONFIRMED_C{c30}_R{round(r30,3)}_AVG{avg30}")
+        actions.append("COLLECT_MORE_RECENT_ACTIVE_OUTCOMES")
+    else:
+        active_gate_level = "CAUTIOUS"
+        allow_new_micro = False
+        allow_new_paper = True
+        recommendation = "MONITOR_ONLY_ACTIVE_EDGE_NOT_PROVEN"
+        reasons.append("ACTIVE_EDGE_INSUFFICIENT_OR_MIXED")
+        actions.append("KEEP_MINIMAL_PAPER_MONITORING")
+
+    if regime_name in {"BULL", "BEAR"}:
+        reasons.append(f"REGIME_{regime_name}_PREFERRED_{preferred}_BULL_{round(bull_score,2)}_BEAR_{round(bear_score,2)}")
+    else:
+        reasons.append(f"REGIME_{regime_name}_PREFERRED_{preferred}")
+
+    legacy_level = legacy_gate.get("gate_level")
+    if legacy_level in {"HIGH", "ELEVATED"} and active_gate_level in {"OBSERVATION", "NORMAL", "CAUTIOUS"}:
+        reasons.append(f"LEGACY_GATE_{legacy_level}_DRIVEN_BY_HISTORICAL_OR_OFF_OUTCOMES")
+        actions.append("USE_ACTIVE_GATE_FOR_CURRENT_PORTFOLIO_DECISIONS")
+
+    if by_decision:
+        reasons.append(f"ACTIVE_PERF_DECISIONS_{by_decision}")
+
+    return {
+        "active_gate_level": active_gate_level,
+        "allow_new_micro": allow_new_micro,
+        "allow_new_paper": allow_new_paper,
+        "recommendation": recommendation,
+        "reasons": list(dict.fromkeys(reasons)),
+        "actions": list(dict.fromkeys(actions)),
+    }
+
+
+def v9_4_7_active_only_market_gate(days_long: int = V947_DAYS_LONG, days_short: int = V947_DAYS_SHORT, limit: int = V947_LIMIT) -> Dict[str, Any]:
+    legacy_gate = v9_market_regime_gate(days=days_long, limit=limit)
+    active_perf = v9_4_4_outcome_active_performance_report(days_long=days_long, days_short=days_short, limit=limit)
+    regime = v9_2_directional_market_regime(force=True)
+    source_guard = v9_3_2_data_source_guard(notify=False)
+    state_guard = v9_3_3_strategy_state_guard(notify=False)
+    counts = v9_4_7_count_active_modes()
+
+    active_score = v9_4_7_score_active_gate(active_perf, regime, legacy_gate)
+
+    if not source_guard.get("decision_data_trusted"):
+        active_score["active_gate_level"] = "DEGRADED"
+        active_score["allow_new_micro"] = False
+        active_score["recommendation"] = "DATA_SOURCE_NOT_TRUSTED"
+        active_score.setdefault("reasons", []).append("DATA_SOURCE_NOT_TRUSTED")
+        active_score.setdefault("actions", []).append("FIX_SUPABASE_OR_DATA_SOURCE")
+
+    if state_guard.get("level") not in {"OK", "WATCH"}:
+        active_score["active_gate_level"] = "DEGRADED"
+        active_score["allow_new_micro"] = False
+        active_score["recommendation"] = "STRATEGY_STATE_NOT_TRUSTED"
+        active_score.setdefault("reasons", []).append(f"STRATEGY_STATE_{state_guard.get('level')}")
+        active_score.setdefault("actions", []).append("FIX_STRATEGY_STATE_GUARD")
+
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "active_only_gate": active_score,
+        "legacy_gate": {
+            "gate_level": legacy_gate.get("gate_level"),
+            "allow_new_micro": legacy_gate.get("allow_new_micro"),
+            "allow_new_paper": legacy_gate.get("allow_new_paper"),
+            "recommendation": legacy_gate.get("recommendation"),
+            "reasons": legacy_gate.get("reasons"),
+            "paper": legacy_gate.get("paper"),
+            "ai_risk": legacy_gate.get("ai_risk"),
+            "crypto_context": legacy_gate.get("crypto_context"),
+        },
+        "active_performance": {
+            "gate_recommendation": active_perf.get("gate_recommendation"),
+            "by_decision": active_perf.get("by_decision"),
+            "active_strategy_count": active_perf.get("active_strategy_count"),
+            "active_summary": active_perf.get("active_summary"),
+            "historical_off_summary": active_perf.get("historical_off_summary"),
+            "active_reports": active_perf.get("active_reports"),
+        },
+        "regime": {
+            "regime": regime.get("regime"),
+            "preferred_direction": regime.get("preferred_direction"),
+            "bull_score": regime.get("bull_score"),
+            "bear_score": regime.get("bear_score"),
+            "market_data_complete": regime.get("market_data_complete"),
+        },
+        "guards": {
+            "data_source": {
+                "level": source_guard.get("level"),
+                "decision_data_trusted": source_guard.get("decision_data_trusted"),
+                "effective_source": (source_guard.get("supabase") or {}).get("effective_source"),
+            },
+            "strategy_state": {
+                "level": state_guard.get("level"),
+                "decision_safe": state_guard.get("decision_safe"),
+                "active_micro_live_count": state_guard.get("active_micro_live_count"),
+                "reasons": state_guard.get("reasons"),
+            },
+            "active_counts": counts,
+        },
+        "interpretation": {
+            "legacy_gate_use": "Historical/full 30d risk context",
+            "active_gate_use": "Current cleaned portfolio decision support",
+            "micro_policy": "Manual review only; this endpoint never enables MICRO automatically.",
+        },
+    }
+
+
+@app.get("/v9_4_7_active_only_market_gate")
+def v9_4_7_active_only_market_gate_endpoint(secret: str, days_long: int = V947_DAYS_LONG, days_short: int = V947_DAYS_SHORT, limit: int = V947_LIMIT):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_4_7_active_only_market_gate(days_long=days_long, days_short=days_short, limit=limit)
+
+
+@app.get("/v9_4_7_active_only_market_gate_dashboard", response_class=HTMLResponse)
+def v9_4_7_active_only_market_gate_dashboard(secret: str, days_long: int = V947_DAYS_LONG, days_short: int = V947_DAYS_SHORT, limit: int = V947_LIMIT):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    data = v9_4_7_active_only_market_gate(days_long=days_long, days_short=days_short, limit=limit)
+    ag = data.get("active_only_gate") or {}
+    lg = data.get("legacy_gate") or {}
+    ap = data.get("active_performance") or {}
+    regime = data.get("regime") or {}
+    guards = data.get("guards") or {}
+
+    rows = "".join([
+        f"<tr><td>{h(r.get('strategy'))}</td><td>{h(r.get('symbol'))}</td><td>{h(r.get('side'))}</td><td>{h(r.get('mode'))}</td><td>{h(r.get('decision'))}</td><td>{h(r.get('summary_10d',{}).get('closed_count'))}</td><td>{h(r.get('summary_10d',{}).get('total_r'))}</td><td>{h(r.get('summary_10d',{}).get('average_r_closed'))}</td><td>{h(r.get('summary_30d',{}).get('closed_count'))}</td><td>{h(r.get('summary_30d',{}).get('total_r'))}</td><td>{h(r.get('summary_30d',{}).get('average_r_closed'))}</td><td>{h(r.get('reasons'))}</td></tr>"
+        for r in ap.get("active_reports", [])
+    ])
+
+    return HTMLResponse(f"""
+    <html>
+    <head>
+      <title>v9.4.7 Active-Only Market Gate</title>
+      <style>
+        body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+        .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+        table{{border-collapse:collapse;width:100%;background:white;font-size:12px;margin-top:10px}}
+        th{{background:#111827;color:white}}
+        td,th{{padding:6px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}}
+      </style>
+    </head>
+    <body>
+      <h1>v9.4.7 Active-Only Market Gate</h1>
+      <div class="card">
+        <h2>Active-only gate</h2>
+        <b>Level:</b> {h(ag.get('active_gate_level'))}<br>
+        <b>Recommendation:</b> {h(ag.get('recommendation'))}<br>
+        <b>Allow new MICRO:</b> {h(ag.get('allow_new_micro'))}<br>
+        <b>Allow new PAPER:</b> {h(ag.get('allow_new_paper'))}<br>
+        <b>Reasons:</b> {h(ag.get('reasons'))}<br>
+        <b>Actions:</b> {h(ag.get('actions'))}
+      </div>
+      <div class="card">
+        <h2>Legacy gate</h2>
+        <b>Level:</b> {h(lg.get('gate_level'))}<br>
+        <b>Recommendation:</b> {h(lg.get('recommendation'))}<br>
+        <b>Reasons:</b> {h(lg.get('reasons'))}<br>
+        <b>Paper:</b> {h(lg.get('paper'))}<br>
+        <b>AI risk:</b> {h(lg.get('ai_risk'))}
+      </div>
+      <div class="card">
+        <h2>Regime</h2>
+        <b>Regime:</b> {h(regime.get('regime'))}<br>
+        <b>Preferred:</b> {h(regime.get('preferred_direction'))}<br>
+        <b>Bull score:</b> {h(regime.get('bull_score'))}<br>
+        <b>Bear score:</b> {h(regime.get('bear_score'))}
+      </div>
+      <div class="card">
+        <h2>Guards / active counts</h2>
+        <b>Data source:</b> {h((guards.get('data_source') or {}))}<br>
+        <b>Strategy state:</b> {h((guards.get('strategy_state') or {}))}<br>
+        <b>Active counts:</b> {h((guards.get('active_counts') or {}))}
+      </div>
+      <div class="card">
+        <h2>Active performance</h2>
+        <b>Gate recommendation:</b> {h(ap.get('gate_recommendation'))}<br>
+        <b>By decision:</b> {h(ap.get('by_decision'))}<br>
+        <b>Active summary:</b> {h(ap.get('active_summary'))}<br>
+        <b>Historical/off summary:</b> {h(ap.get('historical_off_summary'))}
+        <table>
+          <tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Mode</th><th>Decision</th><th>10d closed</th><th>10d R</th><th>10d Avg</th><th>30d closed</th><th>30d R</th><th>30d Avg</th><th>Reasons</th></tr>
+          {rows}
+        </table>
+      </div>
+      <p>
+        <a href="/v9_4_7_active_only_market_gate?secret={h(secret)}&days_long={days_long}&days_short={days_short}&limit={limit}">JSON</a> ·
+        <a href="/v9_4_4_outcome_active_performance_dashboard?secret={h(secret)}&days_long={days_long}&days_short={days_short}&limit={limit}">Outcome performance</a> ·
+        <a href="/v9_market_regime_gate?secret={h(secret)}&days=30&limit=1000">Legacy market gate</a>
+      </p>
+    </body>
+    </html>
+    """)
+
+
+@app.get("/v9_4_7_hotfix_note")
+def v9_4_7_hotfix_note(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "feature": "Active-only market gate",
+        "why": "Legacy gate uses full 30d outcome history, including now-OFF strategies. Active-only gate focuses on the cleaned current portfolio.",
+        "policy": "No automatic MICRO activation. Manual review remains required.",
+        "dashboard": "/v9_4_7_active_only_market_gate_dashboard",
+        "json": "/v9_4_7_active_only_market_gate",
     }
 
