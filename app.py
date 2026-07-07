@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.2")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.3")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.4.2</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.4.3</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.4.2"
+APP_FEATURE_LEVEL = "9.4.3"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.4.2 ACTIVE STRATEGY PERFORMANCE GATE
+# v9.4.3 ACTIVE PERFORMANCE SYSTEM-EVENT HOTFIX
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -16727,11 +16727,14 @@ def v9_4_2_active_keys() -> Dict[str, Dict[str, Any]]:
     for item in v9_3_3_iter_strategy_sides(state):
         mode = str(item.get("mode", "OFF")).upper()
         if mode in {"PAPER", "MICRO", "LIVE"}:
-            key = v9_3_3_key(item.get("strategy"), item.get("symbol"), item.get("side"))
+            side_value = str(item.get("side") or "").upper().strip()
+            if side_value not in {"LONG", "SHORT"}:
+                continue
+            key = v9_3_3_key(item.get("strategy"), item.get("symbol"), side_value)
             active[key] = {
                 "strategy": item.get("strategy"),
                 "symbol": item.get("symbol"),
-                "side": item.get("side"),
+                "side": side_value,
                 "mode": mode,
                 "risk_pct": item.get("risk_pct"),
                 "execution_lane": (item.get("config") or {}).get("execution_lane"),
@@ -16741,10 +16744,13 @@ def v9_4_2_active_keys() -> Dict[str, Dict[str, Any]]:
 
 
 def v9_4_2_event_key(row: Dict[str, Any]) -> str:
+    raw_side = str(row.get("side") or "UNKNOWN").upper().strip()
+    if raw_side not in {"LONG", "SHORT"}:
+        raw_side = "UNKNOWN"
     return v9_3_3_key(
         str(row.get("strategy") or row.get("strategy_name") or ""),
         normalize_symbol(str(row.get("symbol") or "")),
-        normalize_side(str(row.get("side") or "UNKNOWN")),
+        raw_side,
     )
 
 
@@ -16997,4 +17003,20 @@ def v9_4_2_active_performance_dashboard(secret: str, days_long: int = V942_DAYS_
     </html>
     """)
 
+
+# ============================================================
+# v9.4.3 SYSTEM EVENT HOTFIX
+# ============================================================
+
+@app.get("/v9_4_3_hotfix_note")
+def v9_4_3_hotfix_note(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "fix": "v9.4.2 active performance report failed when Supabase contained system events with side='SYSTEM'. v9.4.3 maps non-LONG/SHORT sides to UNKNOWN for grouping and skips non-trade sides in active state.",
+        "affected_endpoint": "/v9_4_2_active_performance_dashboard",
+        "status": "hotfixed",
+    }
 
