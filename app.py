@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.1")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.2")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.4.1</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.4.2</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.4.1"
+APP_FEATURE_LEVEL = "9.4.2"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.4.1 PAUSED BASELINE CONTROLLER
+# v9.4.2 ACTIVE STRATEGY PERFORMANCE GATE
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -16702,4 +16702,299 @@ def v9_4_1_readiness_dashboard(secret: str):
     </body>
     </html>
     """)
+
+
+# ============================================================
+# v9.4.2 ACTIVE STRATEGY PERFORMANCE GATE
+# ============================================================
+# Monitoring-only decision support:
+# separates active PAPER/MICRO/LIVE strategy performance from old OFF-strategy losses.
+
+V942_ACTIVE_PERFORMANCE_GATE_ENABLED = os.getenv("V942_ACTIVE_PERFORMANCE_GATE_ENABLED", "true").lower() == "true"
+V942_DAYS_SHORT = int(os.getenv("V942_DAYS_SHORT", "10"))
+V942_DAYS_LONG = int(os.getenv("V942_DAYS_LONG", "30"))
+V942_LIMIT = int(os.getenv("V942_LIMIT", "1000"))
+V942_MIN_TRADES_FOR_MICRO_REVIEW = int(os.getenv("V942_MIN_TRADES_FOR_MICRO_REVIEW", "5"))
+V942_MIN_TOTAL_R_FOR_MICRO_REVIEW = float(os.getenv("V942_MIN_TOTAL_R_FOR_MICRO_REVIEW", "2.0"))
+V942_MIN_AVG_R_FOR_MICRO_REVIEW = float(os.getenv("V942_MIN_AVG_R_FOR_MICRO_REVIEW", "0.20"))
+V942_DISABLE_AVG_R_THRESHOLD = float(os.getenv("V942_DISABLE_AVG_R_THRESHOLD", "-0.35"))
+V942_DISABLE_TOTAL_R_THRESHOLD = float(os.getenv("V942_DISABLE_TOTAL_R_THRESHOLD", "-2.0"))
+
+
+def v9_4_2_active_keys() -> Dict[str, Dict[str, Any]]:
+    state = load_state()
+    active = {}
+    for item in v9_3_3_iter_strategy_sides(state):
+        mode = str(item.get("mode", "OFF")).upper()
+        if mode in {"PAPER", "MICRO", "LIVE"}:
+            key = v9_3_3_key(item.get("strategy"), item.get("symbol"), item.get("side"))
+            active[key] = {
+                "strategy": item.get("strategy"),
+                "symbol": item.get("symbol"),
+                "side": item.get("side"),
+                "mode": mode,
+                "risk_pct": item.get("risk_pct"),
+                "execution_lane": (item.get("config") or {}).get("execution_lane"),
+                "probe_status": (item.get("config") or {}).get("probe_status"),
+            }
+    return active
+
+
+def v9_4_2_event_key(row: Dict[str, Any]) -> str:
+    return v9_3_3_key(
+        str(row.get("strategy") or row.get("strategy_name") or ""),
+        normalize_symbol(str(row.get("symbol") or "")),
+        normalize_side(str(row.get("side") or "UNKNOWN")),
+    )
+
+
+def v9_4_2_r(row: Dict[str, Any]) -> Optional[float]:
+    for k in ["r_multiple", "realized_r", "total_r", "outcome_r", "r", "estimated_r"]:
+        val = to_float_or_none(row.get(k))
+        if val is not None:
+            return float(val)
+
+    combo = f"{row.get('outcome_status','')} {row.get('status','')} {row.get('decision','')}".upper()
+    if "WIN_TP2" in combo:
+        return 2.0
+    if "WIN_TP1" in combo:
+        return 1.0
+    if "PARTIAL_TP1_THEN_SL" in combo:
+        return 0.0
+    if "LOSS_SL" in combo:
+        return -1.0
+    return None
+
+
+def v9_4_2_group(rows: list[Dict[str, Any]]) -> Dict[str, list[Dict[str, Any]]]:
+    grouped = {}
+    for row in rows or []:
+        key = v9_4_2_event_key(row)
+        grouped.setdefault(key, []).append(row)
+    return grouped
+
+
+def v9_4_2_summary(rows: list[Dict[str, Any]]) -> Dict[str, Any]:
+    total_r = 0.0
+    closed = 0
+    wins = 0
+    losses = 0
+    zero = 0
+    by_status = {}
+    for row in rows or []:
+        status = str(row.get("outcome_status") or row.get("status") or row.get("decision") or "UNKNOWN").upper()
+        by_status[status] = by_status.get(status, 0) + 1
+        r = v9_4_2_r(row)
+        if r is None:
+            continue
+        closed += 1
+        total_r += r
+        if r > 0:
+            wins += 1
+        elif r < 0:
+            losses += 1
+        else:
+            zero += 1
+    return {
+        "count": len(rows or []),
+        "closed_count": closed,
+        "wins": wins,
+        "losses": losses,
+        "zero_or_partial": zero,
+        "total_r": round(total_r, 6),
+        "average_r_closed": round(total_r / closed, 6) if closed else None,
+        "by_status": by_status,
+    }
+
+
+def v9_4_2_decision(cfg: Dict[str, Any], s30: Dict[str, Any], s10: Dict[str, Any]) -> Dict[str, Any]:
+    c30 = int(s30.get("closed_count") or 0)
+    c10 = int(s10.get("closed_count") or 0)
+    r30 = float(s30.get("total_r") or 0.0)
+    r10 = float(s10.get("total_r") or 0.0)
+    a30 = s30.get("average_r_closed")
+    a10 = s10.get("average_r_closed")
+
+    reasons = []
+    actions = []
+
+    if c10 >= V942_MIN_TRADES_FOR_MICRO_REVIEW and r10 >= V942_MIN_TOTAL_R_FOR_MICRO_REVIEW and (a10 or 0) >= V942_MIN_AVG_R_FOR_MICRO_REVIEW:
+        decision = "MICRO_REVIEW_READY"
+        reasons.append(f"10D_STRONG_C{c10}_R{round(r10,3)}_AVG{a10}")
+        actions.append("MANUAL_REVIEW_ONLY_CHECK_REGIME_FIRST")
+    elif c10 >= 2 and ((a10 is not None and a10 <= V942_DISABLE_AVG_R_THRESHOLD) or r10 <= V942_DISABLE_TOTAL_R_THRESHOLD):
+        decision = "DISABLE_PAPER"
+        reasons.append(f"10D_WEAK_C{c10}_R{round(r10,3)}_AVG{a10}")
+        actions.append("CONSIDER_OFF_TO_REDUCE_NOISE")
+    elif c30 >= 5 and ((a30 is not None and a30 <= V942_DISABLE_AVG_R_THRESHOLD) or r30 <= V942_DISABLE_TOTAL_R_THRESHOLD):
+        if c10 > 0 and (a10 is not None and a10 > 0):
+            decision = "WATCHLIST"
+            reasons.append("30D_WEAK_BUT_10D_IMPROVING")
+            actions.append("KEEP_PAPER_NO_MICRO")
+        else:
+            decision = "DISABLE_PAPER"
+            reasons.append(f"30D_WEAK_C{c30}_R{round(r30,3)}_AVG{a30}")
+            actions.append("CONSIDER_OFF_TO_REDUCE_NOISE")
+    elif c10 > 0 and (a10 is not None and a10 > 0):
+        decision = "KEEP_PAPER"
+        reasons.append("10D_POSITIVE_NOT_ENOUGH_FOR_MICRO")
+        actions.append("COLLECT_MORE_PAPER_DATA")
+    elif c30 == 0 and c10 == 0:
+        decision = "WATCHLIST"
+        reasons.append("NO_CLOSED_OUTCOMES")
+        actions.append("VERIFY_ALERTS_OR_KEEP_MONITORING")
+    else:
+        decision = "DO_NOT_PROMOTE"
+        reasons.append("INSUFFICIENT_OR_MIXED_EDGE")
+        actions.append("NO_MICRO")
+
+    return {
+        "decision": decision,
+        "reasons": reasons,
+        "actions": actions,
+        "summary_30d": s30,
+        "summary_10d": s10,
+    }
+
+
+def v9_4_2_active_performance_report(days_long: int = V942_DAYS_LONG, days_short: int = V942_DAYS_SHORT, limit: int = V942_LIMIT) -> Dict[str, Any]:
+    active = v9_4_2_active_keys()
+
+    rows30 = fetch_supabase_logs_since(days=max(1, int(days_long)), limit=max(1, int(limit)))
+    rows10 = fetch_supabase_logs_since(days=max(1, int(days_short)), limit=max(1, int(limit)))
+
+    g30 = v9_4_2_group(rows30)
+    g10 = v9_4_2_group(rows10)
+
+    active_reports = []
+    for key, cfg in active.items():
+        s30 = v9_4_2_summary(g30.get(key, []))
+        s10 = v9_4_2_summary(g10.get(key, []))
+        d = v9_4_2_decision(cfg, s30, s10)
+        active_reports.append({**cfg, "key": key, **d})
+
+    historical = []
+    for key, rows in g30.items():
+        if key in active:
+            continue
+        s30 = v9_4_2_summary(rows)
+        s10 = v9_4_2_summary(g10.get(key, []))
+        if s30["closed_count"] or s10["closed_count"]:
+            parts = key.split("|")
+            historical.append({
+                "key": key,
+                "strategy": parts[0] if len(parts) > 0 else "",
+                "symbol": parts[1] if len(parts) > 1 else "",
+                "side": parts[2] if len(parts) > 2 else "",
+                "mode": "OFF_OR_NOT_ACTIVE",
+                "impact": "HISTORICAL_ONLY",
+                "summary_30d": s30,
+                "summary_10d": s10,
+            })
+
+    by_decision = {}
+    for r in active_reports:
+        by_decision[r["decision"]] = by_decision.get(r["decision"], 0) + 1
+
+    active30 = v9_4_2_summary([r for r in rows30 if v9_4_2_event_key(r) in active])
+    active10 = v9_4_2_summary([r for r in rows10 if v9_4_2_event_key(r) in active])
+    off30 = v9_4_2_summary([r for r in rows30 if v9_4_2_event_key(r) not in active])
+    off10 = v9_4_2_summary([r for r in rows10 if v9_4_2_event_key(r) not in active])
+
+    if any(r["decision"] == "MICRO_REVIEW_READY" for r in active_reports):
+        recommendation = "MICRO_REVIEW_POSSIBLE_MANUAL_ONLY"
+    elif any(r["decision"] == "DISABLE_PAPER" for r in active_reports):
+        recommendation = "REDUCE_OR_DISABLE_WEAK_ACTIVE_PAPER"
+    else:
+        recommendation = "MONITOR_ONLY_NO_MICRO"
+
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "gate_recommendation": recommendation,
+        "by_decision": by_decision,
+        "active_strategy_count": len(active_reports),
+        "active_reports": active_reports,
+        "historical_off_reports": historical,
+        "active_summary": {"30d": active30, "10d": active10},
+        "historical_off_summary": {"30d": off30, "10d": off10},
+        "thresholds": {
+            "min_trades_for_micro_review": V942_MIN_TRADES_FOR_MICRO_REVIEW,
+            "min_total_r_for_micro_review": V942_MIN_TOTAL_R_FOR_MICRO_REVIEW,
+            "min_avg_r_for_micro_review": V942_MIN_AVG_R_FOR_MICRO_REVIEW,
+            "disable_avg_r_threshold": V942_DISABLE_AVG_R_THRESHOLD,
+            "disable_total_r_threshold": V942_DISABLE_TOTAL_R_THRESHOLD,
+        },
+        "note": "Decision support only. No automatic state/risk change.",
+    }
+
+
+@app.get("/v9_4_2_active_performance_report")
+def v9_4_2_active_performance_report_endpoint(secret: str, days_long: int = V942_DAYS_LONG, days_short: int = V942_DAYS_SHORT, limit: int = V942_LIMIT):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_4_2_active_performance_report(days_long=days_long, days_short=days_short, limit=limit)
+
+
+@app.get("/v9_4_2_active_performance_dashboard", response_class=HTMLResponse)
+def v9_4_2_active_performance_dashboard(secret: str, days_long: int = V942_DAYS_LONG, days_short: int = V942_DAYS_SHORT, limit: int = V942_LIMIT):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    report = v9_4_2_active_performance_report(days_long=days_long, days_short=days_short, limit=limit)
+    active_rows = "".join([
+        f"<tr><td>{h(r.get('strategy'))}</td><td>{h(r.get('symbol'))}</td><td>{h(r.get('side'))}</td><td>{h(r.get('mode'))}</td><td>{h(r.get('decision'))}</td><td>{h(r.get('summary_10d',{}).get('closed_count'))}</td><td>{h(r.get('summary_10d',{}).get('total_r'))}</td><td>{h(r.get('summary_10d',{}).get('average_r_closed'))}</td><td>{h(r.get('summary_30d',{}).get('closed_count'))}</td><td>{h(r.get('summary_30d',{}).get('total_r'))}</td><td>{h(r.get('summary_30d',{}).get('average_r_closed'))}</td><td>{h(r.get('reasons'))}</td></tr>"
+        for r in report.get("active_reports", [])
+    ])
+    off_rows = "".join([
+        f"<tr><td>{h(r.get('strategy'))}</td><td>{h(r.get('symbol'))}</td><td>{h(r.get('side'))}</td><td>{h(r.get('summary_10d',{}).get('closed_count'))}</td><td>{h(r.get('summary_10d',{}).get('total_r'))}</td><td>{h(r.get('summary_30d',{}).get('closed_count'))}</td><td>{h(r.get('summary_30d',{}).get('total_r'))}</td></tr>"
+        for r in report.get("historical_off_reports", [])[:30]
+    ])
+
+    return HTMLResponse(f"""
+    <html>
+    <head>
+      <title>v9.4.2 Active Strategy Performance Gate</title>
+      <style>
+        body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+        .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+        table{{border-collapse:collapse;width:100%;background:white;font-size:12px;margin-top:10px}}
+        th{{background:#111827;color:white}}
+        td,th{{padding:6px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}}
+      </style>
+    </head>
+    <body>
+      <h1>v9.4.2 Active Strategy Performance Gate</h1>
+      <div class="card">
+        <b>Gate recommendation:</b> {h(report.get('gate_recommendation'))}<br>
+        <b>By decision:</b> {h(report.get('by_decision'))}<br>
+        <b>Active summary 10d:</b> {h(report.get('active_summary',{}).get('10d'))}<br>
+        <b>Active summary 30d:</b> {h(report.get('active_summary',{}).get('30d'))}<br>
+        <b>Historical/off summary 10d:</b> {h(report.get('historical_off_summary',{}).get('10d'))}<br>
+        <b>Historical/off summary 30d:</b> {h(report.get('historical_off_summary',{}).get('30d'))}
+      </div>
+      <div class="card">
+        <h2>Active strategies</h2>
+        <table>
+          <tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Mode</th><th>Decision</th><th>10d closed</th><th>10d R</th><th>10d Avg</th><th>30d closed</th><th>30d R</th><th>30d Avg</th><th>Reasons</th></tr>
+          {active_rows}
+        </table>
+      </div>
+      <div class="card">
+        <h2>Historical / OFF contributors</h2>
+        <table>
+          <tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>10d closed</th><th>10d R</th><th>30d closed</th><th>30d R</th></tr>
+          {off_rows}
+        </table>
+      </div>
+      <p>
+        <a href="/v9_4_2_active_performance_report?secret={h(secret)}&days_long={days_long}&days_short={days_short}&limit={limit}">JSON report</a> ·
+        <a href="/v9_4_1_readiness_dashboard?secret={h(secret)}">Paused readiness</a> ·
+        <a href="/v9_market_regime_gate?secret={h(secret)}&days=30&limit=1000">Market gate</a>
+      </p>
+    </body>
+    </html>
+    """)
+
 
