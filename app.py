@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.8")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.9")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.4.8</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.4.9</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.4.8"
+APP_FEATURE_LEVEL = "9.4.9"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.4.8 CLEAN BASELINE ALIGNMENT
+# v9.4.9 CLEAN BASELINE DASHBOARD HOTFIX
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -17990,7 +17990,7 @@ def v9_4_8_clean_baseline_dashboard(secret: str):
         <a href="/v9_4_8_clean_baseline_preview?secret={h(secret)}">Preview JSON</a> ·
         <a href="/v9_4_7_active_only_market_gate_dashboard?secret={h(secret)}&days_long=30&days_short=10&limit=1000">Active-only gate</a>
       </p>
-      <p><b>Apply clean baseline:</b> POST /v9_4_8_apply_clean_baseline with {"secret":"...","confirm":"APPLY_CLEAN_BASELINE","dry_run":false}</p>
+      <p><b>Apply clean baseline:</b> POST /v9_4_8_apply_clean_baseline with {{"secret":"...","confirm":"APPLY_CLEAN_BASELINE","dry_run":false}}</p>
     </body>
     </html>
     """)
@@ -18008,5 +18008,23 @@ def v9_4_8_hotfix_note(secret: str):
         "target": "ICP LONG PAPER + XRP SHORT PAPER/PAUSED; all other known sides OFF; no MICRO/LIVE.",
         "dashboard": "/v9_4_8_clean_baseline_dashboard",
         "status": "/v9_4_8_clean_baseline_status",
+    }
+
+
+# ============================================================
+# v9.4.9 CLEAN BASELINE DASHBOARD HOTFIX
+# ============================================================
+
+@app.get("/v9_4_9_hotfix_note")
+def v9_4_9_hotfix_note(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "fix": "v9.4.8 clean baseline dashboard had an unescaped JSON literal inside an f-string, causing Internal Server Error. v9.4.9 escapes the braces in the HTML example.",
+        "affected_endpoint": "/v9_4_8_clean_baseline_dashboard",
+        "status": "hotfixed",
+        "next": "Use /v9_4_8_clean_baseline_dashboard and /v9_4_8_clean_baseline_status as before; endpoint names remain v9_4_8.",
     }
 
