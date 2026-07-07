@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.4")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.5")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.4.4</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.4.5</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.4.4"
+APP_FEATURE_LEVEL = "9.4.5"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.4.4 OUTCOME-BASED ACTIVE PERFORMANCE GATE
+# v9.4.5 OUTCOME EVENT-KEY HOTFIX
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -17064,10 +17064,18 @@ def v9_4_4_active_keys() -> Dict[str, Dict[str, Any]]:
 
 
 def v9_4_4_outcome_key(outcome: Dict[str, Any]) -> str:
-    side = str(outcome.get("side") or "UNKNOWN").upper().strip()
+    # evaluate_paper_trade() returns strategy/symbol/side inside outcome["event"], not at top level.
+    # v9.4.4 accidentally grouped all evaluated outcomes as None|None|UNKNOWN,
+    # so active strategies showed closed_count=0 while historical/off held the losses.
+    event = outcome.get("event") or {}
+    side = str(event.get("side") or outcome.get("side") or "UNKNOWN").upper().strip()
     if side not in {"LONG", "SHORT"}:
         side = "UNKNOWN"
-    return v9_3_3_key(outcome.get("strategy"), outcome.get("symbol"), side)
+    return v9_3_3_key(
+        event.get("strategy") or outcome.get("strategy"),
+        event.get("symbol") or outcome.get("symbol"),
+        side,
+    )
 
 
 def v9_4_4_fetch_outcomes(days: int, limit: int) -> list[Dict[str, Any]]:
@@ -17339,5 +17347,23 @@ def v9_4_4_hotfix_note(secret: str):
         "fix": "v9.4.2/9.4.3 used raw LOGGED trade_events and therefore showed closed_count=0. v9.4.4 uses evaluate_paper_trade() outcomes, matching /paper_outcome_summary.",
         "new_dashboard": "/v9_4_4_outcome_active_performance_dashboard",
         "new_report": "/v9_4_4_outcome_active_performance_report",
+    }
+
+
+# ============================================================
+# v9.4.5 OUTCOME EVENT-KEY HOTFIX
+# ============================================================
+
+@app.get("/v9_4_5_hotfix_note")
+def v9_4_5_hotfix_note(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "fix": "v9.4.4 grouped evaluated outcomes using top-level strategy/symbol/side, but evaluate_paper_trade stores those under outcome['event']. v9.4.5 groups by outcome['event'] so active strategy rows receive their closed outcomes.",
+        "use_dashboard": "/v9_4_4_outcome_active_performance_dashboard",
+        "use_report": "/v9_4_4_outcome_active_performance_report",
+        "note": "Endpoint names remain v9_4_4, but app version is 9.4.5.",
     }
 
