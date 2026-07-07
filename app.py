@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.7")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.8")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.4.7</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.4.8</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.4.7"
+APP_FEATURE_LEVEL = "9.4.8"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.4.7 ACTIVE-ONLY MARKET GATE
+# v9.4.8 CLEAN BASELINE ALIGNMENT
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -14258,7 +14258,7 @@ V933_BLOCK_LONG_MICRO_WHEN_GATE_NOT_NORMAL = os.getenv("V933_BLOCK_LONG_MICRO_WH
 V933_BLOCK_LONG_MICRO_WHEN_NOT_BULL = os.getenv("V933_BLOCK_LONG_MICRO_WHEN_NOT_BULL", "true").lower() == "true"
 V933_STRATEGY_GUARD_STATE_FILE = APP_DIR / "v9_3_3_strategy_state_guard_state.json"
 
-V933_SAFE_BASELINE_STATE = {'global': {'enabled': True, 'default_mode': 'OFF', 'max_open_positions': 1, 'daily_loss_limit_usdt': 10.0, 'weekly_loss_limit_usdt': 30.0, 'open_unrealized_loss_limit_usdt': 5.0, 'symbol_unrealized_loss_limit_usdt': 5.0, 'allow_unknown_symbols': False, 'max_daily_trades_global': 1}, 'strategies': {'structure_swing_v134': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}, 'MANAUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}, 'APEUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'trend_pullback_v100': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}, 'MANAUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}, 'APEUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'intraday_trend_pullback_icp_v13': {'enabled': True, 'symbols': {'ICPUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05, 'execution_lane': 'PAPER', 'probe_status': 'PAPER'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'momentum_breakout_sol_v11': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'trend_continuation_movr_v11': {'enabled': True, 'symbols': {'MOVRUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05, 'execution_lane': 'PAPER', 'probe_status': 'PAPER'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'trend_continuation_avax_v11': {'enabled': True, 'symbols': {'AVAXUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'trend_continuation_nil_v11': {'enabled': True, 'symbols': {'NILUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'trend_continuation_wld_v11': {'enabled': True, 'symbols': {'WLDUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05, 'execution_lane': 'PAPER', 'probe_status': 'PAPER'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'short_trend_pullback_xrpusdt_60_v1': {'enabled': True, 'symbols': {'XRPUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'PAPER', 'risk_pct': 0.02, 'execution_lane': 'MICRO_PROBE_PAUSED', 'probe_status': 'PAUSED_BY_MARKET_GATE_HIGH', 'max_daily_trades': 1, 'max_daily_losses': 1, 'max_consecutive_losses': 2, 'promotion_review_after_live_trades': 5, 'auto_downgrade_after_consecutive_losses': 2}}}}}}
+V933_SAFE_BASELINE_STATE = {'global': {'enabled': True, 'default_mode': 'OFF', 'max_open_positions': 1, 'daily_loss_limit_usdt': 10.0, 'weekly_loss_limit_usdt': 30.0, 'open_unrealized_loss_limit_usdt': 5.0, 'symbol_unrealized_loss_limit_usdt': 5.0, 'allow_unknown_symbols': False, 'max_daily_trades_global': 1}, 'strategies': {'structure_swing_v134': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}, 'MANAUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}, 'APEUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'trend_pullback_v100': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}, 'MANAUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}, 'APEUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'intraday_trend_pullback_icp_v13': {'enabled': True, 'symbols': {'ICPUSDT': {'LONG': {'mode': 'PAPER', 'risk_pct': 0.05, 'execution_lane': 'PAPER', 'probe_status': 'PAPER'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'momentum_breakout_sol_v11': {'enabled': True, 'symbols': {'SOLUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'trend_continuation_movr_v11': {'enabled': True, 'symbols': {'MOVRUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'trend_continuation_avax_v11': {'enabled': True, 'symbols': {'AVAXUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'trend_continuation_nil_v11': {'enabled': True, 'symbols': {'NILUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'trend_continuation_wld_v11': {'enabled': True, 'symbols': {'WLDUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}}}}, 'short_trend_pullback_xrpusdt_60_v1': {'enabled': True, 'symbols': {'XRPUSDT': {'LONG': {'mode': 'OFF', 'risk_pct': 0.0, 'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'SHORT': {'mode': 'PAPER', 'risk_pct': 0.02, 'execution_lane': 'MICRO_PROBE_PAUSED', 'probe_status': 'PAUSED_BY_MARKET_GATE_HIGH', 'max_daily_trades': 1, 'max_daily_losses': 1, 'max_consecutive_losses': 2, 'promotion_review_after_live_trades': 5, 'auto_downgrade_after_consecutive_losses': 2}}}}}}
 
 
 def v9_3_3_key(strategy: str, symbol: str, side: str) -> str:
@@ -17854,5 +17854,159 @@ def v9_4_7_hotfix_note(secret: str):
         "policy": "No automatic MICRO activation. Manual review remains required.",
         "dashboard": "/v9_4_7_active_only_market_gate_dashboard",
         "json": "/v9_4_7_active_only_market_gate",
+    }
+
+
+# ============================================================
+# v9.4.8 CLEAN BASELINE ALIGNMENT
+# ============================================================
+# Purpose:
+# - Align Strategy State Guard safe baseline with the v9.4.6 cleaned portfolio.
+# - Safe state: ICP LONG PAPER + XRP SHORT PAPER/PAUSED; all other known sides OFF.
+# - No MICRO/LIVE activation.
+
+V948_CLEAN_BASELINE_UPDATES = [{'strategy': 'structure_swing_v134', 'symbol': 'SOLUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'structure_swing_v134', 'symbol': 'SOLUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'structure_swing_v134', 'symbol': 'MANAUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'structure_swing_v134', 'symbol': 'MANAUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'structure_swing_v134', 'symbol': 'APEUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'structure_swing_v134', 'symbol': 'APEUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'trend_pullback_v100', 'symbol': 'SOLUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'trend_pullback_v100', 'symbol': 'SOLUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'trend_pullback_v100', 'symbol': 'MANAUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'trend_pullback_v100', 'symbol': 'MANAUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'trend_pullback_v100', 'symbol': 'APEUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'trend_pullback_v100', 'symbol': 'APEUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'intraday_trend_pullback_icp_v13', 'symbol': 'ICPUSDT', 'side': 'LONG', 'mode': 'PAPER', 'risk_pct': 0.05, 'extra': {'execution_lane': 'PAPER', 'probe_status': 'PAPER'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'intraday_trend_pullback_icp_v13', 'symbol': 'ICPUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'momentum_breakout_sol_v11', 'symbol': 'SOLUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'momentum_breakout_sol_v11', 'symbol': 'SOLUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'trend_continuation_movr_v11', 'symbol': 'MOVRUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'trend_continuation_movr_v11', 'symbol': 'MOVRUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'trend_continuation_avax_v11', 'symbol': 'AVAXUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'trend_continuation_avax_v11', 'symbol': 'AVAXUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'trend_continuation_nil_v11', 'symbol': 'NILUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'trend_continuation_nil_v11', 'symbol': 'NILUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'trend_continuation_wld_v11', 'symbol': 'WLDUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'trend_continuation_wld_v11', 'symbol': 'WLDUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'short_trend_pullback_xrpusdt_60_v1', 'symbol': 'XRPUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_8_clean_baseline_alignment'}, {'strategy': 'short_trend_pullback_xrpusdt_60_v1', 'symbol': 'XRPUSDT', 'side': 'SHORT', 'mode': 'PAPER', 'risk_pct': 0.02, 'extra': {'execution_lane': 'MICRO_PROBE_PAUSED', 'probe_status': 'PAUSED_BY_MARKET_GATE_HIGH', 'max_daily_trades': 1, 'max_daily_losses': 1, 'max_consecutive_losses': 2, 'promotion_review_after_live_trades': 5, 'auto_downgrade_after_consecutive_losses': 2}, 'reason': 'v9_4_8_clean_baseline_alignment'}]
+
+
+def v9_4_8_clean_baseline_alignment_status() -> Dict[str, Any]:
+    state_guard = v9_3_3_strategy_state_guard(notify=False)
+    active_gate = v9_4_7_active_only_market_gate(days_long=30, days_short=10, limit=1000)
+    expected = {
+        "active_micro_live_count": 0,
+        "active_paper_count": 2,
+        "long_alt_count": 1,
+        "paper_active": [
+            "intraday_trend_pullback_icp_v13|ICPUSDT|LONG",
+            "short_trend_pullback_xrpusdt_60_v1|XRPUSDT|SHORT paused",
+        ],
+        "safe_baseline": "v9_4_8_clean_portfolio_baseline",
+    }
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "state_guard": state_guard,
+        "active_only_gate": active_gate.get("active_only_gate"),
+        "active_counts": (active_gate.get("guards") or {}).get("active_counts"),
+        "expected": expected,
+        "interpretation": {
+            "if_state_guard_ok": "Active-only gate can be trusted for current clean portfolio decisions.",
+            "if_active_gate_observation": "No MICRO; collect clean active outcomes.",
+            "if_legacy_gate_high": "Historical/off losses remain visible as context only.",
+        },
+    }
+
+
+@app.get("/v9_4_8_clean_baseline_status")
+def v9_4_8_clean_baseline_status_endpoint(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_4_8_clean_baseline_alignment_status()
+
+
+@app.get("/v9_4_8_clean_baseline_preview")
+def v9_4_8_clean_baseline_preview(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "count": len(V948_CLEAN_BASELINE_UPDATES),
+        "updates": V948_CLEAN_BASELINE_UPDATES,
+        "target": {
+            "ICPUSDT_LONG": "PAPER",
+            "XRPUSDT_SHORT": "PAPER / MICRO_PROBE_PAUSED",
+            "all_other_known_sides": "OFF",
+            "active_micro_live_count": 0,
+            "active_paper_count": 2,
+            "long_alt_count": 1,
+        },
+    }
+
+
+@app.post("/v9_4_8_apply_clean_baseline")
+async def v9_4_8_apply_clean_baseline_endpoint(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    confirm = str(body.get("confirm") or "").upper()
+    if confirm != "APPLY_CLEAN_BASELINE":
+        raise HTTPException(400, "Set confirm='APPLY_CLEAN_BASELINE' to apply the v9.4.8 clean baseline.")
+
+    return v9_3_8_apply_side_updates(
+        updates=V948_CLEAN_BASELINE_UPDATES,
+        dry_run=bool(body.get("dry_run", False)),
+        default_reason=body.get("reason") or "v9_4_8_apply_clean_baseline",
+    )
+
+
+@app.get("/v9_4_8_clean_baseline_dashboard", response_class=HTMLResponse)
+def v9_4_8_clean_baseline_dashboard(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    data = v9_4_8_clean_baseline_alignment_status()
+    sg = data.get("state_guard") or {}
+    ag = data.get("active_only_gate") or {}
+    counts = data.get("active_counts") or {}
+
+    return HTMLResponse(f"""
+    <html>
+    <head>
+      <title>v9.4.8 Clean Baseline Alignment</title>
+      <style>
+        body{font-family:Arial;margin:20px;background:#f6f8fb}
+        .card{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}
+      </style>
+    </head>
+    <body>
+      <h1>v9.4.8 Clean Baseline Alignment</h1>
+      <div class="card">
+        <h2>Strategy State Guard</h2>
+        <b>Level:</b> {h(sg.get('level'))}<br>
+        <b>Decision safe:</b> {h(sg.get('decision_safe'))}<br>
+        <b>Active MICRO/LIVE:</b> {h(sg.get('active_micro_live_count'))}<br>
+        <b>Reasons:</b> {h(sg.get('reasons'))}
+      </div>
+      <div class="card">
+        <h2>Active-only gate</h2>
+        <b>Level:</b> {h(ag.get('active_gate_level'))}<br>
+        <b>Recommendation:</b> {h(ag.get('recommendation'))}<br>
+        <b>Allow new MICRO:</b> {h(ag.get('allow_new_micro'))}<br>
+        <b>Allow new PAPER:</b> {h(ag.get('allow_new_paper'))}<br>
+        <b>Reasons:</b> {h(ag.get('reasons'))}<br>
+        <b>Actions:</b> {h(ag.get('actions'))}
+      </div>
+      <div class="card">
+        <h2>Active counts</h2>
+        <pre>{h(json.dumps(counts, indent=2, ensure_ascii=False, default=str))}</pre>
+      </div>
+      <div class="card">
+        <h2>Expected clean baseline</h2>
+        <pre>{h(json.dumps(data.get('expected'), indent=2, ensure_ascii=False, default=str))}</pre>
+      </div>
+      <p>
+        <a href="/v9_4_8_clean_baseline_status?secret={h(secret)}">Status JSON</a> ·
+        <a href="/v9_4_8_clean_baseline_preview?secret={h(secret)}">Preview JSON</a> ·
+        <a href="/v9_4_7_active_only_market_gate_dashboard?secret={h(secret)}&days_long=30&days_short=10&limit=1000">Active-only gate</a>
+      </p>
+      <p><b>Apply clean baseline:</b> POST /v9_4_8_apply_clean_baseline with {"secret":"...","confirm":"APPLY_CLEAN_BASELINE","dry_run":false}</p>
+    </body>
+    </html>
+    """)
+
+
+@app.get("/v9_4_8_hotfix_note")
+def v9_4_8_hotfix_note(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "feature": "Clean baseline alignment",
+        "why": "Strategy State Guard safe baseline was still expecting old active PAPER elements after the v9.4.6 cleanup. v9.4.8 updates the safe baseline to the cleaned portfolio.",
+        "target": "ICP LONG PAPER + XRP SHORT PAPER/PAUSED; all other known sides OFF; no MICRO/LIVE.",
+        "dashboard": "/v9_4_8_clean_baseline_dashboard",
+        "status": "/v9_4_8_clean_baseline_status",
     }
 
