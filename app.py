@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.5")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.6")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.4.5</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.4.6</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.4.5"
+APP_FEATURE_LEVEL = "9.4.6"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.4.5 OUTCOME EVENT-KEY HOTFIX
+# v9.4.6 PAPER PORTFOLIO CLEANUP
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -17365,5 +17365,157 @@ def v9_4_5_hotfix_note(secret: str):
         "use_dashboard": "/v9_4_4_outcome_active_performance_dashboard",
         "use_report": "/v9_4_4_outcome_active_performance_report",
         "note": "Endpoint names remain v9_4_4, but app version is 9.4.5.",
+    }
+
+
+# ============================================================
+# v9.4.6 PAPER PORTFOLIO CLEANUP
+# ============================================================
+# Purpose:
+# - Turn weak/noisy PAPER strategies OFF.
+# - Keep only a minimal monitoring layer:
+#   ICP LONG PAPER + XRP SHORT PAPER/PAUSED.
+# - No MICRO/LIVE activation.
+# - Use explicit confirmation before applying.
+
+V946_CLEANUP_UPDATES = [{'strategy': 'structure_swing_v134', 'symbol': 'SOLUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_6_no_closed_outcomes_old_setup'}, 'reason': 'v9_4_6_cleanup_old_structure_swing'}, {'strategy': 'structure_swing_v134', 'symbol': 'SOLUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_6_no_closed_outcomes_old_setup'}, 'reason': 'v9_4_6_cleanup_old_structure_swing'}, {'strategy': 'structure_swing_v134', 'symbol': 'MANAUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_6_no_closed_outcomes_old_setup'}, 'reason': 'v9_4_6_cleanup_old_structure_swing'}, {'strategy': 'structure_swing_v134', 'symbol': 'MANAUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_6_no_closed_outcomes_old_setup'}, 'reason': 'v9_4_6_cleanup_old_structure_swing'}, {'strategy': 'structure_swing_v134', 'symbol': 'APEUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_6_no_closed_outcomes_old_setup'}, 'reason': 'v9_4_6_cleanup_old_structure_swing'}, {'strategy': 'structure_swing_v134', 'symbol': 'APEUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_6_no_closed_outcomes_old_setup'}, 'reason': 'v9_4_6_cleanup_old_structure_swing'}, {'strategy': 'trend_pullback_v100', 'symbol': 'SOLUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_6_no_closed_outcomes_old_setup'}, 'reason': 'v9_4_6_cleanup_old_trend_pullback'}, {'strategy': 'trend_pullback_v100', 'symbol': 'SOLUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_6_no_closed_outcomes_old_setup'}, 'reason': 'v9_4_6_cleanup_old_trend_pullback'}, {'strategy': 'trend_pullback_v100', 'symbol': 'MANAUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_6_no_closed_outcomes_old_setup'}, 'reason': 'v9_4_6_cleanup_old_trend_pullback'}, {'strategy': 'trend_pullback_v100', 'symbol': 'MANAUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_6_no_closed_outcomes_old_setup'}, 'reason': 'v9_4_6_cleanup_old_trend_pullback'}, {'strategy': 'trend_pullback_v100', 'symbol': 'APEUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_6_no_closed_outcomes_old_setup'}, 'reason': 'v9_4_6_cleanup_old_trend_pullback'}, {'strategy': 'trend_pullback_v100', 'symbol': 'APEUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_6_no_closed_outcomes_old_setup'}, 'reason': 'v9_4_6_cleanup_old_trend_pullback'}, {'strategy': 'intraday_trend_pullback_icp_v13', 'symbol': 'ICPUSDT', 'side': 'LONG', 'mode': 'PAPER', 'risk_pct': 0.05, 'extra': {'execution_lane': 'PAPER', 'probe_status': 'PAPER', 'cleanup_reason': 'v9_4_6_keep_minimal_monitor'}, 'reason': 'v9_4_6_keep_icp_paper_monitor'}, {'strategy': 'intraday_trend_pullback_icp_v13', 'symbol': 'ICPUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_6_cleanup_icp_short'}, {'strategy': 'momentum_breakout_sol_v11', 'symbol': 'SOLUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_6_no_edge'}, 'reason': 'v9_4_6_disable_sol_momentum'}, {'strategy': 'momentum_breakout_sol_v11', 'symbol': 'SOLUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_6_cleanup_sol_momentum_short'}, {'strategy': 'trend_continuation_movr_v11', 'symbol': 'MOVRUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_4_decision_DISABLE_PAPER_30d_negative'}, 'reason': 'v9_4_6_disable_movr_long_weak_paper'}, {'strategy': 'trend_continuation_movr_v11', 'symbol': 'MOVRUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_6_cleanup_movr_short'}, {'strategy': 'trend_continuation_avax_v11', 'symbol': 'AVAXUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_4_decision_DO_NOT_PROMOTE_negative'}, 'reason': 'v9_4_6_disable_avax_long_weak_paper'}, {'strategy': 'trend_continuation_avax_v11', 'symbol': 'AVAXUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_6_cleanup_avax_short'}, {'strategy': 'trend_continuation_nil_v11', 'symbol': 'NILUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_4_decision_DISABLE_PAPER_30d_negative'}, 'reason': 'v9_4_6_disable_nil_long_weak_paper'}, {'strategy': 'trend_continuation_nil_v11', 'symbol': 'NILUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_6_cleanup_nil_short'}, {'strategy': 'trend_continuation_wld_v11', 'symbol': 'WLDUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF', 'cleanup_reason': 'v9_4_4_decision_DISABLE_PAPER_30d_negative'}, 'reason': 'v9_4_6_disable_wld_long_weak_paper'}, {'strategy': 'trend_continuation_wld_v11', 'symbol': 'WLDUSDT', 'side': 'SHORT', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_6_cleanup_wld_short'}, {'strategy': 'short_trend_pullback_xrpusdt_60_v1', 'symbol': 'XRPUSDT', 'side': 'LONG', 'mode': 'OFF', 'risk_pct': 0.0, 'extra': {'execution_lane': 'OFF', 'probe_status': 'OFF'}, 'reason': 'v9_4_6_cleanup_xrp_long'}, {'strategy': 'short_trend_pullback_xrpusdt_60_v1', 'symbol': 'XRPUSDT', 'side': 'SHORT', 'mode': 'PAPER', 'risk_pct': 0.02, 'extra': {'execution_lane': 'MICRO_PROBE_PAUSED', 'probe_status': 'PAUSED_BY_MARKET_GATE_HIGH', 'max_daily_trades': 1, 'max_daily_losses': 1, 'max_consecutive_losses': 2, 'promotion_review_after_live_trades': 5, 'auto_downgrade_after_consecutive_losses': 2, 'cleanup_reason': 'v9_4_6_keep_paused_short_probe'}, 'reason': 'v9_4_6_keep_xrp_short_paused'}]
+
+
+def v9_4_6_cleanup_preview() -> Dict[str, Any]:
+    current = v9_4_4_outcome_active_performance_report(days_long=30, days_short=10, limit=1000)
+    target_active = [
+        "intraday_trend_pullback_icp_v13|ICPUSDT|LONG|PAPER",
+        "short_trend_pullback_xrpusdt_60_v1|XRPUSDT|SHORT|PAPER_PAUSED",
+    ]
+    disabled = [
+        "trend_continuation_movr_v11|MOVRUSDT|LONG",
+        "trend_continuation_nil_v11|NILUSDT|LONG",
+        "trend_continuation_wld_v11|WLDUSDT|LONG",
+        "trend_continuation_avax_v11|AVAXUSDT|LONG",
+        "structure_swing_v134 SOL/MANA/APE old paper sides",
+        "trend_pullback_v100 SOL/MANA/APE old paper sides",
+        "momentum_breakout_sol_v11|SOLUSDT|LONG",
+    ]
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "created_at": now_iso(),
+        "cleanup_count": len(V946_CLEANUP_UPDATES),
+        "target_active": target_active,
+        "disabled_or_off": disabled,
+        "current_active_performance": current,
+        "updates": V946_CLEANUP_UPDATES,
+        "note": "No MICRO/LIVE activation. Apply only after manual review.",
+    }
+
+
+@app.get("/v9_4_6_cleanup_preview")
+def v9_4_6_cleanup_preview_endpoint(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return v9_4_6_cleanup_preview()
+
+
+@app.post("/v9_4_6_apply_cleanup")
+async def v9_4_6_apply_cleanup_endpoint(request: Request):
+    body = await request.json()
+    verify_secret(request, body)
+    confirm = str(body.get("confirm") or "").upper()
+    if confirm != "APPLY_PAPER_CLEANUP":
+        raise HTTPException(400, "Set confirm='APPLY_PAPER_CLEANUP' to apply the v9.4.6 paper portfolio cleanup.")
+
+    return v9_3_8_apply_side_updates(
+        updates=V946_CLEANUP_UPDATES,
+        dry_run=bool(body.get("dry_run", False)),
+        default_reason=body.get("reason") or "v9_4_6_apply_paper_cleanup",
+    )
+
+
+@app.get("/v9_4_6_cleanup_dashboard", response_class=HTMLResponse)
+def v9_4_6_cleanup_dashboard(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    preview = v9_4_6_cleanup_preview()
+    current = preview.get("current_active_performance") or {}
+    reports = current.get("active_reports") or []
+    update_rows = "".join([
+        f"<tr><td>{h(x.get('strategy'))}</td><td>{h(x.get('symbol'))}</td><td>{h(x.get('side'))}</td><td>{h(x.get('mode'))}</td><td>{h(x.get('risk_pct'))}</td><td>{h(x.get('reason'))}</td><td>{h(x.get('extra'))}</td></tr>"
+        for x in V946_CLEANUP_UPDATES
+    ])
+    active_rows = "".join([
+        f"<tr><td>{h(r.get('strategy'))}</td><td>{h(r.get('symbol'))}</td><td>{h(r.get('side'))}</td><td>{h(r.get('mode'))}</td><td>{h(r.get('decision'))}</td><td>{h(r.get('summary_30d',{}).get('total_r'))}</td><td>{h(r.get('summary_30d',{}).get('average_r_closed'))}</td><td>{h(r.get('reasons'))}</td></tr>"
+        for r in reports
+    ])
+
+    return HTMLResponse(f"""
+    <html>
+    <head>
+      <title>v9.4.6 Paper Portfolio Cleanup</title>
+      <style>
+        body{font-family:Arial;margin:20px;background:#f6f8fb}
+        .card{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}
+        table{border-collapse:collapse;width:100%;background:white;font-size:12px;margin-top:10px}
+        th{background:#111827;color:white}
+        td,th{padding:6px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}
+      </style>
+    </head>
+    <body>
+      <h1>v9.4.6 Paper Portfolio Cleanup</h1>
+      <div class="card">
+        <b>Purpose:</b> reduce weak/noisy active PAPER layer<br>
+        <b>Cleanup updates:</b> {len(V946_CLEANUP_UPDATES)}<br>
+        <b>Target active:</b> {h(preview.get('target_active'))}<br>
+        <b>No MICRO/LIVE activation:</b> True
+      </div>
+      <div class="card">
+        <h2>Current active performance</h2>
+        <b>Gate recommendation:</b> {h(current.get('gate_recommendation'))}<br>
+        <b>By decision:</b> {h(current.get('by_decision'))}
+        <table>
+          <tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Mode</th><th>Decision</th><th>30d R</th><th>30d Avg</th><th>Reasons</th></tr>
+          {active_rows}
+        </table>
+      </div>
+      <div class="card">
+        <h2>Cleanup update plan</h2>
+        <table>
+          <tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Target mode</th><th>Risk</th><th>Reason</th><th>Extra</th></tr>
+          {update_rows}
+        </table>
+      </div>
+      <p>
+        <a href="/v9_4_6_cleanup_preview?secret={h(secret)}">Preview JSON</a> ·
+        <a href="/v9_4_4_outcome_active_performance_dashboard?secret={h(secret)}&days_long=30&days_short=10&limit=1000">Outcome performance</a> ·
+        <a href="/v9_market_regime_gate?secret={h(secret)}&days=30&limit=1000">Market gate</a>
+      </p>
+      <p><b>Apply cleanup:</b> POST /v9_4_6_apply_cleanup with {"secret":"...","confirm":"APPLY_PAPER_CLEANUP","dry_run":false}</p>
+    </body>
+    </html>
+    """)
+
+
+@app.get("/v9_4_6_expected_state")
+def v9_4_6_expected_state(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "expected_after_cleanup": {
+            "active_micro_live_count": 0,
+            "active_paper_count": 2,
+            "long_alt_count": 1,
+            "paper_active": [
+                "intraday_trend_pullback_icp_v13|ICPUSDT|LONG",
+                "short_trend_pullback_xrpusdt_60_v1|XRPUSDT|SHORT paused"
+            ],
+            "no_micro_until": [
+                "market_gate not HIGH",
+                "active outcome performance positive",
+                "regime aligned with candidate",
+                "manual review"
+            ]
+        }
     }
 
