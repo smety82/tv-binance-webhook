@@ -170,7 +170,7 @@ RUNTIME_STATE_FILE = APP_DIR / "runtime_state.json"
 BACKTEST_FILE = APP_DIR / "backtest_results.json"
 DAILY_REPORT_STATE_FILE = APP_DIR / "daily_report_state.json"
 
-app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.9")
+app = FastAPI(title="TradingView Bybit Risk Engine", version="9.4.10")
 client = httpx.Client(timeout=HTTP_TIMEOUT)
 
 
@@ -6360,7 +6360,7 @@ def candidate_monitor_dashboard(secret: str, days: int = PAPER_OUTCOME_DEFAULT_D
     th{{background:#111827;color:white;position:sticky;top:0}} .good{{color:#166534;font-weight:700}} .watch{{color:#92400e;font-weight:700}} .bad{{color:#991b1b;font-weight:700}}
     .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,.08)}} a{{color:#2563eb}}
     </style></head><body>
-    <h1>Candidate Strategy Monitor · Platform v9.4.9</h1>
+    <h1>Candidate Strategy Monitor · Platform v9.4.10</h1>
     <div class='card'>Signals: {h(report.get('count'))} | Total R: {fmt_num((report.get('summary') or {}).get('total_r'))} | Average R: {fmt_num((report.get('summary') or {}).get('average_r_closed'))} | Status counts: {h(report.get('status_counts'))}</div>
     <table><tr><th>Strategy</th><th>Symbol</th><th>Side</th><th>Decision</th><th>Closed</th><th>Avg R</th><th>Total R</th><th>Win %</th><th>BT PF</th><th>BT Align</th><th>Action</th></tr>{''.join(rows)}</table>
     <p><a href='/paper_outcome_decisions?secret={h(secret)}&days={days}&limit={limit}'>JSON report</a> · <a href='/backtest_registry?secret={h(secret)}'>Backtest registry</a> · <a href='/dashboard_v2?secret={h(secret)}&days={days}'>Dashboard</a></p>
@@ -7409,7 +7409,7 @@ async def adjust(request: Request):
 
 import uuid
 
-APP_FEATURE_LEVEL = "9.4.9"
+APP_FEATURE_LEVEL = "9.4.10"
 
 SUPABASE_ORDERS_TABLE = os.getenv("SUPABASE_ORDERS_TABLE", "orders")
 SUPABASE_POSITIONS_TABLE = os.getenv("SUPABASE_POSITIONS_TABLE", "positions")
@@ -14238,7 +14238,7 @@ def v9_3_2_control_panel(secret: str):
 
 
 # ============================================================
-# v9.4.9 CLEAN BASELINE DASHBOARD HOTFIX
+# v9.4.10 SAFE CLEAN BASELINE DASHBOARD
 # ============================================================
 # Purpose:
 # - Detect strategy_state drift after deploy.
@@ -17945,52 +17945,121 @@ def v9_4_8_clean_baseline_dashboard(secret: str):
     if secret != SHARED_SECRET:
         raise HTTPException(401, "Unauthorized")
 
-    data = v9_4_8_clean_baseline_alignment_status()
-    sg = data.get("state_guard") or {}
-    ag = data.get("active_only_gate") or {}
-    counts = data.get("active_counts") or {}
+    errors = []
+    state_guard = {}
+    active_gate = {}
+    counts = {}
+    expected = {
+        "active_micro_live_count": 0,
+        "active_paper_count": 2,
+        "long_alt_count": 1,
+        "paper_active": [
+            "intraday_trend_pullback_icp_v13|ICPUSDT|LONG",
+            "short_trend_pullback_xrpusdt_60_v1|XRPUSDT|SHORT paused",
+        ],
+        "safe_baseline": "v9_4_8_clean_portfolio_baseline",
+    }
+
+    try:
+        state_guard = v9_3_3_strategy_state_guard(notify=False)
+    except Exception as exc:
+        errors.append(f"state_guard_error: {type(exc).__name__}: {exc}")
+
+    try:
+        state = load_state()
+        active_paper_count = 0
+        active_micro_live_count = 0
+        long_alt_count = 0
+        active_keys = []
+        for item in v9_3_3_iter_strategy_sides(state):
+            side = str(item.get("side") or "").upper().strip()
+            mode = str(item.get("mode") or "OFF").upper().strip()
+            symbol = normalize_symbol(item.get("symbol"))
+            if side not in {"LONG", "SHORT"}:
+                continue
+            if mode == "PAPER":
+                active_paper_count += 1
+                active_keys.append(v9_3_3_key(item.get("strategy"), symbol, side))
+            if mode in {"MICRO", "LIVE"}:
+                active_micro_live_count += 1
+                active_keys.append(v9_3_3_key(item.get("strategy"), symbol, side))
+            if mode in {"PAPER", "MICRO", "LIVE"} and side == "LONG" and symbol not in {"BTCUSDT", "ETHUSDT"}:
+                long_alt_count += 1
+        counts = {
+            "active_paper_count": active_paper_count,
+            "active_micro_live_count": active_micro_live_count,
+            "long_alt_count": long_alt_count,
+            "active_keys": active_keys,
+        }
+    except Exception as exc:
+        errors.append(f"active_count_error: {type(exc).__name__}: {exc}")
+
+    try:
+        active_gate = v9_4_7_active_only_market_gate(days_long=30, days_short=10, limit=1000).get("active_only_gate") or {}
+    except Exception as exc:
+        errors.append(f"active_gate_error: {type(exc).__name__}: {exc}")
+
+    status_level = state_guard.get("level") or ("ERROR" if errors else "UNKNOWN")
+    dashboard_level = "OK" if not errors else "PARTIAL"
 
     return HTMLResponse(f"""
     <html>
     <head>
-      <title>v9.4.8 Clean Baseline Alignment</title>
+      <title>v9.4.10 Safe Clean Baseline Dashboard</title>
       <style>
-        body{font-family:Arial;margin:20px;background:#f6f8fb}
-        .card{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}
+        body{{font-family:Arial;margin:20px;background:#f6f8fb}}
+        .card{{background:white;border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 6px #d1d5db}}
+        pre{{white-space:pre-wrap;word-break:break-word;background:#f3f4f6;padding:10px;border-radius:8px}}
       </style>
     </head>
     <body>
-      <h1>v9.4.8 Clean Baseline Alignment</h1>
+      <h1>v9.4.10 Safe Clean Baseline Dashboard</h1>
+      <div class="card">
+        <b>Dashboard level:</b> {h(dashboard_level)}<br>
+        <b>App version:</b> {h(APP_FEATURE_LEVEL)}<br>
+        <b>Errors:</b> {h(errors)}
+      </div>
+
       <div class="card">
         <h2>Strategy State Guard</h2>
-        <b>Level:</b> {h(sg.get('level'))}<br>
-        <b>Decision safe:</b> {h(sg.get('decision_safe'))}<br>
-        <b>Active MICRO/LIVE:</b> {h(sg.get('active_micro_live_count'))}<br>
-        <b>Reasons:</b> {h(sg.get('reasons'))}
+        <b>Level:</b> {h(status_level)}<br>
+        <b>Decision safe:</b> {h(state_guard.get('decision_safe'))}<br>
+        <b>Active MICRO/LIVE:</b> {h(state_guard.get('active_micro_live_count'))}<br>
+        <b>Reasons:</b> {h(state_guard.get('reasons'))}<br>
+        <pre>{h(json.dumps(state_guard, indent=2, ensure_ascii=False, default=str))}</pre>
       </div>
+
       <div class="card">
-        <h2>Active-only gate</h2>
-        <b>Level:</b> {h(ag.get('active_gate_level'))}<br>
-        <b>Recommendation:</b> {h(ag.get('recommendation'))}<br>
-        <b>Allow new MICRO:</b> {h(ag.get('allow_new_micro'))}<br>
-        <b>Allow new PAPER:</b> {h(ag.get('allow_new_paper'))}<br>
-        <b>Reasons:</b> {h(ag.get('reasons'))}<br>
-        <b>Actions:</b> {h(ag.get('actions'))}
-      </div>
-      <div class="card">
-        <h2>Active counts</h2>
+        <h2>Active counts from runtime strategy_state</h2>
         <pre>{h(json.dumps(counts, indent=2, ensure_ascii=False, default=str))}</pre>
       </div>
+
+      <div class="card">
+        <h2>Active-only gate</h2>
+        <pre>{h(json.dumps(active_gate, indent=2, ensure_ascii=False, default=str))}</pre>
+      </div>
+
       <div class="card">
         <h2>Expected clean baseline</h2>
-        <pre>{h(json.dumps(data.get('expected'), indent=2, ensure_ascii=False, default=str))}</pre>
+        <pre>{h(json.dumps(expected, indent=2, ensure_ascii=False, default=str))}</pre>
       </div>
+
+      <div class="card">
+        <h2>Apply clean baseline</h2>
+        <p>POST /v9_4_8_apply_clean_baseline</p>
+        <pre>{{
+  "secret": "...",
+  "confirm": "APPLY_CLEAN_BASELINE",
+  "dry_run": false,
+  "reason": "apply_v9_4_8_clean_baseline_after_v9_4_10_hotfix"
+}}</pre>
+      </div>
+
       <p>
         <a href="/v9_4_8_clean_baseline_status?secret={h(secret)}">Status JSON</a> ·
         <a href="/v9_4_8_clean_baseline_preview?secret={h(secret)}">Preview JSON</a> ·
         <a href="/v9_4_7_active_only_market_gate_dashboard?secret={h(secret)}&days_long=30&days_short=10&limit=1000">Active-only gate</a>
       </p>
-      <p><b>Apply clean baseline:</b> POST /v9_4_8_apply_clean_baseline with {{"secret":"...","confirm":"APPLY_CLEAN_BASELINE","dry_run":false}}</p>
     </body>
     </html>
     """)
@@ -18026,5 +18095,25 @@ def v9_4_9_hotfix_note(secret: str):
         "affected_endpoint": "/v9_4_8_clean_baseline_dashboard",
         "status": "hotfixed",
         "next": "Use /v9_4_8_clean_baseline_dashboard and /v9_4_8_clean_baseline_status as before; endpoint names remain v9_4_8.",
+    }
+
+
+# ============================================================
+# v9.4.10 SAFE DASHBOARD HOTFIX NOTE
+# ============================================================
+
+@app.get("/v9_4_10_hotfix_note")
+def v9_4_10_hotfix_note(secret: str):
+    if secret != SHARED_SECRET:
+        raise HTTPException(401, "Unauthorized")
+    return {
+        "ok": True,
+        "version": APP_FEATURE_LEVEL,
+        "fix": "Replaced /v9_4_8_clean_baseline_dashboard with a fail-safe dashboard using isolated try/except blocks so it should render even if one internal guard/report fails.",
+        "affected_endpoint": "/v9_4_8_clean_baseline_dashboard",
+        "status": "hotfixed",
+        "no_trading_logic_change": True,
+        "no_state_change": True,
+        "no_risk_change": True,
     }
 
